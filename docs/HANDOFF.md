@@ -1,7 +1,7 @@
 # 프로젝트 인수인계
 
-> 작성일: 2026-08-23
-> 상태: 로컬 TTS A/B 파일럿 시작 직전
+> 작성일: 2026-08-24
+> 상태: Qwen3-TTS 수정 파이프라인 5분 리뷰본 생성 완료, 사용자 청취 대기
 
 ## 1. 사용자의 목표
 
@@ -127,3 +127,43 @@ MIT로 확인했지만 이 문장만으로 상업 이용 결정을 확정하지 
   `AGENTS.md`에 필요한 결론과 다음 지점을 영구화했다.
 - 로그인 세션, API 키, 토큰은 보안상 복제하지 않았다.
 - 713MB 음성 폴더와 모델 가중치는 중복 복사하지 않았다. 절대 경로로 참조한다.
+
+## 9. 2026-08-24 현재 구현 상태
+
+섹션 6의 A/B 계획은 완료된 과거 계획이다. 사용자 청취 결과 Qwen3-TTS 1.7B
+Base BF16을 기준 모델로 선택했고 Chatterbox V3는 제외했다.
+
+강의용 생성기는 `src/local_tts_engine/course_pilot.py`다.
+
+- 같은 슬라이드의 2~4개 스텝, 최대 300자를 한 호흡으로 생성
+- 생성 온도 0.75, top_p 0.95
+- 앞뒤 무음 정리, 24ms 경계 페이드
+- 같은 슬라이드 클립 간격 200ms, 슬라이드 간격 350ms
+- 700ms 초과 내부 무음만 480ms로 축소
+- `config/production-pronunciation.ko.json`에서 제작용 발음 예외 관리
+- Qwen3-ForcedAligner 0.6B 8-bit로 실제 단어 시각 생성
+- `export_udemy.py`가 정렬값을 기존 Node 타임라인 계약으로 전달
+
+`udemy-agent/deck/tools/narration.mjs`는 정렬 단어로 SRT/VTT와 화면 자막을
+만들고, 다음 스텝 첫 단어 120ms 전에 화면을 전환한다. Playwright의 가변 녹화
+지연은 흰색 동기 마커 프레임으로 측정해 제거한다.
+
+현재 리뷰 산출물:
+
+- 로컬 음성·매니페스트:
+  `artifacts/course-pilots/2026-08-24/qwen3-tts-first-5m/`
+- 최종 자막 영상:
+  `/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/render/narration/qwen3-first-5m/qwen3-first-5m-captioned.mp4`
+- SRT/VTT/타임라인:
+  같은 `qwen3-first-5m/` 디렉터리
+
+리뷰본 수치:
+
+- 4분 50.045초, 9개 화면, 36개 스텝, 13개 음성 클립
+- 첫 음성 0.974초, 첫 자막 0.920초
+- 시작 여백 외 700ms 이상 무음 0건
+- H.264 1920×1080 25fps, AAC 48kHz mono, 22.96MB
+- 로컬 테스트 12개 통과
+
+다음 단계는 사용자가 이 5분 영상을 듣고 어색한 단어·호흡·전환 시각을 구체적으로
+표시하는 것이다. 승인 전에는 CH01 전체나 전체 7~8시간으로 확장하지 않는다.

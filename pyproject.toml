@@ -10,7 +10,20 @@ readme = "README.md"
 requires-python = ">=3.13.12,<3.14"
 license = { text = "Private" }
 authors = [{ name = "Jaeho Seo" }]
-dependencies = []
+dependencies = [
+  "mlx-audio[tts]==0.5.0",
+  "numpy>=2.5,<2.6",
+  "soundfile>=0.14,<0.15",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1,<10"]
+
+[project.scripts]
+local-tts-pilot = "local_tts_engine.pilot:main"
+local-tts-course-pilot = "local_tts_engine.course_pilot:main"
+local-tts-export-udemy = "local_tts_engine.export_udemy:main"
+local-tts-prosody-candidates = "local_tts_engine.prosody_candidates:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/local_tts_engine"]
