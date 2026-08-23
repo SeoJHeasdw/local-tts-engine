@@ -1,4 +1,23 @@
-"""Generate a cached, aligned Qwen3-TTS course excerpt from deck scripts."""
+"""Generate a cached, aligned Qwen3-TTS course excerpt from deck scripts.
+
+udemy-agent 저장소의 강의 대본(deck/script/course/<ch>.md)을 읽어
+Qwen3-TTS로 오디오를 생성하고, ForcedAligner로 단어별 타이밍을 정렬한 뒤
+narration.mjs가 소비하는 manifest.json을 출력한다.
+
+처리 순서:
+    1. 대본 파싱  → CourseEntry 목록 (챕터·슬라이드·스텝 단위)
+    2. 청킹       → CourseChunk 목록 (한 번에 합성할 자연스러운 호흡 단위)
+    3. TTS 생성   → 클립별 WAV 캐시 (해시 기반, 이미 있으면 재사용)
+    4. 트랙 조립  → 패드·갭을 삽입해 단일 WAV로 이어붙임 + ffmpeg 정규화
+    5. 강제 정렬  → Qwen3-ForcedAligner 로 단어별 시작·종료 ms 계산
+    6. 타임라인   → 스텝별 startMs/endMs/transitionAtMs 산출 → manifest.json
+
+CLI 진입점:
+    python -m local_tts_engine.course_pilot \\
+        --reference ref.wav \\
+        --reference-text ref.txt \\
+        --output-dir outputs/ch00-5m
+"""
 
 from __future__ import annotations
 
@@ -31,66 +50,111 @@ from .pilot import (
 )
 
 
+# ─── 프로젝트 경로 ────────────────────────────────────────────────────────────
+# 기본값은 udemy-agent 저장소 절대 경로. CLI로 재정의 가능.
 DEFAULT_SOURCE_PROJECT = Path("/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent")
+
+# 로컬 발음 교체 사전 위치. 존재하지 않으면 빈 목록으로 처리.
 LOCAL_PRONUNCIATION_PATH = Path(__file__).parents[2] / "config/production-pronunciation.ko.json"
+
+# MLX 포팅된 8비트 양자화 강제 정렬 모델 (TTS와 별도 Metal 페이즈에서 실행)
 ALIGNER_REPOSITORY = "mlx-community/Qwen3-ForcedAligner-0.6B-8bit"
 
-# The opening pad is part of the audio timeline, not an independent caption
-# offset. It lets the video muxer and player settle without hiding speech.
+
+# ─── 타이밍 상수 (ms) ─────────────────────────────────────────────────────────
+# 오프닝 패드: 비디오 플레이어가 첫 프레임을 렌더링하기 전에 발화가 잘리는 것을 방지.
 START_PAD_MS = 1300
+# 같은 슬라이드 내 스텝 전환 갭: 자연스러운 문장 간 호흡.
 STEP_GAP_MS = 200
+# 슬라이드 간 갭: 시각적 전환 애니메이션을 덮을 만큼 충분히 길게.
 SLIDE_GAP_MS = 750
+# 마지막 클립 이후 오디오 꼬리 패드.
 END_PAD_MS = 600
+# trim_and_fade_audio 가 유성음 경계에서 유지하는 최소 여백.
 EDGE_PAD_MS = 65
+# 클립 앞뒤에 적용하는 sin²/cos² 페이드 길이.
 EDGE_FADE_MS = 24
+# 이 값보다 긴 내부 무음 구간은 강제 단축 대상이 된다.
 MAX_INTERNAL_SILENCE_MS = 700
+# 단축 대상 무음 구간을 이 길이로 줄인다.
 TARGET_INTERNAL_SILENCE_MS = 480
+# 같은 슬라이드 내 다음 스텝의 첫 단어 몇 ms 전에 화면 전환할지.
 STEP_VISUAL_LEAD_MS = 120
+# 슬라이드 전환 시 첫 단어보다 더 이른 전환 시점 (슬라이드 빌드 애니메이션 고려).
 SLIDE_VISUAL_LEAD_MS = 650
+# 한 청크에 담을 최대 문자 수 (TTS 컨텍스트 한계 및 자연스러운 호흡 길이).
 MAX_CHUNK_CHARS = 300
+# 한 청크에 담을 최대 CourseEntry 수.
 MAX_CHUNK_ENTRIES = 4
 
-# Course generation is less stochastic than the A/B comparison settings.
+
+# ─── 강의 생성 전용 파라미터 오버라이드 ──────────────────────────────────────
+# A/B 비교(pilot.py)보다 temperature·top_p를 낮춰 발화 안정성을 높인다.
 COURSE_SETTING_OVERRIDES: dict[str, Any] = {
     "temperature": 0.75,
     "top_p": 0.95,
 }
 
 
+# ─── 데이터 모델 ──────────────────────────────────────────────────────────────
+
 @dataclass(frozen=True)
 class CourseEntry:
-    chapter: str
-    slide_id: str
-    slide_number: int
-    step: int
-    source_text: str
-    tts_text: str
+    """대본의 한 스텝(챕터·슬라이드·스텝 번호 + 원문 + TTS 텍스트)을 나타낸다.
+
+    source_text: 자막용 원문 (발음 치환 전)
+    tts_text:    TTS 입력용 텍스트 (발음 치환 후)
+    """
+
+    chapter: str        # 예: "ch00"
+    slide_id: str       # 예: "intro-why-tts"
+    slide_number: int   # 전체 슬라이드 목록 내 1-based 순번
+    step: int           # 슬라이드 내 스텝 번호 (대본 ### N 헤더)
+    source_text: str    # 원문 (자막, 검색, 교정용)
+    tts_text: str       # 발음 치환이 적용된 TTS 입력 텍스트
 
     @property
     def key(self) -> str:
+        """챕터·슬라이드·스텝을 조합한 고유 식별자 문자열."""
         return f"{self.chapter}--{self.slide_id}--{self.step}"
 
 
 @dataclass(frozen=True)
 class CourseChunk:
+    """TTS 한 번 호출에 합성되는 연속 CourseEntry 묶음.
+
+    같은 슬라이드 내의 짧은 스텝들을 하나의 자연스러운 호흡으로 묶는다.
+    청킹 조건: MAX_CHUNK_CHARS 이하 & MAX_CHUNK_ENTRIES 이하 & 같은 슬라이드.
+    """
+
     entries: tuple[CourseEntry, ...]
 
     @property
     def key(self) -> str:
+        """첫 스텝~마지막 스텝 범위를 나타내는 청크 식별자."""
         first = self.entries[0]
         last = self.entries[-1]
         return f"{first.chapter}--{first.slide_id}--{first.step}-to-{last.step}"
 
     @property
     def source_text(self) -> str:
+        """청크 내 모든 스텝의 원문을 공백으로 이어 붙인 문자열."""
         return " ".join(entry.source_text for entry in self.entries)
 
     @property
     def tts_text(self) -> str:
+        """청크 내 모든 스텝의 TTS 텍스트를 공백으로 이어 붙인 문자열."""
         return " ".join(entry.tts_text for entry in self.entries)
 
 
+# ─── 해시·텍스트 유틸리티 ─────────────────────────────────────────────────────
+
 def stable_digest(value: Any) -> str:
+    """임의 JSON 직렬화 가능 값을 결정적 SHA-256 해시로 변환한다.
+
+    sort_keys=True 로 딕셔너리 키 순서를 고정해 Python 버전과 관계없이
+    동일한 입력에 동일한 해시를 보장한다. 클립 캐시 키 계산에 사용된다.
+    """
     payload = json.dumps(
         value,
         ensure_ascii=False,
@@ -101,6 +165,10 @@ def stable_digest(value: Any) -> str:
 
 
 def strip_markdown(text: str) -> str:
+    """마크다운 이미지 구문을 alt 텍스트로 치환하고 줄바꿈을 공백으로 평탄화한다.
+
+    슬라이드 타이틀 등 짧은 문자열에서 불필요한 서식을 제거할 때 사용한다.
+    """
     return (
         re.sub(r"!\[([^]]*)]\([^)]*\)", r"\1", text)
         .replace("\n", " ")
@@ -109,6 +177,14 @@ def strip_markdown(text: str) -> str:
 
 
 def normalize_script_text(text: str) -> str:
+    """대본 마크다운을 TTS에 적합한 평문으로 변환한다.
+
+    처리 항목:
+        - [링크 텍스트](URL) → 링크 텍스트만 남김
+        - *강조*, _밑줄_, `코드`, ~취소선~ 등 인라인 마커 제거
+        - 불릿 포인트(-, +) 앞 마커 제거
+        - 연속 공백 정규화
+    """
     text = re.sub(r"\[([^]]+)]\([^)]*\)", r"\1", text)
     text = re.sub(r"[*_`~]", "", text)
     text = re.sub(r"^\s*[-+]\s+", "", text, flags=re.MULTILINE)
@@ -116,12 +192,24 @@ def normalize_script_text(text: str) -> str:
 
 
 def parse_script(path: Path) -> dict[str, dict[int, str]]:
+    """마크다운 대본 파일을 {슬라이드ID: {스텝번호: 텍스트}} 구조로 파싱한다.
+
+    대본 형식 (deck/script/course/<ch>.md):
+        ## <슬라이드ID>   ← ## 헤더로 슬라이드 구분
+        ### 1             ← ### 숫자로 스텝 구분
+        ...본문...
+        ### 2
+        ...본문...
+
+    > 인용구나 --- 구분선은 내레이션 대상에서 제외한다.
+    """
     result: dict[str, dict[int, str]] = {}
     slide_id: str | None = None
     step: int | None = None
     buffer: list[str] = []
 
     def flush() -> None:
+        """현재 버퍼의 텍스트를 result에 저장하고 버퍼를 초기화한다."""
         nonlocal buffer
         if slide_id is not None and step is not None:
             text = normalize_script_text("\n".join(buffer))
@@ -139,20 +227,34 @@ def parse_script(path: Path) -> dict[str, dict[int, str]]:
         if slide_match:
             flush()
             slide_id = slide_match.group(1).strip()
-            step = None
+            step = None  # 슬라이드가 바뀌면 스텝 번호도 초기화
             continue
+        # 구분선(---) 과 인용구(>) 는 내레이션에서 제외
         if step is not None and not re.match(r"^---+\s*$", raw) and not raw.startswith(">"):
             buffer.append(raw)
     flush()
     return result
 
 
+# ─── 발음 치환 ────────────────────────────────────────────────────────────────
+
 def apply_pronunciation(text: str, dictionary: list[dict[str, str]]) -> str:
+    """발음 사전을 순서대로 적용해 TTS 입력 텍스트를 생성한다.
+
+    영문자·숫자만으로 구성된 키워드는 단어 경계(\b 대신 직접 구현)를 적용해
+    'API'가 'RAPID' 안에서 치환되지 않도록 한다.
+    한국어 포함 복합 키워드는 전체 일치로 치환한다.
+
+    사전 항목 예시:
+        {"from": "LLM", "to": "엘엘엠"}
+        {"from": "fine-tuning", "to": "파인 튜닝"}
+    """
     output = text
     for item in dictionary:
         source = item["from"]
         replacement = item["to"]
         escaped = re.escape(source)
+        # 순수 영숫자 토큰은 좌우 영숫자 경계 검사를 적용한다.
         if re.fullmatch(r"[A-Za-z0-9]+", source):
             pattern = rf"(?<![A-Za-z0-9]){escaped}(?![A-Za-z0-9])"
         else:
@@ -162,17 +264,31 @@ def apply_pronunciation(text: str, dictionary: list[dict[str, str]]) -> str:
 
 
 def production_pronunciation() -> list[dict[str, str]]:
+    """로컬 프로덕션 발음 사전을 읽어 반환한다.
+
+    config/production-pronunciation.ko.json 이 없으면 빈 목록을 반환해
+    파일 부재가 오류가 아닌 '사전 없음'으로 처리된다.
+    """
     if not LOCAL_PRONUNCIATION_PATH.is_file():
         return []
     return json.loads(LOCAL_PRONUNCIATION_PATH.read_text(encoding="utf-8"))
 
 
+# ─── 슬라이드 순서 결정 ───────────────────────────────────────────────────────
+
 def chapter_slide_order(deck_root: Path) -> list[tuple[str, str]]:
+    """챕터 TypeScript 파일에서 슬라이드 ID를 순서대로 추출한다.
+
+    deck/src/production/chapters/ch<NN>-*.ts 파일을 정렬된 순으로 읽고,
+    각 파일에서 `id: "슬라이드ID"` 패턴을 찾아 (챕터, 슬라이드ID) 튜플 목록을 반환한다.
+    이 순서가 전체 강의 슬라이드 번호의 기준이 된다.
+    """
     chapters_dir = deck_root / "src/production/chapters"
     order: list[tuple[str, str]] = []
     for path in sorted(chapters_dir.glob("ch[0-9][0-9]-*.ts")):
-        chapter = path.name[:4]
+        chapter = path.name[:4]  # 예: "ch00"
         source = path.read_text(encoding="utf-8")
+        # TypeScript 소스에서 슬라이드 객체의 id 필드를 추출
         slide_ids = re.findall(r'^ {6}id:\s*"([a-z0-9-]+)"', source, flags=re.MULTILINE)
         if not slide_ids:
             raise ValueError(f"{path.name}에서 화면 ID를 찾지 못했습니다.")
@@ -180,29 +296,46 @@ def chapter_slide_order(deck_root: Path) -> list[tuple[str, str]]:
     return order
 
 
+# ─── CourseEntry 수집 ─────────────────────────────────────────────────────────
+
 def course_entries(
     source_project: Path,
     start_chapter: str,
     start_slide: str | None = None,
 ) -> list[CourseEntry]:
+    """지정한 챕터·슬라이드부터 강의 끝까지의 CourseEntry 목록을 반환한다.
+
+    발음 사전은 deck 저장소 내장 사전과 로컬 프로덕션 사전을 합쳐 적용한다.
+    슬라이드 번호(slide_number)는 전체 강의 슬라이드 순서 기반 1-based 값이다.
+
+    Args:
+        source_project: udemy-agent 저장소 루트 경로.
+        start_chapter:  생성을 시작할 챕터 (예: "ch00").
+        start_slide:    None이면 챕터의 첫 슬라이드부터 시작.
+    """
     deck_root = source_project / "deck"
+    # deck 내장 발음 사전 로드 (영어 약어, 숫자 읽기 등)
     pronunciation = json.loads(
         (deck_root / "narration/pronunciation.ko.json").read_text(encoding="utf-8")
     )
+    # 로컬 프로덕션 사전을 뒤에 추가해 우선순위를 높인다
     pronunciation.extend(production_pronunciation())
     order = chapter_slide_order(deck_root)
+    # 슬라이드 전체 순서 → 1-based 번호 매핑
     global_numbers = {pair: index + 1 for index, pair in enumerate(order)}
     script_cache: dict[str, dict[str, dict[int, str]]] = {}
     entries: list[CourseEntry] = []
     started = False
 
     for chapter, slide_id in order:
+        # 시작 지점에 도달할 때까지 건너뜀
         if not started:
             chapter_matches = chapter == start_chapter
             slide_matches = start_slide is None or slide_id == start_slide
             started = chapter_matches and slide_matches
         if not started:
             continue
+        # 챕터 대본은 처음 접근 시 파싱해 캐시 (같은 챕터의 슬라이드를 반복 파싱 방지)
         if chapter not in script_cache:
             script_cache[chapter] = parse_script(deck_root / f"script/course/{chapter}.md")
         steps = script_cache[chapter].get(slide_id)
@@ -227,16 +360,29 @@ def course_entries(
     return entries
 
 
+# ─── 청킹 ────────────────────────────────────────────────────────────────────
+
 def group_course_entries(entries: list[CourseEntry]) -> list[CourseChunk]:
-    """Join nearby visual steps into one natural TTS breath."""
+    """Join nearby visual steps into one natural TTS breath.
+
+    같은 슬라이드 안의 짧은 연속 스텝들을 하나의 청크로 묶어
+    TTS 호출 횟수를 줄이고 문장 간 자연스러운 연결을 만든다.
+
+    청킹 조건 (모두 만족해야 같은 청크에 추가):
+        - 같은 챕터 + 같은 슬라이드
+        - 현재 청크 항목 수가 MAX_CHUNK_ENTRIES 미만
+        - 추가 후 누적 문자 수가 MAX_CHUNK_CHARS 이하
+    """
     chunks: list[CourseChunk] = []
     current: list[CourseEntry] = []
     current_chars = 0
 
     for entry in entries:
+        # 현재 청크와 같은 슬라이드인지 확인
         same_slide = bool(current) and (
             current[0].chapter == entry.chapter and current[0].slide_id == entry.slide_id
         )
+        # 공백 1자 포함 추가 문자 수 계산
         added_chars = len(entry.tts_text) + (1 if current else 0)
         fits = (
             same_slide
@@ -244,6 +390,7 @@ def group_course_entries(entries: list[CourseEntry]) -> list[CourseChunk]:
             and current_chars + added_chars <= MAX_CHUNK_CHARS
         )
         if current and not fits:
+            # 현재 청크를 확정하고 새 청크 시작
             chunks.append(CourseChunk(tuple(current)))
             current = []
             current_chars = 0
@@ -255,26 +402,46 @@ def group_course_entries(entries: list[CourseEntry]) -> list[CourseChunk]:
     return chunks
 
 
+# ─── 오디오 타이밍 계산 ───────────────────────────────────────────────────────
+
 def milliseconds_to_samples(milliseconds: int, sample_rate: int) -> int:
+    """밀리초를 샘플 수로 변환한다 (반올림)."""
     return round(milliseconds * sample_rate / 1000)
 
 
 def gap_after(current: CourseEntry, following: CourseEntry) -> int:
+    """두 연속 엔트리 사이에 삽입할 무음 갭(ms)을 결정한다.
+
+    같은 슬라이드 내 전환은 짧게(STEP_GAP_MS),
+    슬라이드 간 전환은 길게(SLIDE_GAP_MS) 설정한다.
+    """
     if current.chapter == following.chapter and current.slide_id == following.slide_id:
         return STEP_GAP_MS
     return SLIDE_GAP_MS
 
 
 def chunk_gap_after(current: CourseChunk, following: CourseChunk) -> int:
+    """두 연속 청크 사이에 삽입할 갭(ms)을 결정한다.
+
+    청크의 마지막·첫 번째 엔트리를 기준으로 gap_after를 위임한다.
+    """
     return gap_after(current.entries[-1], following.entries[0])
 
 
+# ─── 파일 I/O ────────────────────────────────────────────────────────────────
+
 def write_json(path: Path, value: Any) -> None:
+    """부모 디렉터리를 자동 생성하고 JSON을 UTF-8로 저장한다."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def create_preview(source: Path, destination: Path) -> None:
+    """WAV를 AAC 192kbps M4A로 변환해 미리듣기 파일을 생성한다.
+
+    브라우저나 모바일에서 바로 재생 가능한 포맷으로 변환한다.
+    오류 메시지만 표시하고 진행 로그는 숨긴다(-loglevel error).
+    """
     subprocess.run(
         [
             "ffmpeg",
@@ -295,9 +462,23 @@ def create_preview(source: Path, destination: Path) -> None:
     )
 
 
+# ─── 오디오 후처리 ────────────────────────────────────────────────────────────
+
 def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray, dict[str, int]]:
-    """Remove generated edge silence while preserving a short natural breath."""
+    """Remove generated edge silence while preserving a short natural breath.
+
+    처리 단계:
+        1. RMS 기반 유성음 구간 감지 → 앞뒤 무음 트리밍 (EDGE_PAD_MS 여백 보존)
+        2. 내부 과도 무음 압축: MAX_INTERNAL_SILENCE_MS 초과 구간을
+           TARGET_INTERNAL_SILENCE_MS 로 줄임 (엣지 근처는 보호)
+        3. 앞뒤 sin²/cos² 페이드 적용으로 클릭 노이즈 방지
+
+    Returns:
+        (처리된 오디오 배열, 처리 통계 딕셔너리)
+        통계: trimmedHeadMs, trimmedTailMs, shortenedSilenceCount, shortenedSilenceMs
+    """
     samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+    # 20ms 프레임, 10ms 홉으로 RMS 계산
     frame = max(1, milliseconds_to_samples(20, sample_rate))
     hop = max(1, milliseconds_to_samples(10, sample_rate))
     if len(samples) < frame:
@@ -306,13 +487,15 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
     starts = np.arange(0, len(samples) - frame + 1, hop)
     rms = np.sqrt(
         np.array([np.mean(samples[start : start + frame] ** 2) for start in starts])
-        + 1e-12
+        + 1e-12  # 수치 안정성을 위한 epsilon
     )
+    # 임계값: RMS 최대값의 1.25% 또는 고정 하한(5e-4) 중 큰 값
     threshold = max(5e-4, float(rms.max()) * 0.0125)
     voiced = np.flatnonzero(rms >= threshold)
     if not len(voiced):
         return samples, {"trimmedHeadMs": 0, "trimmedTailMs": 0}
 
+    # 유성음 구간 앞뒤로 EDGE_PAD_MS 여백을 두고 트리밍
     pad = milliseconds_to_samples(EDGE_PAD_MS, sample_rate)
     start = max(0, int(starts[voiced[0]]) - pad)
     end = min(len(samples), int(starts[voiced[-1]]) + frame + pad)
@@ -320,12 +503,14 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
 
     # Qwen occasionally inserts a second-long pause between otherwise adjacent
     # sentences. Keep normal rhetorical pauses, but compact the rare outliers.
+    # 트리밍 후 배열에서 다시 RMS를 계산해 내부 과도 무음 구간을 찾는다.
     starts = np.arange(0, max(0, len(trimmed) - frame + 1), hop)
     rms = np.sqrt(
         np.array([np.mean(trimmed[at : at + frame] ** 2) for at in starts])
         + 1e-12
     )
     silent = rms < threshold
+    # 연속 무음 프레임의 시작/종료 인덱스를 런-렝스 인코딩 방식으로 수집
     runs: list[tuple[int, int]] = []
     run_start: int | None = None
     for index, is_silent in enumerate(silent):
@@ -336,6 +521,7 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
             silence_start = int(starts[run_start])
             silence_end = min(len(trimmed), int(starts[run_end - 1]) + frame)
             duration_ms = round((silence_end - silence_start) * 1000 / sample_rate)
+            # 조건: 엣지 보호 구간 안쪽 & 길이가 임계값 초과인 구간만 압축 대상
             if (
                 silence_start > milliseconds_to_samples(EDGE_PAD_MS, sample_rate)
                 and silence_end < len(trimmed) - milliseconds_to_samples(EDGE_PAD_MS, sample_rate)
@@ -346,6 +532,7 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
 
     shortened_ms = 0
     if runs:
+        # 압축 대상 구간들을 TARGET_INTERNAL_SILENCE_MS 로 줄여 이어 붙인다.
         compacted: list[np.ndarray] = []
         cursor = 0
         target_silence = milliseconds_to_samples(TARGET_INTERNAL_SILENCE_MS, sample_rate)
@@ -358,6 +545,7 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
         compacted.append(trimmed[cursor:])
         trimmed = np.concatenate(compacted)
 
+    # sin²(0→π/2) 페이드인, cos²(0→π/2) 페이드아웃 적용
     fade = min(milliseconds_to_samples(EDGE_FADE_MS, sample_rate), len(trimmed) // 2)
     if fade:
         phase = np.linspace(0.0, np.pi / 2.0, fade, endpoint=True, dtype=np.float32)
@@ -372,7 +560,15 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
     }
 
 
+# ─── 강제 정렬 ────────────────────────────────────────────────────────────────
+
 def clean_alignment_token(token: str) -> str:
+    """정렬 토큰에서 문자·숫자·아포스트로피만 남기고 구두점을 제거한다.
+
+    ForcedAligner의 어휘에 없는 특수문자를 포함한 토큰을 정규화해
+    텍스트와 정렬 결과의 토큰 수를 일치시킨다.
+    유니코드 카테고리 L(문자), N(숫자)과 아포스트로피(')만 허용한다.
+    """
     return "".join(
         char
         for char in token
@@ -381,6 +577,10 @@ def clean_alignment_token(token: str) -> str:
 
 
 def alignment_tokens(text: str) -> list[str]:
+    """텍스트를 공백으로 분리한 뒤 각 토큰을 clean_alignment_token으로 정규화한다.
+
+    빈 문자열이 된 토큰은 제외한다 (순수 구두점 토큰 등).
+    """
     return [cleaned for token in text.split() if (cleaned := clean_alignment_token(token))]
 
 
@@ -388,6 +588,14 @@ def entry_alignment_slices(
     chunk: CourseChunk,
     words: list[dict[str, Any]],
 ) -> list[list[dict[str, Any]]]:
+    """청크 전체 단어 정렬 결과를 엔트리별로 분할한다.
+
+    각 엔트리의 토큰 수를 세어 words 리스트를 순서대로 슬라이싱한다.
+    토큰 수 불일치는 텍스트 전처리와 정렬 결과가 어긋난 것이므로 즉시 오류를 낸다.
+
+    Returns:
+        엔트리별 단어 정렬 딕셔너리 목록 (청크 엔트리 순서와 동일)
+    """
     counts = [len(alignment_tokens(entry.tts_text)) for entry in chunk.entries]
     if sum(counts) != len(words):
         raise RuntimeError(
@@ -407,6 +615,21 @@ def load_or_create_alignment(
     aligner: Any,
     alignment_path: Path,
 ) -> list[dict[str, Any]]:
+    """정렬 캐시가 있으면 읽고, 없으면 ForcedAligner로 생성한 뒤 저장한다.
+
+    정렬은 계산 비용이 크므로 clip 해시가 포함된 파일명으로 캐싱한다.
+    aligner=None 이면 캐시 파일이 반드시 존재해야 한다
+    (TTS 완료 후 aligner를 로드하지 않은 상태에서 재실행할 때).
+
+    Args:
+        chunk:          정렬할 CourseChunk.
+        clip:           오디오 경로와 해시를 담은 딕셔너리.
+        aligner:        mlx_audio STT 모델 인스턴스 (캐시 히트 시 None 가능).
+        alignment_path: 캐시 파일 경로.
+
+    Returns:
+        단어별 {"text", "startMs", "endMs"} 딕셔너리 목록.
+    """
     if alignment_path.is_file():
         return json.loads(alignment_path.read_text(encoding="utf-8"))["words"]
     if aligner is None:
@@ -417,6 +640,7 @@ def load_or_create_alignment(
         text=chunk.tts_text,
         # Space tokenization is deterministic for mixed Korean/English. This
         # forced-aligner API does not feed a separate language token to the model.
+        # 공백 기반 토크나이저는 한국어/영어 혼합에서도 결정적이므로 "English" 고정.
         language="English",
     )
     words = [
@@ -427,6 +651,7 @@ def load_or_create_alignment(
         }
         for item in result.items
     ]
+    # 토큰 수 일관성 검증 후 캐시 저장
     entry_alignment_slices(chunk, words)
     write_json(
         alignment_path,
@@ -440,6 +665,8 @@ def load_or_create_alignment(
     return words
 
 
+# ─── 핵심 생성 로직 ───────────────────────────────────────────────────────────
+
 def synthesize_excerpt(
     source_project: Path,
     output_dir: Path,
@@ -450,6 +677,21 @@ def synthesize_excerpt(
     start_slide: str | None,
     seed: int,
 ) -> None:
+    """강의 대본 일부를 TTS로 합성하고 정렬된 manifest.json을 생성한다.
+
+    흐름:
+        1. 대본 → CourseEntry → CourseChunk 목록 생성
+        2. 청크별 TTS 생성 (캐시 히트 시 재사용) + trim/fade 후처리
+        3. 목표 길이(target_seconds)에 가장 가까운 청크 수 선택
+        4. TTS 모델 해제 → ForcedAligner 로드 (Metal 메모리 재사용)
+        5. 청크별 단어 정렬 (캐시 히트 시 재사용)
+        6. 클립 조립 → 정규화 → 미리듣기 M4A 생성
+        7. 스텝별 절대 타이밍 계산 → manifest.json 저장
+
+    Metal 메모리 관리:
+        TTS 완료 후 모델을 명시적으로 del/gc.collect()/mx.clear_cache()해
+        ForcedAligner 가 사용할 Metal 메모리를 확보한다.
+    """
     import mlx.core as mx
     from mlx_audio.tts.utils import load_model as load_tts_model
     from mlx_audio.utils import get_model_path
@@ -458,15 +700,18 @@ def synthesize_excerpt(
         raise ValueError("목표 길이는 0초보다 커야 합니다.")
 
     spec = MODEL_SPECS["qwen3-tts"]
+    # A/B 파일럿보다 안정적인 파라미터로 오버라이드
     settings = {**spec.settings, **COURSE_SETTING_OVERRIDES}
     entries = course_entries(source_project, start_chapter, start_slide)
     chunks = group_course_entries(entries)
     reference_text = reference_text_path.read_text(encoding="utf-8").strip()
     reference_hash = sha256_file(reference_path)
     reference_text_hash = sha256_text(reference_text)
+
+    # 출력 디렉터리 구조 생성
     output_dir.mkdir(parents=True, exist_ok=True)
-    clips_dir = output_dir / "clips/native"
-    alignments_dir = output_dir / "clips/alignment"
+    clips_dir = output_dir / "clips/native"       # 트리밍된 네이티브 클립 WAV
+    alignments_dir = output_dir / "clips/alignment"  # 단어 정렬 JSON 캐시
     clips_dir.mkdir(parents=True, exist_ok=True)
     alignments_dir.mkdir(parents=True, exist_ok=True)
 
@@ -476,6 +721,7 @@ def synthesize_excerpt(
     model = load_tts_model(model_path)
     load_ms = round((time.perf_counter() - load_started) * 1000)
 
+    # 루프 전 초기화 (첫 번째 클립에서 샘플레이트가 결정된다)
     target_samples: int | None = None
     native_rate: int | None = None
     cursor_samples: int | None = None
@@ -485,6 +731,8 @@ def synthesize_excerpt(
     peak_memory_gb = 0.0
 
     for index, chunk in enumerate(chunks):
+        # 캐시 키: 모델·설정·참조·텍스트·시드·후처리 파라미터를 모두 포함
+        # schemaVersion을 올리면 기존 캐시가 자동으로 무효화된다.
         cache_hash = stable_digest(
             {
                 "schemaVersion": 4,
@@ -504,9 +752,11 @@ def synthesize_excerpt(
         )
         clip_path = clips_dir / f"{chunk.key}--{cache_hash[:12]}.wav"
         clip_meta_path = clip_path.with_suffix(".json")
+        # 청크별 시드: 전역 시드 XOR 캐시 해시 앞 4바이트
         entry_seed = seed ^ int(cache_hash[:8], 16)
 
         if clip_path.is_file():
+            # ── 캐시 히트: 오디오를 다시 생성하지 않고 파일 정보만 읽는다 ──
             info = sf.info(clip_path)
             rate = int(info.samplerate)
             frames = int(info.frames)
@@ -522,6 +772,7 @@ def synthesize_excerpt(
             )
             cache_hits += 1
         else:
+            # ── 캐시 미스: TTS 생성 + trim/fade + WAV 저장 ──
             mx.random.seed(entry_seed)
             started = time.perf_counter()
             results = list(
@@ -550,6 +801,7 @@ def synthesize_excerpt(
                 *(float(result.peak_memory_usage) for result in results),
             )
 
+        # 첫 번째 클립에서 샘플레이트와 목표 샘플 수를 확정한다
         if native_rate is None:
             native_rate = rate
             target_samples = round(target_seconds * native_rate)
@@ -558,6 +810,7 @@ def synthesize_excerpt(
             raise RuntimeError("캐시된 클립의 샘플레이트가 서로 다릅니다.")
         assert cursor_samples is not None and target_samples is not None
 
+        # 현재 클립의 타임라인 위치 기록
         start_sample = cursor_samples
         end_sample = start_sample + frames
         selected_chunks.append(
@@ -578,8 +831,10 @@ def synthesize_excerpt(
             }
         )
 
+        # 목표 길이에 도달했는지 확인 (종료 패드 포함)
         total_if_finished = end_sample + milliseconds_to_samples(END_PAD_MS, rate)
         if total_if_finished >= target_samples:
+            # 현재 청크를 포함하는 것이 목표에 더 가까운지, 이전 청크까지가 더 가까운지 비교
             if len(selected_chunks) > 1:
                 previous_end = int(selected_chunks[-2]["endSample"])
                 without_current = previous_end + milliseconds_to_samples(END_PAD_MS, rate)
@@ -588,6 +843,7 @@ def synthesize_excerpt(
                 ):
                     selected_chunks.pop()
             break
+        # 다음 청크 시작 위치: 현재 끝 + 적절한 갭
         following = chunks[index + 1]
         cursor_samples = end_sample + milliseconds_to_samples(
             chunk_gap_after(chunk, following), rate
@@ -596,10 +852,12 @@ def synthesize_excerpt(
         raise RuntimeError("강의 끝까지 생성해도 목표 길이에 도달하지 못했습니다.")
 
     # Keep TTS and forced alignment in separate Metal phases.
+    # TTS 모델을 명시적으로 해제해 ForcedAligner 가 사용할 Metal 메모리를 확보한다.
     del model
     gc.collect()
     mx.clear_cache()
 
+    # 정렬 캐시가 모두 있으면 aligner를 로드하지 않는다 (시간·메모리 절약)
     aligner_paths = [
         alignments_dir / f"{item['key']}--{item['hash'][:12]}.json"
         for item in selected_chunks
@@ -627,10 +885,13 @@ def synthesize_excerpt(
         del aligner
         gc.collect()
         mx.clear_cache()
+    # aligner를 로드하지 않은 경우(전체 캐시 히트)에도 revision 을 기록하기 위해 캐시를 확인
     if aligner_revision is None:
         cached_aligner = get_model_path(ALIGNER_REPOSITORY)
         aligner_revision = snapshot_revision(cached_aligner)
 
+    # ─── 최종 트랙 조립 ───────────────────────────────────────────────────────
+    # 오프닝 무음 → 클립1 → 갭 → 클립2 → 갭 → ... → 엔딩 무음
     assert native_rate is not None
     pieces: list[np.ndarray] = [
         np.zeros(milliseconds_to_samples(START_PAD_MS, native_rate), dtype=np.float32)
@@ -659,6 +920,7 @@ def synthesize_excerpt(
 
     # Convert chunk-local word alignment to step-level absolute timing. The
     # screen changes shortly before the next step's first spoken word.
+    # 청크 내 상대 타이밍(ms) → 트랙 전체 절대 타이밍으로 변환한다.
     step_records: list[dict[str, Any]] = []
     for item in selected_chunks:
         chunk: CourseChunk = item["chunk"]
@@ -666,6 +928,7 @@ def synthesize_excerpt(
         for entry, words in zip(chunk.entries, slices):
             if not words:
                 raise RuntimeError(f"{entry.key}에 정렬된 단어가 없습니다.")
+            # 청크 시작 시점을 더해 절대 시간으로 변환
             absolute_words = [
                 {
                     **word,
@@ -689,8 +952,11 @@ def synthesize_excerpt(
                 }
             )
 
+    # ─── 스텝별 화면 전환 타이밍 계산 ────────────────────────────────────────
+    # transitionAtMs: 다음 스텝 발화 시작 직전에 화면을 전환해 시각적 리듬을 맞춘다.
     total_ms = int(final_probe["durationMs"])
     for index, record in enumerate(step_records):
+        # 이 스텝의 화면이 활성화되는 시점 (이전 스텝의 전환 시점)
         visual_start = (
             START_PAD_MS if index == 0 else int(step_records[index - 1]["transitionAtMs"])
         )
@@ -701,15 +967,19 @@ def synthesize_excerpt(
                 record["chapter"] == following["chapter"]
                 and record["slide_id"] == following["slide_id"]
             )
+            # 같은 슬라이드면 짧은 리드, 슬라이드 전환이면 긴 리드
             visual_lead = STEP_VISUAL_LEAD_MS if same_slide else SLIDE_VISUAL_LEAD_MS
+            # 현재 발화가 끝난 시점과 다음 발화 직전 중 더 늦은 시점을 전환점으로 사용
             transition = max(int(record["speechEndMs"]), next_speech - visual_lead)
         else:
+            # 마지막 스텝은 트랙 끝까지
             transition = total_ms
         record["startMs"] = visual_start
         record["endMs"] = transition
         record["transitionAtMs"] = transition
         record["durationMs"] = transition - visual_start
 
+    # ─── manifest.json 생성 ──────────────────────────────────────────────────
     chunk_manifest = [
         {
             "key": item["key"],
@@ -797,6 +1067,7 @@ def synthesize_excerpt(
         },
     }
     write_json(output_dir / "manifest.json", metadata)
+    # 터미널에는 핵심 통계만 출력한다 (전체 manifest는 파일 참조)
     print(
         json.dumps(
             {
@@ -810,6 +1081,10 @@ def synthesize_excerpt(
 
 
 def entries_for_item(item: dict[str, Any]) -> CourseEntry:
+    """manifest entries 항목 딕셔너리를 CourseEntry 인스턴스로 복원한다.
+
+    manifest.json을 다시 읽어 CourseEntry가 필요한 후처리에서 사용한다.
+    """
     return CourseEntry(
         chapter=item["chapter"],
         slide_id=item["slide_id"],
@@ -820,16 +1095,26 @@ def entries_for_item(item: dict[str, Any]) -> CourseEntry:
     )
 
 
+# ─── CLI ──────────────────────────────────────────────────────────────────────
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-project", type=Path, default=DEFAULT_SOURCE_PROJECT)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--reference", type=Path, required=True)
-    parser.add_argument("--reference-text", type=Path, required=True)
-    parser.add_argument("--target-seconds", type=float, default=300.0)
-    parser.add_argument("--start-chapter", default="ch00")
-    parser.add_argument("--start-slide")
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--source-project", type=Path, default=DEFAULT_SOURCE_PROJECT,
+                        help="udemy-agent 저장소 루트 경로")
+    parser.add_argument("--output-dir", type=Path, required=True,
+                        help="결과물을 저장할 디렉터리 (없으면 자동 생성)")
+    parser.add_argument("--reference", type=Path, required=True,
+                        help="음성 복제에 사용할 참조 WAV 파일")
+    parser.add_argument("--reference-text", type=Path, required=True,
+                        help="참조 음성의 전사문 텍스트 파일")
+    parser.add_argument("--target-seconds", type=float, default=300.0,
+                        help="생성할 오디오 목표 길이 (초, 기본 300 = 5분)")
+    parser.add_argument("--start-chapter", default="ch00",
+                        help="생성 시작 챕터 (예: ch00)")
+    parser.add_argument("--start-slide",
+                        help="생성 시작 슬라이드 ID (생략하면 챕터 첫 슬라이드)")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
+                        help=f"MLX 난수 시드 (기본값: {DEFAULT_SEED})")
     return parser
 
 
