@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local configuration and secrets
+.env
+.env.local
+*.token
+
+# Model weights and caches
+models/
+.cache/
+huggingface/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# Voice data and generated artifacts
+data/raw/
+data/private/
+artifacts/
+outputs/
+cache/
+*.wav
+*.mp3
+*.m4a
+*.flac
+
+# macOS and editors
+.DS_Store
+.idea/
+.vscode/

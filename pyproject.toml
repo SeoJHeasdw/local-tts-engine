@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "local-tts-engine"
+version = "0.1.0"
+description = "Local Korean lecture TTS and personal voice engine for Apple Silicon"
+readme = "README.md"
+requires-python = ">=3.13.12,<3.14"
+license = { text = "Private" }
+authors = [{ name = "Jaeho Seo" }]
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/local_tts_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

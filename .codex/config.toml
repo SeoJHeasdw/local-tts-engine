@@ -1,0 +1,31 @@
+default_permissions = "local-tts-development"
+
+[features]
+network_proxy = true
+
+[permissions.local-tts-development]
+description = "Edit the local TTS project and its udemy-agent consumer, with scoped model and package downloads."
+extends = ":workspace"
+
+[permissions.local-tts-development.workspace_roots]
+"/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent" = true
+
+[permissions.local-tts-development.filesystem.":workspace_roots"]
+"**/.env" = "deny"
+"**/.env.local" = "deny"
+
+[permissions.local-tts-development.network]
+enabled = true
+
+[permissions.local-tts-development.network.domains]
+"pypi.org" = "allow"
+"files.pythonhosted.org" = "allow"
+"download.pytorch.org" = "allow"
+"huggingface.co" = "allow"
+"**.huggingface.co" = "allow"
+"hf.co" = "allow"
+"**.hf.co" = "allow"
+"**.xethub.hf.co" = "allow"
+"github.com" = "allow"
+"api.github.com" = "allow"
+"**.githubusercontent.com" = "allow"

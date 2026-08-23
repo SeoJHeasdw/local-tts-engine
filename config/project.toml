@@ -1,0 +1,34 @@
+schema_version = 1
+
+[project]
+name = "local-tts-engine"
+purpose = "Reusable local Korean lecture TTS with the user's voice"
+
+[hardware]
+reported_machine = "MacBook Pro, Apple M4 Max, 36GB unified memory"
+backend = "mlx"
+
+[course_source]
+root = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent"
+narration_pipeline = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/NARRATION-PIPELINE.md"
+video_guidelines = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/VIDEO-PACING-GUIDELINES.md"
+ch01_script = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/script/course/ch01.md"
+pronunciation_dictionary = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/narration/pronunciation.ko.json"
+narration_runner = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/tools/narration.mjs"
+narration_config = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/narration.config.json"
+
+[voice_source]
+raw_root = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/voice"
+clean_master_root = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/voice/training/pvc/master-wav"
+clean_preview_root = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/voice/training/pvc/upload-mp3"
+manifest = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/voice/training/pvc/manifest.json"
+pilot_reference = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/voice/ch01/pilot/master-48k-mono.wav"
+clean_duration_seconds = 3200.247
+
+[pilot]
+source_preset = "ch01-intro"
+target_seconds_min = 30
+target_seconds_max = 60
+primary_model = "Qwen3-TTS 1.7B Base"
+comparison_model = "Chatterbox Multilingual V3"
+output_format = "WAV PCM, mono, 48kHz after normalization"
