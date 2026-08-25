@@ -1,7 +1,7 @@
 # 프로젝트 인수인계
 
-> 작성일: 2026-08-24
-> 상태: Qwen3-TTS 수정 파이프라인 5분 리뷰본 생성 완료, 사용자 청취 대기
+> 작성일: 2026-08-25
+> 상태: CH00 전체 10분 영상 완성, 레슨 단위 preset 설계 완료 — 다음 세션에서 CH01 레슨별 TTS 생성 예정
 
 ## 1. 사용자의 목표
 
@@ -128,7 +128,7 @@ MIT로 확인했지만 이 문장만으로 상업 이용 결정을 확정하지 
 - 로그인 세션, API 키, 토큰은 보안상 복제하지 않았다.
 - 713MB 음성 폴더와 모델 가중치는 중복 복사하지 않았다. 절대 경로로 참조한다.
 
-## 9. 2026-08-24 현재 구현 상태
+## 9. 2026-08-25 현재 구현 상태
 
 섹션 6의 A/B 계획은 완료된 과거 계획이다. 사용자 청취 결과 Qwen3-TTS 1.7B
 Base BF16을 기준 모델로 선택했고 Chatterbox V3는 제외했다.
@@ -138,7 +138,7 @@ Base BF16을 기준 모델로 선택했고 Chatterbox V3는 제외했다.
 - 같은 슬라이드의 2~4개 스텝, 최대 300자를 한 호흡으로 생성
 - 생성 온도 0.75, top_p 0.95
 - 앞뒤 무음 정리, 24ms 경계 페이드
-- 같은 슬라이드 클립 간격 200ms, 슬라이드 간격 350ms
+- 같은 슬라이드 클립 간격 200ms, 슬라이드 간격 750ms
 - 700ms 초과 내부 무음만 480ms로 축소
 - `config/production-pronunciation.ko.json`에서 제작용 발음 예외 관리
 - Qwen3-ForcedAligner 0.6B 8-bit로 실제 단어 시각 생성
@@ -146,24 +146,96 @@ Base BF16을 기준 모델로 선택했고 Chatterbox V3는 제외했다.
 
 `udemy-agent/deck/tools/narration.mjs`는 정렬 단어로 SRT/VTT와 화면 자막을
 만들고, 다음 스텝 첫 단어 120ms 전에 화면을 전환한다. Playwright의 가변 녹화
-지연은 흰색 동기 마커 프레임으로 측정해 제거한다.
+지연은 마젠타 동기 마커 프레임으로 측정해 제거한다.
 
-현재 리뷰 산출물:
+### 완성된 산출물 (2026-08-25)
 
-- 로컬 음성·매니페스트:
-  `artifacts/course-pilots/2026-08-24/qwen3-tts-first-5m/`
-- 최종 자막 영상:
-  `/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/render/narration/qwen3-first-5m/qwen3-first-5m-captioned.mp4`
-- SRT/VTT/타임라인:
-  같은 `qwen3-first-5m/` 디렉터리
+| 항목 | 경로 |
+| --- | --- |
+| TTS 음성·매니페스트 | `artifacts/course-pilots/2026-08-25/qwen3-tts-first-10m/` |
+| 최종 자막 영상 | `deck/render/narration/qwen3-first-10m/qwen3-first-10m-captioned.mp4` |
+| SRT/VTT/타임라인 | 같은 `qwen3-first-10m/` 디렉터리 |
 
-리뷰본 수치:
+영상 수치:
 
-- 4분 50.045초, 9개 화면, 36개 스텝, 13개 음성 클립
-- 첫 음성 0.974초, 첫 자막 0.920초
-- 시작 여백 외 700ms 이상 무음 0건
-- H.264 1920×1080 25fps, AAC 48kHz mono, 22.96MB
-- 로컬 테스트 12개 통과
+- 9분 47.4초, 19개 화면, 67개 스텝, 26개 음성 청크
+- H.264 1920×1080 25fps, AAC 48kHz mono, 55.2 MB, 자막 199큐
+- 첫 슬라이드: `open-cover` (1.3초 시작), 마지막: `promptify-promptify`
+- Metal 메모리 peak 11.6 GB
 
-다음 단계는 사용자가 이 5분 영상을 듣고 어색한 단어·호흡·전환 시각을 구체적으로
-표시하는 것이다. 승인 전에는 CH01 전체나 전체 7~8시간으로 확장하지 않는다.
+이전 old 산출물:
+
+- `artifacts/course-pilots/2026-08-23-old/`, `2026-08-24-old/`
+- `deck/render/narration/qwen3-first-10m-old/`, `qwen3-first-5m-old/`
+
+### 레슨 단위 preset 설계 (2026-08-25)
+
+영상 수정 시 해당 레슨 구간만 재합성할 수 있도록 레슨 단위 preset을
+`udemy-agent/deck/narration.config.json`에 추가했다.
+
+| preset | 제목 | 슬라이드 범위 | 장수 |
+| --- | --- | --- | --- |
+| `ch00` | CH00 강의 프레임 전체 | `open-cover` → `open-say-2` | 11장 |
+| `ch01-l00` | CH01 L00 챕터 프레임 | `frame-genai-cover` | 1장 |
+| `ch01-l01` | CH01 L01 일을 시키는 방법 | `promptify-shot` → `promptify-lanes-gap` | 18장 |
+| `ch01-l02` | CH01 L02 LLM은 무엇인가 | `llm-open` → `llm-recap` | 28장 |
+| `ch01-l03` | CH01 L03 생성형 AI의 구조적 한계 | `genai-limit-say-1` → `genai-limit-say-3` | 7장 |
+| `ch01-l04` | CH01 L04 RAG란 무엇인가 | `rag-open` → `rag-recap` | 8장 |
+| `ch01-l05` | CH01 L05 RAG 도입 이유 | `rag-why-say` → `rag-why-def` | 3장 |
+| `ch01-l06` | CH01 L06 RAG가 못 하는 것 | `rag-why-split` → `rag-gap-say-3` | 6장 |
+| `ch01-l07` | CH01 L07 Agent란 무엇인가 | `agent-def-warn-1` → `agent-def-scale` | 13장 |
+| `ch01-l08` | CH01 L08 RAG와 Agent의 차이 | `rag-vs-agent-say` → `rag-vs-agent-design-principle` | 6장 |
+| `ch01-l09` | CH01 L09 Workflow와 Agent의 차이 | `rag-vs-agent-case` → `workflow-check-2` | 13장 |
+| `ch01-l10` | CH01 L10 Agent가 필요한 이유 | `agent-cost-say` → `agent-cost-check` | 3장 |
+| `ch01-l11` | CH01 L11 Agent 도입 금지 | `agent-dont-warn` → `agent-dont-plan` | 4장 |
+| `ch01-l00-end` | CH01 L00 챕터 요약·전환 | `frame-genai-chapter-summary` → `frame-genai-next-question` | 2장 |
+
+### 다음 세션의 작업 순서
+
+CH01 레슨별 TTS 생성 → export → captions → capture 순서로 진행한다.
+**한 레슨씩 승인받아 다음으로 넘어간다.**
+
+각 레슨 생성 명령 패턴:
+
+```bash
+# TTS 생성 (예: L01)
+cd /Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine
+.venv/bin/python -m local_tts_engine.course_pilot \
+  --reference artifacts/benchmarks/2026-08-23/reference.wav \
+  --reference-text artifacts/benchmarks/2026-08-23/reference.txt \
+  --output-dir artifacts/course-pilots/$(date +%Y-%m-%d)/ch01-l01 \
+  --start-chapter ch01 \
+  --start-slide promptify-shot \
+  --target-seconds <예상초> \
+  --seed 20260825
+
+# export
+.venv/bin/python -m local_tts_engine.export_udemy \
+  --source-dir artifacts/course-pilots/$(date +%Y-%m-%d)/ch01-l01 \
+  --deck-root /Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck \
+  --preset ch01-l01 \
+  --provider qwen3-local
+
+# captions + capture
+cd /Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck
+node tools/narration.mjs captions --preset ch01-l01 --provider qwen3-local
+node tools/narration.mjs capture --preset ch01-l01 --provider qwen3-local --burn-captions
+```
+
+레슨별 예상 길이 (대본 글자 수 기준 추정, 실측 필요):
+
+| preset | 예상 길이 | `--target-seconds` |
+| --- | --- | --- |
+| ch01-l01 | ~15분 | 900 |
+| ch01-l02 | ~25분 | 1500 |
+| ch01-l03 | ~5분 | 300 |
+| ch01-l04 | ~7분 | 420 |
+| ch01-l05 | ~3분 | 180 |
+| ch01-l06 | ~6분 | 360 |
+| ch01-l07 | ~11분 | 660 |
+| ch01-l08 | ~6분 | 360 |
+| ch01-l09 | ~10분 | 600 |
+| ch01-l10 | ~2분 | 120 |
+| ch01-l11 | ~4분 | 240 |
+
+승인 전에는 다음 레슨으로 넘어가지 않는다.

@@ -24,6 +24,7 @@ local-tts-pilot = "local_tts_engine.pilot:main"
 local-tts-course-pilot = "local_tts_engine.course_pilot:main"
 local-tts-export-udemy = "local_tts_engine.export_udemy:main"
 local-tts-prosody-candidates = "local_tts_engine.prosody_candidates:main"
+local-tts-prepare-finetune = "local_tts_engine.finetune_dataset:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/local_tts_engine"]

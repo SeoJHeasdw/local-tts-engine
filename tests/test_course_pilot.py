@@ -9,6 +9,7 @@ from local_tts_engine.course_pilot import (
     gap_after,
     group_course_entries,
     parse_script,
+    slide_ids_from_source,
     trim_and_fade_audio,
 )
 
@@ -128,3 +129,51 @@ def test_course_entries_uses_canonical_order_and_dictionary(tmp_path: Path) -> N
         "ch00--slide-b--0",
     ]
     assert entries[0].tts_text == "엠씨피 시작"
+
+
+def test_slide_ids_from_source_uses_outermost_id_indent() -> None:
+    source = '''
+const slides = [
+  {
+    id: "slide-a",
+    nested: { id: "not-a-slide" },
+  },
+  {
+    id: "slide-b",
+  },
+];
+'''
+
+    assert slide_ids_from_source(source) == ["slide-a", "slide-b"]
+
+
+def test_course_entries_reads_split_chapter_files(tmp_path: Path) -> None:
+    deck = tmp_path / "deck"
+    chapters = deck / "src/production/chapters"
+    split = chapters / "ch01"
+    scripts = deck / "script/course"
+    narration = deck / "narration"
+    split.mkdir(parents=True)
+    scripts.mkdir(parents=True)
+    narration.mkdir(parents=True)
+    (chapters / "ch01-test.ts").write_text(
+        'const slides = [...S01, ...S02];\n', encoding="utf-8"
+    )
+    (split / "01-first.ts").write_text(
+        '  {\n    id: "slide-a",\n  },\n', encoding="utf-8"
+    )
+    (split / "02-second.ts").write_text(
+        '  {\n    id: "slide-b",\n  },\n', encoding="utf-8"
+    )
+    (scripts / "ch01.md").write_text(
+        "## slide-a\n### 0\n첫째\n## slide-b\n### 0\n둘째\n",
+        encoding="utf-8",
+    )
+    (narration / "pronunciation.ko.json").write_text("[]", encoding="utf-8")
+
+    entries = course_entries(tmp_path, "ch01")
+
+    assert [entry.key for entry in entries] == [
+        "ch01--slide-a--0",
+        "ch01--slide-b--0",
+    ]

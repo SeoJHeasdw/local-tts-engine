@@ -83,3 +83,22 @@
 - 영상은 H.264 1920×1080 25fps, 음성은 AAC 48kHz mono다. 영상과 음성
   스트림 길이 차이는 5ms다.
 - 사용자 청취 승인 전에는 전체 강의로 확장하지 않는다.
+
+## 2026-08-25 — 파인튜닝은 데이터 준비와 학습을 분리
+
+- Qwen 공식 경로는 12Hz 1.7B/0.6B Base의 단일 화자 전체 SFT이며,
+  `audio`·`text`·동일한 `ref_audio`가 든 JSONL과 CUDA를 요구한다.
+  - https://github.com/QwenLM/Qwen3-TTS/blob/main/finetuning/README.md
+- 현재 사용 중인 MLX-Audio 0.5.0에는 공식 학습 경로가 없다. Apple Silicon용
+  Qwen3-TTS LoRA 구현은 별도 실험 프로젝트에 있으나 실제 학습 백엔드로 아직
+  채택하지 않았다.
+  - https://github.com/Blaizzy/mlx-audio
+  - https://github.com/akashicMarga/mlx-audio-train
+- 결정: 먼저 53분 정본을 읽기 전용으로 유지하면서 3~14초 클립, Qwen3-ASR
+  초벌 전사, 사람 검수표와 공식 JSONL 내보내기 절차만 준비한다. 학습·모델
+  다운로드·외부 업로드는 별도 승인 전까지 실행하지 않는다.
+- 결과: 5개 정본 3,200.525초를 398개 클립으로 분할했다. 중앙값 7.99초,
+  최대 13.919초이며 강제 절단은 0개다. 녹음 당시 Git 대본과 ASR을 대조하고
+  대표 10개를 사용자가 청취했다. 글자 단위 완전 일치와 사용자 확인을 통과한
+  92개·12.252분만 1차 세트로 승인했고, 말실수 2개는 제외했다. 나머지 304개는
+  필요할 때만 추가 검수하도록 보류했다.

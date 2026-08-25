@@ -48,6 +48,19 @@ def write_json(path: Path, value: Any) -> None:
     )
 
 
+def invalidate_render_derivatives(output_dir: Path, preset_name: str) -> None:
+    """새 트랙과 함께 사용할 수 없는 이전 자막·녹화 산출물을 제거한다."""
+    for name in ("captions.json", "captions.srt", "captions.vtt"):
+        (output_dir / name).unlink(missing_ok=True)
+
+    video_dir = output_dir / "video"
+    if video_dir.is_dir():
+        shutil.rmtree(video_dir)
+
+    for video in output_dir.glob(f"{preset_name}*.mp4"):
+        video.unlink()
+
+
 # ─── 타임라인 변환 ────────────────────────────────────────────────────────────
 
 def timeline_from_course_manifest(
@@ -174,6 +187,9 @@ def export(
     output_dir = deck_root / deck_config["outputRoot"] / preset_name
     audio_dir = output_dir / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
+
+    # 오디오·타임라인만 교체되고 예전 MP4가 최종본처럼 남는 일을 방지한다.
+    invalidate_render_derivatives(output_dir, preset_name)
 
     # 오디오 파일을 deck 저장소 내 고정 경로로 복사
     shutil.copy2(source_manifest["audioPath"], audio_dir / "track.wav")

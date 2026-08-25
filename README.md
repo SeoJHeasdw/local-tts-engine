@@ -28,3 +28,6 @@ Apple Silicon에서 한국어 강의용 개인 음성을 로컬로 생성하는 
 
 자세한 현재 상황은 `docs/HANDOFF.md`, 연결 방식은
 `docs/ARCHITECTURE.md`를 기준으로 합니다.
+
+파인튜닝 전 데이터 준비·ASR 초벌 전사·사람 검수·공식 JSONL 내보내기는
+`docs/FINETUNING-DATA.md`를 따릅니다. 실제 학습은 이 절차와 분리되어 있습니다.

@@ -276,6 +276,23 @@ def production_pronunciation() -> list[dict[str, str]]:
 
 # ─── 슬라이드 순서 결정 ───────────────────────────────────────────────────────
 
+def slide_ids_from_source(source: str) -> list[str]:
+    """TypeScript 파일에서 가장 바깥 레벨의 슬라이드 ID만 순서대로 읽는다."""
+    matches = re.findall(
+        r'^(\s+)id:\s*"([a-z0-9-]+)"',
+        source,
+        flags=re.MULTILINE,
+    )
+    if not matches:
+        return []
+    minimum_indent = min(len(indent.expandtabs(4)) for indent, _ in matches)
+    return [
+        slide_id
+        for indent, slide_id in matches
+        if len(indent.expandtabs(4)) == minimum_indent
+    ]
+
+
 def chapter_slide_order(deck_root: Path) -> list[tuple[str, str]]:
     """챕터 TypeScript 파일에서 슬라이드 ID를 순서대로 추출한다.
 
@@ -288,8 +305,15 @@ def chapter_slide_order(deck_root: Path) -> list[tuple[str, str]]:
     for path in sorted(chapters_dir.glob("ch[0-9][0-9]-*.ts")):
         chapter = path.name[:4]  # 예: "ch00"
         source = path.read_text(encoding="utf-8")
-        # TypeScript 소스에서 슬라이드 객체의 id 필드를 추출
-        slide_ids = re.findall(r'^ {6}id:\s*"([a-z0-9-]+)"', source, flags=re.MULTILINE)
+        # 기존 단일 파일 챕터는 여기서 직접 읽는다. CH01처럼 레슨 파일로
+        # 분리된 챕터는 상위 파일의 import/spread 순서와 같은 파일명 정렬로 읽는다.
+        slide_ids = slide_ids_from_source(source)
+        if not slide_ids:
+            split_dir = chapters_dir / chapter
+            for split_path in sorted(split_dir.glob("*.ts")):
+                slide_ids.extend(
+                    slide_ids_from_source(split_path.read_text(encoding="utf-8"))
+                )
         if not slide_ids:
             raise ValueError(f"{path.name}에서 화면 ID를 찾지 못했습니다.")
         order.extend((chapter, slide_id) for slide_id in slide_ids)

@@ -1,4 +1,7 @@
-from local_tts_engine.export_udemy import timeline_from_course_manifest
+from local_tts_engine.export_udemy import (
+    invalidate_render_derivatives,
+    timeline_from_course_manifest,
+)
 
 
 def test_timeline_from_course_manifest_preserves_actual_timing() -> None:
@@ -53,3 +56,30 @@ def test_timeline_from_course_manifest_preserves_actual_timing() -> None:
     assert timeline["entries"][0]["speechStartMs"] == 960
     assert timeline["entries"][0]["alignment"]["words"][0]["text"] == "원문"
     assert timeline["totalMs"] == 5000
+
+
+def test_invalidate_render_derivatives_removes_only_generated_outputs(tmp_path) -> None:
+    output_dir = tmp_path / "pilot"
+    video_dir = output_dir / "video/raw"
+    video_dir.mkdir(parents=True)
+
+    generated = [
+        output_dir / "captions.json",
+        output_dir / "captions.srt",
+        output_dir / "captions.vtt",
+        output_dir / "pilot.mp4",
+        output_dir / "pilot-captioned.mp4",
+        output_dir / "pilot-captioned-30s.mp4",
+        video_dir / "capture.webm",
+    ]
+    for path in generated:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("stale", encoding="utf-8")
+
+    preserved = output_dir / "사용자 검수본.mp4"
+    preserved.write_text("keep", encoding="utf-8")
+
+    invalidate_render_derivatives(output_dir, "pilot")
+
+    assert not any(path.exists() for path in generated)
+    assert preserved.read_text(encoding="utf-8") == "keep"

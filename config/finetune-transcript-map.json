@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "scriptRepo": "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent",
+  "revision": "bd3a3ab",
+  "sources": {
+    "01-ch00": {
+      "chapter": "ch00",
+      "startSlide": "open-cover",
+      "endSlide": "open-say-2"
+    },
+    "02-promptify": {
+      "chapter": "ch01",
+      "startSlide": "frame-genai-cover",
+      "endSlide": "promptify-lanes-reach"
+    },
+    "03-llm-check": {
+      "chapter": "ch01",
+      "startSlide": "promptify-lanes-reach",
+      "endSlide": "llm-say-1"
+    },
+    "04-llm-split": {
+      "chapter": "ch01",
+      "startSlide": "llm-check",
+      "endSlide": "llm-case"
+    },
+    "05-genai-limit": {
+      "chapter": "ch01",
+      "startSlide": "llm-split",
+      "endSlide": "genai-limit-say-2"
+    }
+  }
+}
