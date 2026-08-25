@@ -164,6 +164,37 @@ def stable_digest(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def adapter_identity(adapter_path: Path | None, adapter_scale: float) -> dict[str, Any] | None:
+    """Return immutable adapter metadata for cache keys and manifests."""
+    if adapter_path is None:
+        return None
+    weights = adapter_path / "adapters.safetensors"
+    config = adapter_path / "adapter_config.json"
+    if not weights.is_file() or not config.is_file():
+        raise FileNotFoundError(f"LoRA 어댑터 파일이 없습니다: {adapter_path}")
+    if not 0 < adapter_scale <= 1:
+        raise ValueError("강의 제작용 adapter-scale은 0보다 크고 1 이하여야 합니다.")
+    value = {
+        "path": str(adapter_path.resolve()),
+        "weightsSha256": sha256_file(weights),
+        "configSha256": sha256_file(config),
+        "scale": adapter_scale,
+    }
+    return {**value, "identitySha256": stable_digest(value)}
+
+
+def apply_adapter_scale(model: Any, adapter_scale: float) -> int:
+    """Continuously scale every loaded LoRA module and return the module count."""
+    if not 0 < adapter_scale <= 1:
+        raise ValueError("LoRA 적용 강도는 0보다 크고 1 이하여야 합니다.")
+    scaled_modules = 0
+    for _, module in model.named_modules():
+        if all(hasattr(module, name) for name in ("lora_a", "lora_b", "scale")):
+            module.scale *= adapter_scale
+            scaled_modules += 1
+    return scaled_modules
+
+
 def strip_markdown(text: str) -> str:
     """마크다운 이미지 구문을 alt 텍스트로 치환하고 줄바꿈을 공백으로 평탄화한다.
 
@@ -320,12 +351,39 @@ def chapter_slide_order(deck_root: Path) -> list[tuple[str, str]]:
     return order
 
 
+def course_page_catalog(source_project: Path) -> list[dict[str, Any]]:
+    """Return the canonical 1-based page list with each page's step range."""
+    deck_root = source_project / "deck"
+    order = chapter_slide_order(deck_root)
+    script_cache: dict[str, dict[str, dict[int, str]]] = {}
+    pages: list[dict[str, Any]] = []
+    for page, (chapter, slide_id) in enumerate(order, start=1):
+        if chapter not in script_cache:
+            script_cache[chapter] = parse_script(deck_root / f"script/course/{chapter}.md")
+        steps = script_cache[chapter].get(slide_id)
+        if not steps:
+            raise ValueError(f"{chapter}/{slide_id}의 대본이 없습니다.")
+        ordered_steps = sorted(steps)
+        pages.append(
+            {
+                "page": page,
+                "chapter": chapter,
+                "slideId": slide_id,
+                "firstStep": ordered_steps[0],
+                "lastStep": ordered_steps[-1],
+                "stepCount": len(ordered_steps),
+            }
+        )
+    return pages
+
+
 # ─── CourseEntry 수집 ─────────────────────────────────────────────────────────
 
 def course_entries(
     source_project: Path,
     start_chapter: str,
     start_slide: str | None = None,
+    end_slide_number: int | None = None,
 ) -> list[CourseEntry]:
     """지정한 챕터·슬라이드부터 강의 끝까지의 CourseEntry 목록을 반환한다.
 
@@ -352,6 +410,9 @@ def course_entries(
     started = False
 
     for chapter, slide_id in order:
+        slide_number = global_numbers[(chapter, slide_id)]
+        if end_slide_number is not None and slide_number > end_slide_number:
+            break
         # 시작 지점에 도달할 때까지 건너뜀
         if not started:
             chapter_matches = chapter == start_chapter
@@ -371,7 +432,7 @@ def course_entries(
                 CourseEntry(
                     chapter=chapter,
                     slide_id=slide_id,
-                    slide_number=global_numbers[(chapter, slide_id)],
+                    slide_number=slide_number,
                     step=step,
                     source_text=source_text,
                     tts_text=apply_pronunciation(source_text, pronunciation),
@@ -381,6 +442,8 @@ def course_entries(
     if not started:
         marker = f"{start_chapter}/{start_slide or '<first>'}"
         raise ValueError(f"시작 화면 {marker}을 찾지 못했습니다.")
+    if not entries:
+        raise ValueError("선택한 페이지 범위에 대본이 없습니다.")
     return entries
 
 
@@ -700,6 +763,11 @@ def synthesize_excerpt(
     start_chapter: str,
     start_slide: str | None,
     seed: int,
+    adapter_path: Path | None = None,
+    adapter_scale: float = 1.0,
+    start_page: int | None = None,
+    end_page: int | None = None,
+    model_key: str = "qwen3-tts",
 ) -> None:
     """강의 대본 일부를 TTS로 합성하고 정렬된 manifest.json을 생성한다.
 
@@ -720,17 +788,43 @@ def synthesize_excerpt(
     from mlx_audio.tts.utils import load_model as load_tts_model
     from mlx_audio.utils import get_model_path
 
-    if target_seconds <= 0:
+    if end_page is None and target_seconds <= 0:
         raise ValueError("목표 길이는 0초보다 커야 합니다.")
 
-    spec = MODEL_SPECS["qwen3-tts"]
-    # A/B 파일럿보다 안정적인 파라미터로 오버라이드
-    settings = {**spec.settings, **COURSE_SETTING_OVERRIDES}
-    entries = course_entries(source_project, start_chapter, start_slide)
+    page_count: int | None = None
+    if start_page is not None:
+        order = chapter_slide_order(source_project / "deck")
+        page_count = len(order)
+        if start_page < 1 or start_page > page_count:
+            raise ValueError(f"시작 페이지는 1~{page_count} 사이여야 합니다.")
+        if end_page is not None and (end_page < start_page or end_page > page_count):
+            raise ValueError(f"끝 페이지는 {start_page}~{page_count} 사이여야 합니다.")
+        start_chapter, start_slide = order[start_page - 1]
+    elif end_page is not None:
+        raise ValueError("끝 페이지를 사용하려면 시작 페이지도 지정해야 합니다.")
+
+    if model_key not in MODEL_SPECS:
+        raise ValueError(f"지원하지 않는 TTS 모델입니다: {model_key}")
+    if adapter_path is not None and model_key != "qwen3-tts":
+        raise ValueError("현재 LoRA 음성 어댑터는 Qwen3-TTS에서만 사용할 수 있습니다.")
+    spec = MODEL_SPECS[model_key]
+    # Qwen 강의 생성은 A/B 파일럿보다 안정적인 파라미터로 오버라이드한다.
+    settings = (
+        {**spec.settings, **COURSE_SETTING_OVERRIDES}
+        if model_key == "qwen3-tts"
+        else dict(spec.settings)
+    )
+    entries = course_entries(
+        source_project,
+        start_chapter,
+        start_slide,
+        end_slide_number=end_page,
+    )
     chunks = group_course_entries(entries)
     reference_text = reference_text_path.read_text(encoding="utf-8").strip()
     reference_hash = sha256_file(reference_path)
     reference_text_hash = sha256_text(reference_text)
+    adapter = adapter_identity(adapter_path, adapter_scale)
 
     # 출력 디렉터리 구조 생성
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -742,7 +836,33 @@ def synthesize_excerpt(
     model_path = get_model_path(spec.repository)
     revision = snapshot_revision(model_path)
     load_started = time.perf_counter()
-    model = load_tts_model(model_path)
+    training_wrapper = None
+    if adapter_path is None:
+        model = load_tts_model(model_path)
+    else:
+        from mlx_tune import FastTTSModel
+
+        training_wrapper, _ = FastTTSModel.from_pretrained(
+            model_name=str(model_path),
+            max_seq_length=512,
+        )
+        training_wrapper = FastTTSModel.get_peft_model(
+            training_wrapper,
+            r=16,
+            lora_alpha=16,
+            lora_dropout=0.0,
+            target_modules=[
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj",
+            ],
+            random_state=seed,
+        )
+        training_wrapper.load_adapter(str(adapter_path))
+        scaled_modules = apply_adapter_scale(training_wrapper.model, adapter_scale)
+        if scaled_modules == 0:
+            raise RuntimeError("강도를 조절할 LoRA 모듈을 찾지 못했습니다.")
+        training_wrapper.model.eval()
+        model = training_wrapper.full_model
     load_ms = round((time.perf_counter() - load_started) * 1000)
 
     # 루프 전 초기화 (첫 번째 클립에서 샘플레이트가 결정된다)
@@ -759,7 +879,7 @@ def synthesize_excerpt(
         # schemaVersion을 올리면 기존 캐시가 자동으로 무효화된다.
         cache_hash = stable_digest(
             {
-                "schemaVersion": 4,
+                "schemaVersion": 5,
                 "model": spec.repository,
                 "modelRevision": revision,
                 "settings": {"language": spec.language, **settings},
@@ -768,6 +888,7 @@ def synthesize_excerpt(
                 "entryKeys": [entry.key for entry in chunk.entries],
                 "ttsText": chunk.tts_text,
                 "seed": seed,
+                "adapter": adapter,
                 "edgePadMs": EDGE_PAD_MS,
                 "edgeFadeMs": EDGE_FADE_MS,
                 "maxInternalSilenceMs": MAX_INTERNAL_SILENCE_MS,
@@ -799,16 +920,16 @@ def synthesize_excerpt(
             # ── 캐시 미스: TTS 생성 + trim/fade + WAV 저장 ──
             mx.random.seed(entry_seed)
             started = time.perf_counter()
-            results = list(
-                model.generate(
-                    text=chunk.tts_text,
-                    ref_audio=str(reference_path),
-                    ref_text=reference_text,
-                    lang_code=spec.language,
-                    verbose=False,
-                    **settings,
-                )
-            )
+            generation_args = {
+                "text": chunk.tts_text,
+                "ref_audio": str(reference_path),
+                "lang_code": spec.language,
+                "verbose": False,
+                **settings,
+            }
+            if model_key == "qwen3-tts":
+                generation_args["ref_text"] = reference_text
+            results = list(model.generate(**generation_args))
             generation_ms += round((time.perf_counter() - started) * 1000)
             if not results:
                 raise RuntimeError(f"{chunk.key}에서 오디오가 생성되지 않았습니다.")
@@ -855,7 +976,17 @@ def synthesize_excerpt(
             }
         )
 
-        # 목표 길이에 도달했는지 확인 (종료 패드 포함)
+        # 페이지 묶음 모드는 지정된 마지막 페이지의 마지막 스텝까지 전부 포함한다.
+        if end_page is not None:
+            if index + 1 == len(chunks):
+                break
+            following = chunks[index + 1]
+            cursor_samples = end_sample + milliseconds_to_samples(
+                chunk_gap_after(chunk, following), rate
+            )
+            continue
+
+        # 30초/시간 기반 모드는 목표 길이에 가장 가까운 청크에서 끝낸다.
         total_if_finished = end_sample + milliseconds_to_samples(END_PAD_MS, rate)
         if total_if_finished >= target_samples:
             # 현재 청크를 포함하는 것이 목표에 더 가까운지, 이전 청크까지가 더 가까운지 비교
@@ -878,6 +1009,8 @@ def synthesize_excerpt(
     # Keep TTS and forced alignment in separate Metal phases.
     # TTS 모델을 명시적으로 해제해 ForcedAligner 가 사용할 Metal 메모리를 확보한다.
     del model
+    if training_wrapper is not None:
+        del training_wrapper
     gc.collect()
     mx.clear_cache()
 
@@ -1026,10 +1159,15 @@ def synthesize_excerpt(
 
     metadata = {
         "schemaVersion": 4,
-        "title": f"강의 시작 {target_seconds / 60:g}분 Qwen3-TTS 파일럿",
+        "title": (
+            f"강의 {start_page}~{end_page}페이지 {model_key} 묶음"
+            if end_page is not None
+            else f"강의 시작 {target_seconds / 60:g}분 {model_key} 파일럿"
+        ),
         "model": spec.repository,
         "modelRevision": revision,
         "modelLicense": spec.license,
+        "adapter": adapter,
         "aligner": {
             "model": ALIGNER_REPOSITORY,
             "revision": aligner_revision,
@@ -1040,6 +1178,12 @@ def synthesize_excerpt(
         "sourceProject": str(source_project.resolve()),
         "start": {"chapter": start_chapter, "slide": start_slide},
         "targetSeconds": target_seconds,
+        "pageRange": {
+            "start": start_page,
+            "end": end_page,
+            "totalPages": page_count,
+            "mode": "bundle" if end_page is not None else "preview",
+        },
         "reference": {
             "path": str(reference_path.resolve()),
             "sha256": reference_hash,
@@ -1137,8 +1281,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="생성 시작 챕터 (예: ch00)")
     parser.add_argument("--start-slide",
                         help="생성 시작 슬라이드 ID (생략하면 챕터 첫 슬라이드)")
+    parser.add_argument("--start-page", type=int,
+                        help="전체 강의 기준 1-based 시작 페이지 (chapter/slide보다 우선)")
+    parser.add_argument("--end-page", type=int,
+                        help="묶음 제작의 1-based 끝 페이지 (해당 페이지 마지막 스텝 포함)")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
                         help=f"MLX 난수 시드 (기본값: {DEFAULT_SEED})")
+    parser.add_argument("--model", choices=sorted(MODEL_SPECS), default="qwen3-tts",
+                        help="로컬 TTS 모델 (기본값: qwen3-tts)")
+    parser.add_argument("--adapter", type=Path,
+                        help="MLX-Tune LoRA 어댑터 디렉터리")
+    parser.add_argument("--adapter-scale", type=float, default=1.0,
+                        help="LoRA 적용 강도 (0보다 크고 1 이하, 기본 1.0)")
     return parser
 
 
@@ -1153,6 +1307,11 @@ def main(argv: list[str] | None = None) -> int:
         start_chapter=args.start_chapter,
         start_slide=args.start_slide,
         seed=args.seed,
+        adapter_path=args.adapter,
+        adapter_scale=args.adapter_scale,
+        start_page=args.start_page,
+        end_page=args.end_page,
+        model_key=args.model,
     )
     return 0
 

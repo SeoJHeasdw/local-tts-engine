@@ -4,7 +4,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
+.venv-train/
 venv/
+node_modules/
 
 # Local configuration and secrets
 .env

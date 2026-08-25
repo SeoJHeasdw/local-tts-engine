@@ -5,7 +5,10 @@ from local_tts_engine.course_pilot import (
     CourseChunk,
     CourseEntry,
     apply_pronunciation,
+    apply_adapter_scale,
+    adapter_identity,
     course_entries,
+    course_page_catalog,
     gap_after,
     group_course_entries,
     parse_script,
@@ -131,6 +134,39 @@ def test_course_entries_uses_canonical_order_and_dictionary(tmp_path: Path) -> N
     assert entries[0].tts_text == "엠씨피 시작"
 
 
+def test_course_entries_page_range_includes_every_step_on_end_page(tmp_path: Path) -> None:
+    deck = tmp_path / "deck"
+    chapters = deck / "src/production/chapters"
+    scripts = deck / "script/course"
+    narration = deck / "narration"
+    chapters.mkdir(parents=True)
+    scripts.mkdir(parents=True)
+    narration.mkdir(parents=True)
+    (chapters / "ch00-test.ts").write_text(
+        '  id: "slide-a"\n  id: "slide-b"\n  id: "slide-c"\n', encoding="utf-8"
+    )
+    (scripts / "ch00.md").write_text(
+        "## slide-a\n### 0\nA\n"
+        "## slide-b\n### 0\nB0\n### 2\nB2\n"
+        "## slide-c\n### 0\nC\n",
+        encoding="utf-8",
+    )
+    (narration / "pronunciation.ko.json").write_text("[]", encoding="utf-8")
+
+    entries = course_entries(tmp_path, "ch00", "slide-b", end_slide_number=2)
+    catalog = course_page_catalog(tmp_path)
+
+    assert [entry.key for entry in entries] == ["ch00--slide-b--0", "ch00--slide-b--2"]
+    assert catalog[1] == {
+        "page": 2,
+        "chapter": "ch00",
+        "slideId": "slide-b",
+        "firstStep": 0,
+        "lastStep": 2,
+        "stepCount": 2,
+    }
+
+
 def test_slide_ids_from_source_uses_outermost_id_indent() -> None:
     source = '''
 const slides = [
@@ -177,3 +213,34 @@ def test_course_entries_reads_split_chapter_files(tmp_path: Path) -> None:
         "ch01--slide-a--0",
         "ch01--slide-b--0",
     ]
+
+
+def test_adapter_identity_changes_with_scale_and_rejects_missing_files(tmp_path: Path) -> None:
+    adapter = tmp_path / "adapter"
+    adapter.mkdir()
+    (adapter / "adapters.safetensors").write_bytes(b"weights")
+    (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+
+    low = adapter_identity(adapter, 0.6)
+    high = adapter_identity(adapter, 0.8)
+
+    assert low is not None and high is not None
+    assert low["scale"] == 0.6
+    assert low["identitySha256"] != high["identitySha256"]
+
+
+def test_adapter_scale_accepts_continuous_065_value() -> None:
+    class LoraModule:
+        lora_a = object()
+        lora_b = object()
+        scale = 1.0
+
+    class Model:
+        module = LoraModule()
+
+        def named_modules(self):
+            return [("voice", self.module)]
+
+    model = Model()
+    assert apply_adapter_scale(model, 0.65) == 1
+    assert model.module.scale == 0.65

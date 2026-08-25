@@ -102,3 +102,24 @@
   대표 10개를 사용자가 청취했다. 글자 단위 완전 일치와 사용자 확인을 통과한
   92개·12.252분만 1차 세트로 승인했고, 말실수 2개는 제외했다. 나머지 304개는
   필요할 때만 추가 검수하도록 보류했다.
+
+## 2026-08-25 — 첫 로컬 학습기는 MLX-Tune LoRA 파일럿
+
+- MLX-Tune 0.6.0은 Apache-2.0이며 Apple Silicon에서 Qwen3-TTS LoRA 학습을
+  지원한다. 기존 추론 환경과 분리된 `.venv-train`에서만 사용한다.
+  - https://github.com/ARahim3/mlx-tune
+  - https://github.com/ARahim3/mlx-tune/blob/main/examples/20_qwen3_tts_finetuning.py
+- 첫 실행은 기존 `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` 가중치를
+  재사용한다. rank 16, learning rate 2e-5, batch 1의 보수적 LoRA로 시작한다.
+- 공식 Qwen CUDA 전체 SFT와 동일한 경로가 아니므로 결과는 실험적이다.
+  스모크 학습과 사용자 청취 비교를 통과하기 전에는 제작 기본 모델로 바꾸지 않는다.
+- 실행 결과: 승인된 train 82개를 60 optimizer step(gradient accumulation 4)으로
+  학습했다. 평균 손실은 1.0072, 마지막 구간은 약 0.82, 학습 시간은 35.3초,
+  peak Metal 메모리는 7.235GB였다. rank 16 어댑터 크기는 67MB다.
+- 저장 어댑터를 새 프로세스에서 다시 불러와 같은 문장·참조·시드로 A/B 음성을
+  생성했다. 두 파일 모두 Qwen3-ASR 대조에서 목표 문장을 보존했다. 사용자 청취
+  전에는 기존 zero-shot 제작 경로를 유지한다.
+- 사용자 블라인드 A/B 결과 기존 zero-shot(A)이 LoRA 파인튜닝(B)보다 낫다고
+  판정했다. rank 16 LoRA v1은 제작에 채택하지 않고 실험 기록으로만 보존한다.
+  기존 Qwen3-TTS 1.7B Base BF16 + 짧은 참조 음성 경로를 계속 제작 기본값으로
+  사용한다. 추가 파인튜닝은 명확한 품질 가설이 생기기 전에는 반복하지 않는다.

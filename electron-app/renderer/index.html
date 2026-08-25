@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; media-src 'self' file:; connect-src 'none'">
+    <title>Local Voice Studio</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <div class="window-drag" aria-hidden="true"></div>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <strong>Voice Studio</strong>
+            <small>LOCAL PRODUCTION</small>
+          </div>
+        </div>
+
+        <nav aria-label="주 메뉴">
+          <button class="nav-item active" type="button" data-view="new"><span>◉</span> 새 영상</button>
+          <button class="nav-item" type="button" data-view="edit"><span>✂</span> 영상 편집</button>
+          <button class="nav-item" type="button" data-view="results"><span>▤</span> 최근 결과</button>
+        </nav>
+
+        <button class="local-card" id="open-model-settings" type="button">
+          <div class="local-row"><span class="status-dot" id="runtime-dot"></span><strong id="runtime-label">환경 확인 중</strong></div>
+          <p id="sidebar-model">Qwen3-TTS 1.7B</p>
+          <small id="sidebar-adapter">Jaeho LoRA · 0.60</small>
+        </button>
+      </aside>
+
+      <main>
+        <section class="page-view" id="view-new">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">LECTURE PIPELINE</p>
+            <h1>강의 영상 만들기</h1>
+            <p class="lede">한 번 누르면 음성, 자막, 촬영, 최종 검증까지 이어집니다.</p>
+          </div>
+          <div class="top-status"><span class="pulse"></span><span id="top-status-text">준비됨</span></div>
+        </header>
+
+        <section class="workspace">
+          <form class="card setup-card" id="job-form">
+            <div class="card-heading">
+              <div>
+                <span class="step-number">01</span>
+                <h2>제작 설정</h2>
+              </div>
+              <span class="save-note">자동 저장</span>
+            </div>
+
+            <label class="field full">
+              <span>결과 이름</span>
+              <input id="job-name" name="name" autocomplete="off" spellcheck="false" required>
+              <small>폴더와 영상 파일 이름으로 사용됩니다.</small>
+            </label>
+
+            <div class="field full scope-field">
+              <span>제작 범위</span>
+              <div class="segmented scope-tabs" id="mode-options">
+                <button type="button" data-mode="preview" class="selected">30초 미리보기</button>
+                <button type="button" data-mode="bundle">페이지 묶음</button>
+              </div>
+              <div class="scope-panel">
+                <div class="page-input-group">
+                  <label for="start-page">시작 페이지</label>
+                  <div class="page-input"><input id="start-page" type="number" min="1" value="1"><span id="start-page-total">/ 715</span></div>
+                  <small id="start-page-meta">페이지 정보를 불러오는 중입니다.</small>
+                </div>
+                <div class="range-arrow hidden" id="range-arrow">→</div>
+                <div class="page-input-group hidden" id="end-page-group">
+                  <label for="end-page">끝 페이지</label>
+                  <div class="page-input"><input id="end-page" type="number" min="1" value="1"><span id="end-page-total">/ 715</span></div>
+                  <small id="end-page-meta">마지막 스텝까지 포함</small>
+                </div>
+              </div>
+              <p class="scope-explanation" id="scope-explanation">선택한 페이지의 0스텝부터 약 30초 분량을 만듭니다.</p>
+            </div>
+
+            <label class="field full">
+              <span>최종 산출물</span>
+              <select id="deliverable">
+                <option value="video">완성 영상 · 음성 + 자막 + 촬영</option>
+                <option value="captions">음성 + 자막까지만</option>
+                <option value="audio">음성만</option>
+              </select>
+            </label>
+
+            <label class="check-row full">
+              <input id="burn-captions" type="checkbox" checked>
+              <span><strong>영상에 자막 입히기</strong><small>SRT/VTT 파일도 함께 보관됩니다.</small></span>
+            </label>
+
+            <button class="primary-button full" id="start-button" type="submit">
+              <span>제작 시작</span><span aria-hidden="true">→</span>
+            </button>
+            <p class="time-note full" id="time-note">30초 음성을 만든 뒤 실제 30초 촬영이 이어집니다.</p>
+          </form>
+
+          <section class="card progress-card" aria-live="polite">
+            <div class="card-heading">
+              <div>
+                <span class="step-number">02</span>
+                <h2>진행 상황</h2>
+              </div>
+              <span class="job-state idle" id="job-state">대기</span>
+            </div>
+
+            <div class="idle-hero" id="idle-hero">
+              <div class="sound-orbit"><i></i><i></i><i></i><i></i><i></i></div>
+              <h3>설정을 고르고 시작해 주세요</h3>
+              <p>나머지는 자동으로 확인합니다.</p>
+            </div>
+
+            <div class="active-progress hidden" id="active-progress">
+              <div class="now-making">
+                <span class="spinner"></span>
+                <div><small>현재 단계</small><strong id="current-stage">준비 중</strong></div>
+              </div>
+              <ol class="stage-list">
+                <li data-stage="voice"><span>1</span><div><strong>목소리 생성</strong><small>파인튜닝 음성과 타이밍</small></div><b></b></li>
+                <li data-stage="captions"><span>2</span><div><strong>자막 생성</strong><small>문장 분할과 화면 동기화</small></div><b></b></li>
+                <li data-stage="capture"><span>3</span><div><strong>화면 촬영</strong><small>1080p 영상과 음성 결합</small></div><b></b></li>
+                <li data-stage="verify"><span>4</span><div><strong>자동 검증</strong><small>길이·화면·음성·자막 검사</small></div><b></b></li>
+              </ol>
+              <button class="cancel-button" id="cancel-button" type="button">작업 중지</button>
+            </div>
+
+            <div class="complete-panel hidden" id="complete-panel">
+              <div class="complete-icon">✓</div>
+              <h3>제작과 검증이 끝났습니다</h3>
+              <p id="complete-summary"></p>
+              <div class="complete-actions">
+                <button type="button" class="primary-small" id="open-latest">영상 열기</button>
+                <button type="button" class="secondary-small" id="reveal-latest">Finder에서 보기</button>
+              </div>
+            </div>
+
+            <details class="log-panel">
+              <summary>상세 기록</summary>
+              <pre id="job-log"></pre>
+            </details>
+          </section>
+        </section>
+        </section>
+
+        <section class="page-view hidden" id="view-edit">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">SLIDE EDITOR</p>
+              <h1>영상 편집</h1>
+              <p class="lede">자르고, 목소리를 바꾸고, 원하는 순서로 다시 붙입니다.</p>
+            </div>
+            <div class="top-status" id="edit-top-status"><span class="pulse"></span><span>준비됨</span></div>
+          </header>
+
+          <section class="edit-workspace">
+            <form class="card edit-card" id="edit-form">
+              <div class="card-heading">
+                <div><span class="step-number">01</span><h2>편집 도구</h2></div>
+              </div>
+
+              <div class="segmented edit-tabs" id="edit-operation-tabs">
+                <button type="button" data-operation="merge" class="selected">영상 합치기</button>
+                <button type="button" data-operation="trim">영상 자르기</button>
+                <button type="button" data-operation="voice">목소리 교체</button>
+              </div>
+
+              <label class="field full">
+                <span>결과 이름</span>
+                <input id="edit-name" autocomplete="off" spellcheck="false" required>
+              </label>
+
+              <div class="edit-panel" id="edit-merge-panel">
+                <div class="drop-zone drop-target" id="merge-drop-zone">
+                  <div class="drop-icon">＋</div>
+                  <strong>합칠 영상을 선택하세요</strong>
+                  <p>선택한 뒤 아래 목록을 드래그해 순서를 바꿀 수 있습니다.</p>
+                  <button type="button" class="secondary-small" id="pick-merge-videos">영상 여러 개 선택</button>
+                </div>
+                <ol class="media-queue" id="merge-queue"></ol>
+              </div>
+
+              <div class="edit-panel hidden" id="edit-trim-panel">
+                <button type="button" class="file-picker drop-target" id="pick-trim-video"><span>▶</span><div><strong>자를 영상 선택</strong><small id="trim-video-name">클릭하거나 파일을 여기에 놓으세요.</small></div><b>선택</b></button>
+                <div class="segmented voice-source-tabs" id="trim-mode-tabs">
+                  <button type="button" data-trim-mode="time" class="selected">시간으로 자르기</button>
+                  <button type="button" data-trim-mode="pages">페이지로 자르기</button>
+                </div>
+                <div class="time-grid" id="trim-time-options">
+                  <label class="field"><span>시작 시간</span><input id="trim-start" value="00:00:00.000" autocomplete="off"></label>
+                  <label class="field"><span>끝 시간</span><input id="trim-end" value="00:00:30.000" autocomplete="off"></label>
+                </div>
+                <div class="time-grid hidden" id="trim-page-options">
+                  <label class="field"><span>시작 페이지</span><input id="trim-start-page" type="number" min="1" max="715" value="1"></label>
+                  <label class="field"><span>끝 페이지</span><input id="trim-end-page" type="number" min="1" max="715" value="1"></label>
+                </div>
+                <p class="tool-hint" id="trim-hint">초 단위 숫자나 시:분:초 형식을 사용할 수 있습니다.</p>
+              </div>
+
+              <div class="edit-panel hidden" id="edit-voice-panel">
+                <button type="button" class="file-picker drop-target" id="pick-voice-video"><span>▶</span><div><strong>목소리를 바꿀 영상</strong><small id="voice-video-name">클릭하거나 영상 하나를 여기에 놓으세요.</small></div><b>선택</b></button>
+
+                <div class="field">
+                  <span>새 목소리 가져오기</span>
+                  <div class="segmented voice-source-tabs" id="voice-source-tabs">
+                    <button type="button" data-source="file" class="selected">음성 파일 선택</button>
+                    <button type="button" data-source="generate">페이지에서 새로 생성</button>
+                  </div>
+                </div>
+
+                <button type="button" class="file-picker drop-target" id="pick-voice-audio"><span>♪</span><div><strong>교체할 음성 파일</strong><small id="voice-audio-name">클릭하거나 WAV, M4A, MP3를 놓으세요.</small></div><b>선택</b></button>
+
+                <div class="generated-voice hidden" id="generated-voice-options">
+                  <div class="time-grid">
+                    <label class="field"><span>시작 페이지</span><input id="voice-start-page" type="number" min="1" max="715" value="1"></label>
+                    <label class="field"><span>끝 페이지</span><input id="voice-end-page" type="number" min="1" max="715" value="1"></label>
+                  </div>
+                  <p class="tool-hint" id="voice-page-meta">1페이지의 첫 스텝부터 마지막 스텝까지 새로 생성합니다.</p>
+                  <label class="field"><span>비교할 목소리 후보 수</span><input id="voice-candidate-count" type="number" min="2" max="8" value="3"></label>
+                  <p class="global-voice-note">서로 다른 발화 후보를 최대 2개씩 병렬 생성한 뒤 팝업에서 모두 들어볼 수 있습니다.</p>
+                </div>
+
+                <label class="field">
+                  <span>길이가 달라질 때</span>
+                  <select id="voice-duration-policy">
+                    <option value="match-audio">새 음성 길이에 화면 맞춤 · 추천</option>
+                    <option value="keep-video">화면 길이 유지 · 짧으면 무음, 길면 끝부분 자름</option>
+                  </select>
+                </label>
+                <p class="tool-hint">페이지에서 생성할 때는 선택한 영상과 같은 페이지 범위를 입력해 주세요.</p>
+              </div>
+
+              <button class="primary-button full" id="start-edit-button" type="submit"><span id="start-edit-label">영상 합치기</span><span>→</span></button>
+            </form>
+
+          </section>
+        </section>
+
+        <section class="page-view hidden" id="view-results">
+          <header class="topbar results-topbar">
+            <div>
+              <p class="eyebrow">OUTPUTS</p>
+              <h1>최근 결과</h1>
+              <p class="lede">완성된 영상과 자동 검증 상태를 한곳에서 확인합니다.</p>
+            </div>
+            <button class="refresh-button" id="refresh-outputs" type="button">새로고침</button>
+          </header>
+          <div class="output-list" id="output-list">
+            <div class="empty-output">결과를 불러오는 중입니다.</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="modal" id="model-settings-dialog">
+      <div class="modal-head"><div><p class="eyebrow">LOCAL ENGINE</p><h2>모델과 목소리</h2></div><button type="button" class="icon-button" data-close-dialog="model-settings-dialog">×</button></div>
+      <div class="modal-body">
+        <label class="field"><span>기본 모델</span><select id="global-model"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 설치됨</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 설치됨</option></select></label>
+        <label class="field"><span>목소리 어댑터</span><select id="global-adapter"></select></label>
+        <div class="field" id="global-scale-field"><div class="field-line"><span>파인튜닝 적용 강도</span><output id="global-scale-output">0.60</output></div><input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6"><div class="range-labels"><span>0.10 · 기본 모델에 가깝게</span><span>1.00 · 학습값 그대로</span></div></div>
+        <p class="setting-explain">0.60, 0.65, 0.80은 별도 모델이 아니라 같은 어댑터의 학습 보정값을 연속적으로 적용하는 강도입니다.</p>
+        <label class="field"><span>목소리 후보 생성 병렬 작업</span><select id="global-parallelism"><option value="2">후보 2개씩 병렬 · M4 Max 36GB 권장</option><option value="1">후보 1개씩 순차 · 메모리 절약</option></select></label>
+        <div class="modal-actions"><button class="secondary-small" type="button" id="open-finetune-panel">새 파인튜닝</button><button class="primary-small" type="button" id="save-model-settings">설정 저장</button></div>
+      </div>
+      <div class="finetune-panel hidden" id="finetune-panel">
+        <div class="divider"></div><h3>새 파인튜닝 시작</h3><p>검수 완료된 공식 데이터 82개 학습 클립을 사용합니다.</p>
+        <div class="time-grid"><label class="field"><span>결과 이름</span><input id="finetune-name" autocomplete="off"></label><label class="field"><span>학습 스텝</span><input id="finetune-steps" type="number" min="10" max="500" value="60"></label></div>
+        <button class="primary-button" type="button" id="start-finetune"><span>파인튜닝 시작</span><span>→</span></button>
+      </div>
+    </dialog>
+
+    <dialog class="modal job-modal" id="edit-job-dialog">
+      <div class="modal-head"><div><p class="eyebrow">BACKGROUND JOB</p><h2 id="edit-dialog-title">영상 처리 중</h2></div><button type="button" class="icon-button hidden" id="close-edit-dialog">×</button></div>
+      <div class="job-modal-body">
+        <div class="job-spinner" id="edit-dialog-spinner"><span class="spinner"></span><p id="edit-running-label">원본은 그대로 두고 새 결과를 만들고 있습니다.</p></div>
+        <div class="job-success hidden" id="edit-dialog-success"><div class="complete-icon">✓</div><p id="edit-complete-summary"></p></div>
+        <div class="job-error hidden" id="edit-dialog-error"><strong>작업을 완료하지 못했습니다.</strong><p id="edit-error-message"></p></div>
+        <div class="candidate-gallery hidden" id="candidate-gallery"><p>각 후보를 재생해 보고 가장 마음에 드는 목소리를 고르세요.</p><div id="candidate-list"></div></div>
+        <div class="batch-progress hidden" id="batch-progress"><span id="batch-progress-text">0 / 0 완료</span><div><i id="batch-progress-bar"></i></div></div>
+        <details class="log-panel"><summary>상세 기록</summary><pre id="edit-log"></pre></details>
+      </div>
+      <div class="modal-actions"><button class="secondary-small" id="cancel-edit-button" type="button">작업 중지</button><button class="primary-small hidden" id="apply-voice-candidate" type="button">선택한 목소리로 교체</button><button class="primary-small hidden" id="open-edit-result" type="button">결과 열기</button><button class="secondary-small hidden" id="reveal-edit-result" type="button">Finder</button></div>
+    </dialog>
+  </body>
+</html>

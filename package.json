@@ -1,0 +1,15 @@
+{
+  "name": "local-tts-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Electron control panel for the Korean lecture TTS pipeline",
+  "main": "electron-app/main.mjs",
+  "scripts": {
+    "app": "electron electron-app/main.mjs",
+    "test:app": "node --test electron-app/*.test.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.0.0"
+  }
+}
