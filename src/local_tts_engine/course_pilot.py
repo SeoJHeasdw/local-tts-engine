@@ -44,6 +44,7 @@ from .pilot import (
     MODEL_SPECS,
     normalize_audio,
     probe_audio,
+    resolve_model_path,
     sha256_file,
     sha256_text,
     snapshot_revision,
@@ -701,6 +702,7 @@ def load_or_create_alignment(
     clip: dict[str, Any],
     aligner: Any,
     alignment_path: Path,
+    use_cache: bool = True,
 ) -> list[dict[str, Any]]:
     """정렬 캐시가 있으면 읽고, 없으면 ForcedAligner로 생성한 뒤 저장한다.
 
@@ -717,7 +719,7 @@ def load_or_create_alignment(
     Returns:
         단어별 {"text", "startMs", "endMs"} 딕셔너리 목록.
     """
-    if alignment_path.is_file():
+    if use_cache and alignment_path.is_file():
         return json.loads(alignment_path.read_text(encoding="utf-8"))["words"]
     if aligner is None:
         raise RuntimeError(f"{chunk.key} 정렬 캐시가 없지만 aligner가 로드되지 않았습니다.")
@@ -768,6 +770,7 @@ def synthesize_excerpt(
     start_page: int | None = None,
     end_page: int | None = None,
     model_key: str = "qwen3-tts",
+    use_cache: bool = True,
 ) -> None:
     """강의 대본 일부를 TTS로 합성하고 정렬된 manifest.json을 생성한다.
 
@@ -833,7 +836,7 @@ def synthesize_excerpt(
     clips_dir.mkdir(parents=True, exist_ok=True)
     alignments_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = get_model_path(spec.repository)
+    model_path = resolve_model_path(spec.repository, get_model_path)
     revision = snapshot_revision(model_path)
     load_started = time.perf_counter()
     training_wrapper = None
@@ -900,7 +903,7 @@ def synthesize_excerpt(
         # 청크별 시드: 전역 시드 XOR 캐시 해시 앞 4바이트
         entry_seed = seed ^ int(cache_hash[:8], 16)
 
-        if clip_path.is_file():
+        if use_cache and clip_path.is_file():
             # ── 캐시 히트: 오디오를 다시 생성하지 않고 파일 정보만 읽는다 ──
             info = sf.info(clip_path)
             rate = int(info.samplerate)
@@ -1019,7 +1022,7 @@ def synthesize_excerpt(
         alignments_dir / f"{item['key']}--{item['hash'][:12]}.json"
         for item in selected_chunks
     ]
-    missing_alignment = any(not path.is_file() for path in aligner_paths)
+    missing_alignment = not use_cache or any(not path.is_file() for path in aligner_paths)
     aligner = None
     aligner_revision = None
     alignment_load_ms = 0
@@ -1027,7 +1030,7 @@ def synthesize_excerpt(
     if missing_alignment:
         from mlx_audio.stt.utils import load_model as load_stt_model
 
-        aligner_path = get_model_path(ALIGNER_REPOSITORY)
+        aligner_path = resolve_model_path(ALIGNER_REPOSITORY, get_model_path)
         aligner_revision = snapshot_revision(aligner_path)
         started = time.perf_counter()
         aligner = load_stt_model(aligner_path)
@@ -1035,7 +1038,9 @@ def synthesize_excerpt(
 
     for item, alignment_path in zip(selected_chunks, aligner_paths):
         started = time.perf_counter()
-        item["words"] = load_or_create_alignment(item["chunk"], item, aligner, alignment_path)
+        item["words"] = load_or_create_alignment(
+            item["chunk"], item, aligner, alignment_path, use_cache=use_cache
+        )
         alignment_ms += round((time.perf_counter() - started) * 1000)
 
     if aligner is not None:
@@ -1044,7 +1049,7 @@ def synthesize_excerpt(
         mx.clear_cache()
     # aligner를 로드하지 않은 경우(전체 캐시 히트)에도 revision 을 기록하기 위해 캐시를 확인
     if aligner_revision is None:
-        cached_aligner = get_model_path(ALIGNER_REPOSITORY)
+        cached_aligner = resolve_model_path(ALIGNER_REPOSITORY, get_model_path)
         aligner_revision = snapshot_revision(cached_aligner)
 
     # ─── 최종 트랙 조립 ───────────────────────────────────────────────────────
@@ -1159,6 +1164,7 @@ def synthesize_excerpt(
 
     metadata = {
         "schemaVersion": 4,
+        "cachePolicy": "enabled" if use_cache else "disabled",
         "title": (
             f"강의 {start_page}~{end_page}페이지 {model_key} 묶음"
             if end_page is not None
@@ -1293,6 +1299,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="MLX-Tune LoRA 어댑터 디렉터리")
     parser.add_argument("--adapter-scale", type=float, default=1.0,
                         help="LoRA 적용 강도 (0보다 크고 1 이하, 기본 1.0)")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="기존 TTS 클립과 정렬 결과를 읽지 않고 모두 새로 생성")
     return parser
 
 
@@ -1312,6 +1320,7 @@ def main(argv: list[str] | None = None) -> int:
         start_page=args.start_page,
         end_page=args.end_page,
         model_key=args.model,
+        use_cache=not args.no_cache,
     )
     return 0
 

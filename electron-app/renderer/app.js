@@ -26,6 +26,7 @@ let voiceAudio = null;
 let appSettings = null;
 let voiceCandidates = [];
 let selectedCandidateToken = null;
+let candidatePurpose = "edit";
 
 function dateStamp(date = new Date()) {
   const two = (value) => String(value).padStart(2, "0");
@@ -40,10 +41,99 @@ function suggestedName() {
   return `studio-${dateStamp()}-${suffix}`;
 }
 
+function suggestedTextVoiceName() {
+  return `voice-${dateStamp()}`;
+}
+
 function pageMeta(pageNumber) {
   const page = catalogPages[Number(pageNumber) - 1];
   if (!page) return "페이지 범위를 확인해 주세요";
   return `${page.chapter.toUpperCase()} · ${page.slideId} · ${page.firstStep}~${page.lastStep}스텝`;
+}
+
+function fileName(value) {
+  return String(value || "").split("/").filter(Boolean).at(-1) || "경로 미설정";
+}
+
+function voiceProfileLabel() {
+  if (appSettings?.modelId === "chatterbox-v3") return "Chatterbox V3";
+  if (appSettings?.adapterId === "none") return "Qwen3 기본 복제";
+  const adapter = appSettings?.adapters?.find((item) => item.id === appSettings.adapterId);
+  return `${adapter?.label || "Jaeho LoRA"} · ${Number(appSettings?.adapterScale || 0.6).toFixed(2)}`;
+}
+
+function updateProductionBrief() {
+  const start = Math.max(1, Number($("#start-page")?.value || 1));
+  const end = Math.max(start, Number($("#end-page")?.value || start));
+  const deliverable = $("#deliverable")?.value || "video";
+  const labels = {
+    video: ["완성 영상", $("#burn-captions")?.checked ? "화면 자막 + SRT/VTT" : "무자막 영상 + SRT/VTT"],
+    captions: ["음성 + 자막", "SRT/VTT + 타임라인"],
+    audio: ["음성 파일", "48kHz mono WAV"],
+  };
+  const outputPathKey = deliverable === "video"
+    ? "videoOutputRoot"
+    : deliverable === "captions"
+      ? "captionOutputRoot"
+      : "ttsOutputRoot";
+  $("#brief-scope").textContent = productionMode === "bundle"
+    ? `페이지 묶음 · ${start}–${end}`
+    : `30초 미리보기 · ${start}페이지`;
+  $("#brief-page").textContent = productionMode === "bundle"
+    ? `${pageMeta(start)} → ${pageMeta(end)}`
+    : pageMeta(start);
+  $("#brief-voice").textContent = voiceProfileLabel();
+  $("#brief-output").textContent = labels[deliverable][0];
+  $("#brief-caption").textContent = labels[deliverable][1];
+  $("#brief-destination").textContent = appSettings?.paths?.[outputPathKey] || "설정에서 경로를 불러오는 중입니다.";
+}
+
+function textBreathLines(value) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function updateVoiceDesign() {
+  const text = $("#text-voice-input")?.value || "";
+  const lines = textBreathLines(text);
+  const candidateCount = Math.min(8, Math.max(2, Number($("#text-voice-count")?.value || 3)));
+  const parallelism = Math.min(candidateCount, Number(appSettings?.voiceParallelism || 2));
+  const foreignTerms = [...new Set(text.match(/[A-Za-z][A-Za-z0-9.-]*/g) || [])];
+  $("#voice-metric-chars").textContent = new Intl.NumberFormat("ko-KR").format(text.trim().length);
+  $("#voice-metric-breaths").textContent = String(lines.length);
+  $("#voice-metric-candidates").textContent = String(candidateCount);
+  $("#voice-design-profile").textContent = voiceProfileLabel();
+  $("#voice-generation-plan").textContent = `후보 ${candidateCount}개 · ${parallelism}개씩 병렬`;
+  $("#voice-foreign-terms").textContent = foreignTerms.length
+    ? `${foreignTerms.slice(0, 3).join(", ")}${foreignTerms.length > 3 ? ` 외 ${foreignTerms.length - 3}개` : ""}`
+    : "감지되지 않음";
+
+  const list = $("#voice-breath-list");
+  if (!lines.length) {
+    list.innerHTML = '<li class="empty-breath">텍스트를 입력하면 발화 구조가 여기에 나타납니다.</li>';
+    $("#voice-design-advice").textContent = "문장마다 줄을 나누면 의도한 쉼과 리듬을 더 안정적으로 전달할 수 있습니다.";
+    return;
+  }
+  const visibleLines = lines.slice(0, 6);
+  list.replaceChildren(...visibleLines.map((line) => {
+    const item = document.createElement("li");
+    item.textContent = line;
+    return item;
+  }));
+  if (lines.length > visibleLines.length) {
+    const more = document.createElement("li");
+    more.textContent = `나머지 ${lines.length - visibleLines.length}개 호흡 단위`;
+    more.className = "breath-more";
+    list.append(more);
+  }
+  $("#voice-design-advice").textContent = lines.length === 1 && text.length > 45
+    ? "문장이 깁니다. 의도한 쉼표나 문장 경계에서 줄을 나누면 후보 간 편차를 줄일 수 있습니다."
+    : foreignTerms.length
+      ? "영문 용어가 감지됐습니다. 생성 후 발음을 확인하고 필요하면 발음 사전에 등록하세요."
+      : `${lines.length}개 줄바꿈 호흡을 유지해 후보를 생성합니다.`;
 }
 
 function updatePageScope() {
@@ -58,6 +148,7 @@ function updatePageScope() {
     ? "30초 음성을 만든 뒤 실제 30초 촬영이 이어집니다."
     : "선택한 범위를 전부 생성한 뒤 실제 재생 길이만큼 촬영합니다.";
   $("#job-name").value = suggestedName();
+  updateProductionBrief();
 }
 
 function setProductionMode(mode) {
@@ -81,6 +172,7 @@ function showJobView(view) {
   $("#idle-hero").classList.toggle("hidden", view !== "idle");
   $("#active-progress").classList.toggle("hidden", view !== "active");
   $("#complete-panel").classList.toggle("hidden", view !== "complete");
+  $("#job-panel-title").textContent = { idle: "제작 브리프", active: "제작 진행", complete: "검수 완료" }[view] || "제작 브리프";
 }
 
 function setBusy(busy) {
@@ -327,6 +419,7 @@ function handleEditEvent(event) {
     $("#batch-progress-text").textContent = `${event.completed} / ${event.total} 완료 · ${event.name}`;
     $("#batch-progress-bar").style.width = `${event.completed / event.total * 100}%`;
   } else if (event.type === "voice-candidates-ready") {
+    candidatePurpose = "edit";
     setEditBusy(false);
     renderVoiceCandidates(event.candidates);
     $("#edit-dialog-title").textContent = "목소리 후보 비교";
@@ -335,6 +428,7 @@ function handleEditEvent(event) {
     $("#candidate-gallery").classList.remove("hidden");
     $("#cancel-edit-button").classList.add("hidden");
     $("#apply-voice-candidate").classList.remove("hidden");
+    $("#apply-voice-candidate").textContent = "선택한 목소리로 교체";
     $("#close-edit-dialog").classList.remove("hidden");
   } else if (event.type === "cancelling") {
     $("#edit-running-label").textContent = "안전하게 중지 중";
@@ -357,6 +451,58 @@ function handleEditEvent(event) {
     $("#open-edit-result").classList.remove("hidden");
     $("#reveal-edit-result").classList.remove("hidden");
     $("#close-edit-dialog").classList.remove("hidden");
+    loadOutputs();
+  }
+}
+
+function handleTextVoiceEvent(event) {
+  if (event.type === "text-voice-started") {
+    candidatePurpose = "text";
+    openJobDialog("텍스트 목소리 후보 생성 중");
+    $("#voice-top-status").classList.add("running");
+    $("#voice-top-status span:last-child").textContent = "생성 중";
+    $("#start-text-voices").disabled = true;
+  } else if (event.type === "stage") {
+    $("#edit-running-label").textContent = "서로 다른 발화 후보를 만들고 있습니다.";
+  } else if (event.type === "log") {
+    appendEditLog(event.text);
+  } else if (event.type === "voice-item-complete") {
+    $("#batch-progress").classList.remove("hidden");
+    $("#batch-progress-text").textContent = `${event.completed} / ${event.total} 완료 · ${event.name}`;
+    $("#batch-progress-bar").style.width = `${event.completed / event.total * 100}%`;
+  } else if (event.type === "text-voices-ready") {
+    candidatePurpose = "text";
+    renderVoiceCandidates(event.candidates);
+    $("#voice-top-status").classList.remove("running");
+    $("#voice-top-status span:last-child").textContent = "비교 중";
+    $("#start-text-voices").disabled = false;
+    $("#edit-dialog-title").textContent = "목소리 후보 비교";
+    $("#edit-dialog-spinner").classList.add("hidden");
+    $("#batch-progress").classList.add("hidden");
+    $("#candidate-gallery").classList.remove("hidden");
+    $("#cancel-edit-button").classList.add("hidden");
+    $("#apply-voice-candidate").textContent = "이 목소리 선택";
+    $("#apply-voice-candidate").classList.remove("hidden");
+    $("#close-edit-dialog").classList.remove("hidden");
+  } else if (event.type === "text-voice-failed") {
+    $("#voice-top-status").classList.remove("running");
+    $("#voice-top-status span:last-child").textContent = "확인 필요";
+    $("#start-text-voices").disabled = false;
+    $("#edit-dialog-spinner").classList.add("hidden");
+    $("#edit-dialog-error").classList.remove("hidden");
+    $("#edit-error-message").textContent = event.message;
+    $("#cancel-edit-button").classList.add("hidden");
+    $("#close-edit-dialog").classList.remove("hidden");
+  } else if (event.type === "text-voice-selected") {
+    latestEditTarget = event.report.target;
+    $("#voice-top-status span:last-child").textContent = "선택 완료";
+    $("#candidate-gallery").classList.add("hidden");
+    $("#edit-dialog-success").classList.remove("hidden");
+    $("#edit-complete-summary").textContent = `${formatDuration(event.report.durationMs)} · 선택한 WAV를 별도로 보관했습니다.`;
+    $("#apply-voice-candidate").classList.add("hidden");
+    $("#open-edit-result").classList.remove("hidden");
+    $("#reveal-edit-result").classList.remove("hidden");
+    $("#text-voice-name").value = suggestedTextVoiceName();
     loadOutputs();
   }
 }
@@ -408,7 +554,13 @@ function renderSettings(settings) {
   $("#sidebar-adapter").textContent = selected
     ? `${selected.label} · ${Number(settings.adapterScale).toFixed(2)}`
     : "기본 복제 · 어댑터 없음";
+  for (const [key, value] of Object.entries(settings.paths || {})) {
+    const input = $(`#path-${key}`);
+    if (input) input.value = value;
+  }
   updateVoicePageMeta();
+  updateProductionBrief();
+  updateVoiceDesign();
 }
 
 async function openModelSettings() {
@@ -441,6 +593,10 @@ function handleTrainingEvent(event) {
 }
 
 function handleJobEvent(event) {
+  if (event.jobKind === "text-voice") {
+    handleTextVoiceEvent(event);
+    return;
+  }
   if (event.jobKind === "edit") {
     handleEditEvent(event);
     return;
@@ -479,6 +635,7 @@ function handleJobEvent(event) {
     $("#complete-summary").textContent = `${formatDuration(report.durationMs)} · ${report.summary.passed}개 항목 모두 통과`;
     loadOutputs();
     $("#job-name").value = suggestedName();
+    updateProductionBrief();
   }
 }
 
@@ -489,6 +646,7 @@ async function initialize() {
     return;
   }
   $("#job-name").value = suggestedName();
+  $("#text-voice-name").value = suggestedTextVoiceName();
   api.onJobEvent(handleJobEvent);
   const [status, settings] = await Promise.all([api.getStatus(), api.getSettings()]);
   renderSettings(settings);
@@ -504,6 +662,8 @@ async function initialize() {
   $("#end-page-total").textContent = `/ ${totalPages}`;
   updatePageScope();
   updateVoicePageMeta();
+  updateProductionBrief();
+  updateVoiceDesign();
   const ready = Object.values(status.runtime).every(Boolean);
   $("#runtime-dot").classList.toggle("ready", ready);
   $("#runtime-label").textContent = ready ? "로컬 환경 준비됨" : "필요 파일 확인 필요";
@@ -513,6 +673,10 @@ async function initialize() {
       setEditBusy(true);
     } else if (status.activeJob.kind === "training") {
       openJobDialog("파인튜닝 학습 중");
+    } else if (status.activeJob.kind === "text-voice") {
+      candidatePurpose = "text";
+      openJobDialog("텍스트 목소리 후보 생성 중");
+      $("#start-text-voices").disabled = true;
     } else {
       showJobView("active");
       setBusy(true);
@@ -522,9 +686,9 @@ async function initialize() {
   }
   await loadOutputs();
   const initialView = new URLSearchParams(window.location.search).get("view");
-  if (["edit", "results"].includes(initialView)) {
+  if (["voice", "edit", "results"].includes(initialView)) {
     $(`[data-view='${initialView}']`).click();
-  } else if (initialView === "voice") {
+  } else if (initialView === "replace-voice") {
     $("[data-view='edit']").click();
     $("[data-operation='voice']").click();
     $("[data-source='generate']").click();
@@ -544,7 +708,9 @@ $("#start-page").addEventListener("input", () => {
 $("#end-page").addEventListener("input", updatePageScope);
 $("#deliverable").addEventListener("change", (event) => {
   $("#burn-captions").disabled = event.target.value !== "video";
+  updateProductionBrief();
 });
+$("#burn-captions").addEventListener("change", updateProductionBrief);
 $("#job-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -554,6 +720,30 @@ $("#job-form").addEventListener("submit", async (event) => {
     setTimeout(() => $("#job-form").classList.remove("shake"), 600);
     appendLog(`[오류] ${error.message}\n`);
     setJobState("확인 필요", "failed");
+  }
+});
+$("#text-voice-input").addEventListener("input", (event) => {
+  $("#text-voice-length").textContent = new Intl.NumberFormat("ko-KR").format(event.target.value.length);
+  updateVoiceDesign();
+});
+$("#text-voice-count").addEventListener("input", updateVoiceDesign);
+$("#text-voice-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api.startTextVoices({
+      name: $("#text-voice-name").value.trim(),
+      text: $("#text-voice-input").value,
+      candidateCount: Number($("#text-voice-count").value),
+    });
+  } catch (error) {
+    $("#text-voice-form").classList.add("shake");
+    setTimeout(() => $("#text-voice-form").classList.remove("shake"), 600);
+    openJobDialog("입력 확인 필요");
+    $("#edit-dialog-spinner").classList.add("hidden");
+    $("#edit-dialog-error").classList.remove("hidden");
+    $("#edit-error-message").textContent = error.message;
+    $("#cancel-edit-button").classList.add("hidden");
+    $("#close-edit-dialog").classList.remove("hidden");
   }
 });
 $("#cancel-button").addEventListener("click", () => api.cancel());
@@ -616,8 +806,13 @@ $("#cancel-edit-button").addEventListener("click", () => api.cancel());
 $("#open-edit-result").addEventListener("click", () => latestEditTarget && api.open(latestEditTarget));
 $("#reveal-edit-result").addEventListener("click", () => latestEditTarget && api.reveal(latestEditTarget));
 $("#apply-voice-candidate").addEventListener("click", async () => {
-  if (!selectedCandidateToken || !voiceVideo) return;
+  if (!selectedCandidateToken) return;
   try {
+    if (candidatePurpose === "text") {
+      await api.selectTextVoice(selectedCandidateToken);
+      return;
+    }
+    if (!voiceVideo) return;
     await api.startEdit({
       operation: "voice",
       name: $("#edit-name").value.trim(),
@@ -651,10 +846,17 @@ $("#save-model-settings").addEventListener("click", async () => {
     adapterId: $("#global-adapter").value,
     adapterScale: Number($("#global-scale").value),
     voiceParallelism: Number($("#global-parallelism").value),
+    paths: Object.fromEntries(
+      $$("[id^='path-']").map((input) => [input.id.slice("path-".length), input.value]),
+    ),
   });
   renderSettings(settings);
   $("#model-settings-dialog").close();
 });
+$$('[data-pick-path]').forEach((button) => button.addEventListener("click", async () => {
+  const value = await api.pickLocation(button.dataset.pickPath);
+  if (value) $(`#path-${button.dataset.pickPath}`).value = value;
+}));
 $("#open-finetune-panel").addEventListener("click", () => $("#finetune-panel").classList.toggle("hidden"));
 $("#start-finetune").addEventListener("click", async () => {
   const name = $("#finetune-name").value.trim();
@@ -710,6 +912,7 @@ $$('[data-view]').forEach((button) => button.addEventListener("click", async () 
   const view = button.dataset.view;
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item === button));
   $("#view-new").classList.toggle("hidden", view !== "new");
+  $("#view-voice").classList.toggle("hidden", view !== "voice");
   $("#view-edit").classList.toggle("hidden", view !== "edit");
   $("#view-results").classList.toggle("hidden", view !== "results");
   if (view === "results") await loadOutputs();

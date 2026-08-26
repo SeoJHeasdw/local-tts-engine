@@ -10,6 +10,7 @@ import {
   mapWithConcurrency,
   normalizeEditName,
   normalizeOptions,
+  normalizeVoiceText,
   parseTimecode,
   presetFromManifest,
   providerForOptions,
@@ -20,27 +21,51 @@ import {
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(APP_DIR);
 const RENDERER_DIR = path.join(APP_DIR, "renderer");
-const DECK_ROOT = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck";
-const PILOT_ROOT = path.join(ROOT, "artifacts/course-pilots");
-const RENDER_ROOT = path.join(DECK_ROOT, "render/narration");
 const EDIT_ROOT = path.join(ROOT, "artifacts/video-edits");
 const APP_SETTINGS_PATH = path.join(ROOT, "artifacts/app-settings.json");
 const FINETUNE_RUN_ROOT = path.join(ROOT, "artifacts/finetune-runs");
 const FINETUNE_TRAIN_JSONL = path.join(ROOT, "artifacts/finetune-datasets/jaeho-ko-v1/official/train.jsonl");
-const REFERENCE = path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.wav");
-const REFERENCE_TEXT = path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.txt");
 const ADAPTER = path.join(ROOT, "artifacts/finetune-runs/2026-08-25/jaeho-ko-r16-v1/adapters");
 const TRAIN_PYTHON = path.join(ROOT, ".venv-train/bin/python");
 const BASE_PYTHON = path.join(ROOT, ".venv/bin/python");
-const CONFIG_PATH = path.join(DECK_ROOT, "narration.config.json");
 const NODE = "/opt/homebrew/bin/node";
 const FFPROBE = "/opt/homebrew/bin/ffprobe";
 const FFMPEG = "/opt/homebrew/bin/ffmpeg";
+const DEFAULT_STUDIO_PATHS = Object.freeze({
+  sourceProjectRoot: "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent",
+  voiceLibraryRoot: path.join(ROOT, "data/private/voice"),
+  ttsOutputRoot: path.join(ROOT, "artifacts/course-pilots"),
+  voiceOutputRoot: path.join(ROOT, "artifacts/voice-candidates"),
+  captionOutputRoot: path.join(ROOT, "artifacts/production/captions"),
+  videoOutputRoot: path.join(ROOT, "artifacts/production/videos"),
+  referenceAudioPath: path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.wav"),
+  referenceTextPath: path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.txt"),
+});
 
 let mainWindow = null;
 let activeJob = null;
 let catalogCache = null;
+let catalogCacheRoot = null;
 const selectedFiles = new Map();
+
+function normalizeStudioPaths(raw = {}) {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_STUDIO_PATHS).map(([key, fallback]) => {
+      const value = String(raw?.[key] || fallback).trim();
+      return [key, path.resolve(value || fallback)];
+    }),
+  );
+}
+
+function runtimePaths(raw = {}) {
+  const studio = normalizeStudioPaths(raw);
+  const deckRoot = path.join(studio.sourceProjectRoot, "deck");
+  return {
+    ...studio,
+    deckRoot,
+    configPath: path.join(deckRoot, "narration.config.json"),
+  };
+}
 
 async function discoverAdapters() {
   const adapters = [];
@@ -75,6 +100,7 @@ async function readAppSettings() {
     adapterId: modelId === "qwen3-tts" && stored.adapterId !== "none" ? selected?.id || "none" : "none",
     adapterScale: Math.min(1, Math.max(0.1, Number(stored.adapterScale ?? 0.6))),
     voiceParallelism: Math.min(2, Math.max(1, Math.round(Number(stored.voiceParallelism ?? 2)))),
+    paths: normalizeStudioPaths(stored.paths),
     adapters,
   };
 }
@@ -90,9 +116,24 @@ async function saveAppSettings(raw = {}) {
     adapterId: modelId === "qwen3-tts" ? adapterId : "none",
     adapterScale: Math.min(1, Math.max(0.1, Number(raw.adapterScale ?? current.adapterScale))),
     voiceParallelism: Math.min(2, Math.max(1, Math.round(Number(raw.voiceParallelism ?? current.voiceParallelism)))),
+    paths: normalizeStudioPaths(raw.paths || current.paths),
   };
+  for (const key of ["voiceLibraryRoot", "ttsOutputRoot", "voiceOutputRoot", "captionOutputRoot", "videoOutputRoot"]) {
+    await fs.mkdir(settings.paths[key], { recursive: true });
+  }
+  const studio = runtimePaths(settings.paths);
+  for (const [label, requiredPath] of Object.entries({
+    "강의 설정": studio.configPath,
+    "강의 대본": path.join(studio.deckRoot, "script/course"),
+    "참조 음성": studio.referenceAudioPath,
+    "참조 전사문": studio.referenceTextPath,
+  })) {
+    if (!(await safeStat(requiredPath))) throw new Error(`${label} 경로를 찾지 못했습니다: ${requiredPath}`);
+  }
   await fs.mkdir(path.dirname(APP_SETTINGS_PATH), { recursive: true });
   await fs.writeFile(APP_SETTINGS_PATH, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+  catalogCache = null;
+  catalogCacheRoot = null;
   return { ...settings, adapters: current.adapters };
 }
 
@@ -109,6 +150,7 @@ function applyVoiceSettings(options, settings) {
     adapterPath: adapter?.path || null,
     adapterScale: settings.adapterScale,
     voiceParallelism: settings.voiceParallelism,
+    paths: settings.paths,
   };
 }
 
@@ -150,8 +192,16 @@ function jobSnapshot() {
   };
 }
 
-async function assertRuntime(options) {
-  const required = [TRAIN_PYTHON, BASE_PYTHON, NODE, FFPROBE, REFERENCE, REFERENCE_TEXT, CONFIG_PATH];
+async function assertRuntime(options, studio = runtimePaths(options.paths)) {
+  const required = [
+    TRAIN_PYTHON,
+    BASE_PYTHON,
+    NODE,
+    FFPROBE,
+    studio.referenceAudioPath,
+    studio.referenceTextPath,
+    studio.configPath,
+  ];
   if (options.voiceMode === "finetuned") {
     const adapterPath = options.adapterPath || ADAPTER;
     required.push(path.join(adapterPath, "adapters.safetensors"), path.join(adapterPath, "adapter_config.json"));
@@ -235,18 +285,19 @@ function runUtility(executable, args, { cwd = ROOT } = {}) {
   });
 }
 
-async function loadCatalog() {
-  if (catalogCache) return catalogCache;
+async function loadCatalog(studio) {
+  if (catalogCache && catalogCacheRoot === studio.sourceProjectRoot) return catalogCache;
   const raw = await runUtility(BASE_PYTHON, [
     "-m", "local_tts_engine.course_catalog",
-    "--source-project", path.dirname(DECK_ROOT),
+    "--source-project", studio.sourceProjectRoot,
   ]);
   catalogCache = JSON.parse(raw);
+  catalogCacheRoot = studio.sourceProjectRoot;
   return catalogCache;
 }
 
-async function writeDeckContract(manifest, options, providerName) {
-  const raw = await fs.readFile(CONFIG_PATH, "utf8");
+async function writeDeckContract(manifest, options, providerName, studio) {
+  const raw = await fs.readFile(studio.configPath, "utf8");
   const config = JSON.parse(raw);
   const provider = providerForOptions(options, {
     repository: manifest.model,
@@ -257,26 +308,29 @@ async function writeDeckContract(manifest, options, providerName) {
   const previous = {
     preset: Object.hasOwn(config.presets, options.name) ? config.presets[options.name] : null,
     provider: Object.hasOwn(config.providers, providerName) ? config.providers[providerName] : null,
+    outputRoot: config.outputRoot,
   };
   config.presets[options.name] = presetFromManifest(manifest, options);
   config.providers[providerName] = provider;
+  config.outputRoot = path.relative(studio.deckRoot, studio.captionOutputRoot) || ".";
 
-  const temporary = `${CONFIG_PATH}.studio-${process.pid}.tmp`;
+  const temporary = `${studio.configPath}.studio-${process.pid}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  await fs.rename(temporary, CONFIG_PATH);
+  await fs.rename(temporary, studio.configPath);
   emit({ type: "log", stream: "stdout", text: "영상 범위를 실제 음성 길이에 맞췄습니다.\n" });
   return previous;
 }
 
-async function restoreDeckContract(options, providerName, previous) {
-  const config = JSON.parse(await fs.readFile(CONFIG_PATH, "utf8"));
+async function restoreDeckContract(options, providerName, previous, studio) {
+  const config = JSON.parse(await fs.readFile(studio.configPath, "utf8"));
   if (previous.preset === null) delete config.presets[options.name];
   else config.presets[options.name] = previous.preset;
   if (previous.provider === null) delete config.providers[providerName];
   else config.providers[providerName] = previous.provider;
-  const temporary = `${CONFIG_PATH}.studio-${process.pid}.tmp`;
+  config.outputRoot = previous.outputRoot;
+  const temporary = `${studio.configPath}.studio-${process.pid}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  await fs.rename(temporary, CONFIG_PATH);
+  await fs.rename(temporary, studio.configPath);
 }
 
 async function ffprobe(file) {
@@ -297,7 +351,23 @@ async function findVideo(renderDir, name) {
   return mp4 ? path.join(renderDir, mp4) : null;
 }
 
-async function validateResult({ sourceDir, renderDir, options }) {
+async function publishVideo(source, studio, name) {
+  const outputDir = path.join(studio.videoOutputRoot, name);
+  await fs.mkdir(outputDir, { recursive: true });
+  const target = path.join(outputDir, path.basename(source));
+  if (path.resolve(source) === path.resolve(target)) return target;
+  await fs.rm(target, { force: true });
+  try {
+    await fs.rename(source, target);
+  } catch (error) {
+    if (error?.code !== "EXDEV") throw error;
+    await fs.copyFile(source, target);
+    await fs.unlink(source);
+  }
+  return target;
+}
+
+async function validateResult({ sourceDir, renderDir, options, studio }) {
   const manifest = JSON.parse(await fs.readFile(path.join(sourceDir, "manifest.json"), "utf8"));
   const audioProbe = await ffprobe(manifest.audioPath);
   const audioDurationMs = Math.round(Number(audioProbe.format?.duration || 0) * 1000);
@@ -333,6 +403,9 @@ async function validateResult({ sourceDir, renderDir, options }) {
   }
 
   const summary = summarizeChecks(checks);
+  if (summary.ok && videoPath) {
+    videoPath = await publishVideo(videoPath, studio, options.name);
+  }
   const report = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -356,17 +429,20 @@ async function validateResult({ sourceDir, renderDir, options }) {
 
 async function runPipeline(options) {
   const job = activeJob;
-  const sourceDir = path.join(PILOT_ROOT, dateFolder(), options.name);
-  const renderDir = path.join(RENDER_ROOT, options.name);
+  const studio = runtimePaths(options.paths);
+  const sourceDir = path.join(studio.ttsOutputRoot, dateFolder(), options.name);
+  const renderDir = path.join(studio.captionOutputRoot, options.name);
   const providerName = `${options.name}-provider`;
   const ttsArgs = [
     "-m", "local_tts_engine.course_pilot",
-    "--reference", REFERENCE,
-    "--reference-text", REFERENCE_TEXT,
+    "--source-project", studio.sourceProjectRoot,
+    "--reference", studio.referenceAudioPath,
+    "--reference-text", studio.referenceTextPath,
     "--output-dir", sourceDir,
     "--target-seconds", String(options.targetSeconds),
     "--start-page", String(options.startPage),
     "--model", options.modelId || "qwen3-tts",
+    "--no-cache",
   ];
   if (options.mode === "bundle") ttsArgs.push("--end-page", String(options.endPage));
   if (options.voiceMode === "finetuned") {
@@ -379,11 +455,11 @@ async function runPipeline(options) {
   let previousContract = null;
   try {
     if (options.deliverable !== "audio") {
-      previousContract = await writeDeckContract(manifest, options, providerName);
+      previousContract = await writeDeckContract(manifest, options, providerName, studio);
       await runProcess("export", BASE_PYTHON, [
         "-m", "local_tts_engine.export_udemy",
         "--source-dir", sourceDir,
-        "--deck-root", DECK_ROOT,
+        "--deck-root", studio.deckRoot,
         "--preset", options.name,
         "--provider", providerName,
       ]);
@@ -391,7 +467,7 @@ async function runPipeline(options) {
         "tools/narration.mjs", "captions",
         "--preset", options.name,
         "--provider", providerName,
-      ], { cwd: DECK_ROOT });
+      ], { cwd: studio.deckRoot });
     }
 
     if (options.deliverable === "video") {
@@ -399,15 +475,16 @@ async function runPipeline(options) {
         "tools/narration.mjs", "capture",
         "--preset", options.name,
         "--provider", providerName,
+        "--no-cache",
       ];
       if (options.burnCaptions) captureArgs.push("--burn-captions");
-      await runProcess("capture", NODE, captureArgs, { cwd: DECK_ROOT });
+      await runProcess("capture", NODE, captureArgs, { cwd: studio.deckRoot });
     }
   } finally {
-    if (previousContract) await restoreDeckContract(options, providerName, previousContract);
+    if (previousContract) await restoreDeckContract(options, providerName, previousContract, studio);
   }
 
-  const report = await validateResult({ sourceDir, renderDir, options });
+  const report = await validateResult({ sourceDir, renderDir, options, studio });
   if (activeJob !== job) return;
   job.state = "done";
   job.stage = "done";
@@ -558,16 +635,19 @@ async function runTrimEdit(options, outputDir) {
 }
 
 async function generateReplacementVoice(options, outputDir) {
+  const studio = runtimePaths(options.paths);
   const voiceDir = path.join(outputDir, "generated-voice");
   const args = [
     "-m", "local_tts_engine.course_pilot",
-    "--reference", REFERENCE,
-    "--reference-text", REFERENCE_TEXT,
+    "--source-project", studio.sourceProjectRoot,
+    "--reference", studio.referenceAudioPath,
+    "--reference-text", studio.referenceTextPath,
     "--output-dir", voiceDir,
     "--target-seconds", "30",
     "--start-page", String(options.startPage),
     "--end-page", String(options.endPage),
     "--model", options.modelId || "qwen3-tts",
+    "--no-cache",
   ];
   if (options.seed) args.push("--seed", String(options.seed));
   if (options.voiceMode !== "zero") {
@@ -605,6 +685,108 @@ async function runVoiceCandidates(options, outputDir) {
     name: `목소리 후보 ${item.index}`,
     audioUrl: pathToFileURL(item.audioPath).href,
   }));
+}
+
+async function runTextVoiceCandidates(options) {
+  const job = activeJob;
+  const studio = runtimePaths(options.paths);
+  const outputDir = path.join(studio.voiceOutputRoot, dateFolder(), options.name);
+  const candidatesDir = path.join(outputDir, "candidates");
+  const inputPath = path.join(outputDir, "input.txt");
+  await fs.mkdir(candidatesDir, { recursive: true });
+  await fs.writeFile(inputPath, `${options.text}\n`, "utf8");
+  await fs.unlink(path.join(outputDir, "selected.wav")).catch(() => {});
+  await fs.unlink(path.join(outputDir, "validation-report.json")).catch(() => {});
+
+  const digest = crypto.createHash("sha256").update(`${options.name}\n${options.text}`).digest();
+  const baseSeed = digest.readUInt32BE(0);
+  let completed = 0;
+  const candidates = await mapWithConcurrency(
+    Array.from({ length: options.candidateCount }, (_, index) => index),
+    options.voiceParallelism || 2,
+    async (index) => {
+      const number = String(index + 1).padStart(2, "0");
+      const audioPath = path.join(candidatesDir, `candidate-${number}.wav`);
+      const metadataPath = path.join(candidatesDir, `candidate-${number}.json`);
+      const seed = (baseSeed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
+      const args = [
+        "-m", "local_tts_engine.text_candidate",
+        "--model", options.modelId,
+        "--text-file", inputPath,
+        "--reference", studio.referenceAudioPath,
+        "--reference-text", studio.referenceTextPath,
+        "--output", audioPath,
+        "--metadata", metadataPath,
+        "--seed", String(seed),
+      ];
+      if (options.voiceMode === "finetuned") {
+        args.push("--adapter", options.adapterPath || ADAPTER, "--adapter-scale", String(options.adapterScale));
+      }
+      await runProcess("voice", TRAIN_PYTHON, args);
+      const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+      completed += 1;
+      emit({ type: "voice-item-complete", completed, total: options.candidateCount, name: `후보 ${index + 1}` });
+      return { index: index + 1, seed, audioPath, metadata };
+    },
+  );
+  if (activeJob !== job) return;
+
+  const registered = await registerSelected(candidates.map((item) => item.audioPath), "audio");
+  const values = candidates.map((item, index) => ({
+    index: item.index,
+    seed: item.seed,
+    token: registered[index].token,
+    name: `목소리 후보 ${item.index}`,
+    durationMs: item.metadata.durationMs,
+    audioUrl: pathToFileURL(item.audioPath).href,
+  }));
+  await fs.writeFile(path.join(outputDir, "index.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    cachePolicy: "disabled",
+    text: options.text,
+    modelId: options.modelId,
+    candidateCount: options.candidateCount,
+    parallelism: options.voiceParallelism,
+    candidates: values.map(({ audioUrl: _audioUrl, token: _token, ...item }) => item),
+  }, null, 2)}\n`, "utf8");
+  job.state = "done";
+  job.stage = "awaiting-selection";
+  job.outputDir = outputDir;
+  job.candidateTokens = new Set(values.map((item) => item.token));
+  emit({ type: "text-voices-ready", candidates: values, options });
+}
+
+async function selectTextVoice(token) {
+  if (!activeJob || activeJob.kind !== "text-voice" || activeJob.stage !== "awaiting-selection") {
+    throw new Error("선택할 목소리 후보 작업이 없습니다.");
+  }
+  if (!activeJob.candidateTokens?.has(token)) throw new Error("이 작업의 목소리 후보가 아닙니다.");
+  const selected = chosenRecord(token, "audio");
+  const outputPath = path.join(activeJob.outputDir, "selected.wav");
+  await fs.copyFile(selected.path, outputPath);
+  const probe = await inspectMedia(outputPath);
+  const durationMs = Math.round(Number(probe.format?.duration || 0) * 1000);
+  const report = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    name: activeJob.options.name,
+    operation: "text-voice",
+    cachePolicy: "disabled",
+    audioPath: outputPath,
+    selectedSource: selected.path,
+    durationMs,
+    summary: { ok: durationMs > 0, passed: durationMs > 0 ? 1 : 0, total: 1, failed: durationMs > 0 ? [] : ["음성 길이"] },
+    target: {
+      root: "voice",
+      day: path.basename(path.dirname(activeJob.outputDir)),
+      name: activeJob.options.name,
+    },
+  };
+  await fs.writeFile(path.join(activeJob.outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  activeJob.state = "done";
+  activeJob.stage = "done";
+  emit({ type: "text-voice-selected", report });
+  return report;
 }
 
 async function runVoiceEdit(options, outputDir) {
@@ -710,6 +892,7 @@ async function runVideoEdit(options) {
 }
 
 async function runFineTune(options) {
+  const studio = runtimePaths(options.paths);
   const outputDir = path.join(FINETUNE_RUN_ROOT, dateFolder(), options.name);
   await fs.mkdir(outputDir, { recursive: true });
   await runProcess("training", TRAIN_PYTHON, [
@@ -722,8 +905,8 @@ async function runFineTune(options) {
     "--gradient-accumulation", "4",
     "--learning-rate", "0.00002",
     "--eval-output", path.join(outputDir, "eval-after.wav"),
-    "--reference", REFERENCE,
-    "--reference-text", REFERENCE_TEXT,
+    "--reference", studio.referenceAudioPath,
+    "--reference-text", studio.referenceTextPath,
   ]);
   const result = JSON.parse(await fs.readFile(path.join(outputDir, "training-result.json"), "utf8"));
   const settings = await readAppSettings();
@@ -747,14 +930,16 @@ async function listDirectories(root) {
   return entries.filter((item) => item.isDirectory() && /^[a-z0-9][a-z0-9-]*$/.test(item.name));
 }
 
-async function listOutputs() {
+async function listOutputs(studio) {
   const result = [];
-  for (const entry of await listDirectories(RENDER_ROOT)) {
-    const dir = path.join(RENDER_ROOT, entry.name);
+  for (const entry of await listDirectories(studio.captionOutputRoot)) {
+    const dir = path.join(studio.captionOutputRoot, entry.name);
     const stat = await safeStat(dir);
     const reportPath = path.join(dir, "validation-report.json");
     const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
-    const videoPath = report?.videoPath || await findVideo(dir, entry.name);
+    const videoPath = await findVideo(path.join(studio.videoOutputRoot, entry.name), entry.name)
+      || report?.videoPath
+      || await findVideo(dir, entry.name);
     if (!videoPath && !report) continue;
     result.push({
       key: `render:${entry.name}`,
@@ -767,9 +952,9 @@ async function listOutputs() {
       path: videoPath || dir,
     });
   }
-  const dayEntries = await fs.readdir(PILOT_ROOT, { withFileTypes: true }).catch(() => []);
+  const dayEntries = await fs.readdir(studio.ttsOutputRoot, { withFileTypes: true }).catch(() => []);
   for (const dayEntry of dayEntries.filter((item) => item.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(item.name))) {
-    const dayRoot = path.join(PILOT_ROOT, dayEntry.name);
+    const dayRoot = path.join(studio.ttsOutputRoot, dayEntry.name);
     for (const entry of await listDirectories(dayRoot)) {
       const dir = path.join(dayRoot, entry.name);
       const report = await fs.readFile(path.join(dir, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
@@ -785,6 +970,28 @@ async function listOutputs() {
         video: false,
         ok: report.summary?.ok ?? null,
         path: report.audioPath || dir,
+      });
+    }
+  }
+  const voiceDays = await fs.readdir(studio.voiceOutputRoot, { withFileTypes: true }).catch(() => []);
+  for (const dayEntry of voiceDays.filter((item) => item.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(item.name))) {
+    const dayRoot = path.join(studio.voiceOutputRoot, dayEntry.name);
+    for (const entry of await listDirectories(dayRoot)) {
+      const dir = path.join(dayRoot, entry.name);
+      const report = await fs.readFile(path.join(dir, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
+      if (!report?.audioPath) continue;
+      const stat = await safeStat(dir);
+      result.push({
+        key: `voice:${dayEntry.name}:${entry.name}`,
+        root: "voice",
+        day: dayEntry.name,
+        name: entry.name,
+        operation: "text-voice",
+        updatedAt: stat?.mtime.toISOString(),
+        durationMs: report.durationMs || null,
+        video: false,
+        ok: report.summary?.ok ?? null,
+        path: report.audioPath,
       });
     }
   }
@@ -813,19 +1020,23 @@ async function listOutputs() {
   return result.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, 30);
 }
 
-function resolveOutputTarget(target) {
-  if (!target || !["render", "pilot", "edit"].includes(target.root) || !/^[a-z0-9][a-z0-9-]*$/.test(target.name || "")) {
+function resolveOutputTarget(target, studio) {
+  if (!target || !["render", "pilot", "edit", "voice"].includes(target.root) || !/^[a-z0-9][a-z0-9-]*$/.test(target.name || "")) {
     throw new Error("열 수 없는 결과입니다.");
   }
-  let root = RENDER_ROOT;
+  let root = studio.captionOutputRoot;
   let directory = path.join(root, target.name);
   if (target.root === "pilot") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(target.day || "")) throw new Error("결과 날짜가 올바르지 않습니다.");
-    root = path.join(PILOT_ROOT, target.day);
+    root = path.join(studio.ttsOutputRoot, target.day);
     directory = path.join(root, target.name);
   } else if (target.root === "edit") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(target.day || "")) throw new Error("결과 날짜가 올바르지 않습니다.");
     root = path.join(EDIT_ROOT, target.day);
+    directory = path.join(root, target.name);
+  } else if (target.root === "voice") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(target.day || "")) throw new Error("결과 날짜가 올바르지 않습니다.");
+    root = path.join(studio.voiceOutputRoot, target.day);
     directory = path.join(root, target.name);
   }
   if (!isInside(root, directory)) throw new Error("결과 경로가 올바르지 않습니다.");
@@ -835,11 +1046,19 @@ function resolveOutputTarget(target) {
 function registerIpc() {
   ipcMain.handle("studio:get-status", async (event) => {
     guard(event);
+    const settings = await readAppSettings();
+    const studio = runtimePaths(settings.paths);
     const runtime = {};
-    for (const [key, file] of Object.entries({ voice: REFERENCE, adapter: ADAPTER, deck: DECK_ROOT, ffmpeg: FFMPEG })) {
+    for (const [key, file] of Object.entries({
+      voice: studio.referenceAudioPath,
+      voiceLibrary: studio.voiceLibraryRoot,
+      adapter: ADAPTER,
+      deck: studio.deckRoot,
+      ffmpeg: FFMPEG,
+    })) {
       runtime[key] = Boolean(await safeStat(file));
     }
-    const catalog = await loadCatalog();
+    const catalog = await loadCatalog(studio);
     return {
       activeJob: jobSnapshot(),
       runtime,
@@ -860,7 +1079,33 @@ function registerIpc() {
 
   ipcMain.handle("studio:list-outputs", async (event) => {
     guard(event);
-    return listOutputs();
+    const settings = await readAppSettings();
+    return listOutputs(runtimePaths(settings.paths));
+  });
+
+  ipcMain.handle("studio:pick-location", async (event, key) => {
+    guard(event);
+    const directoryKeys = new Set([
+      "sourceProjectRoot",
+      "voiceLibraryRoot",
+      "ttsOutputRoot",
+      "voiceOutputRoot",
+      "captionOutputRoot",
+      "videoOutputRoot",
+    ]);
+    const fileOptions = {
+      referenceAudioPath: { title: "참조 음성 선택", extensions: ["wav", "m4a", "flac"] },
+      referenceTextPath: { title: "참조 전사문 선택", extensions: ["txt", "md"] },
+    };
+    if (!directoryKeys.has(key) && !fileOptions[key]) throw new Error("지원하지 않는 경로 설정입니다.");
+    const result = await dialog.showOpenDialog(mainWindow, directoryKeys.has(key)
+      ? { title: "폴더 선택", properties: ["openDirectory", "createDirectory"] }
+      : {
+          title: fileOptions[key].title,
+          properties: ["openFile"],
+          filters: [{ name: "지원 파일", extensions: fileOptions[key].extensions }],
+        });
+    return result.canceled ? null : result.filePaths[0];
   });
 
   ipcMain.handle("studio:pick-videos", async (event, multiple = false) => {
@@ -911,6 +1156,8 @@ function registerIpc() {
       ? rawOptions.operation
       : null;
     if (!operation) throw new Error("편집 종류를 선택해 주세요.");
+    const settings = await readAppSettings();
+    const studio = runtimePaths(settings.paths);
     let options = {
       ...rawOptions,
       operation,
@@ -923,9 +1170,9 @@ function registerIpc() {
       startPage: Number(rawOptions.startPage ?? 1),
       endPage: Number(rawOptions.endPage ?? rawOptions.startPage ?? 1),
     };
-    options = applyVoiceSettings(options, await readAppSettings());
+    options = applyVoiceSettings(options, settings);
     if (["voice", "voice-candidates"].includes(operation) && options.audioSource === "generate") {
-      const catalog = await loadCatalog();
+      const catalog = await loadCatalog(studio);
       const ranges = Array.isArray(options.videoItems) && options.videoItems.length
         ? options.videoItems.map((item) => [Number(item.startPage), Number(item.endPage)])
         : [[options.startPage, options.endPage]];
@@ -936,7 +1183,7 @@ function registerIpc() {
       if (options.voiceMode === "finetuned" && (!(options.adapterScale > 0) || options.adapterScale > 1)) {
         throw new Error("파인튜닝 강도는 0보다 크고 1 이하여야 합니다.");
       }
-      await assertRuntime(options);
+      await assertRuntime(options, studio);
     }
     activeJob = {
       id: crypto.randomUUID(),
@@ -959,15 +1206,58 @@ function registerIpc() {
     return snapshot;
   });
 
+  ipcMain.handle("studio:start-text-voices", async (event, rawOptions = {}) => {
+    guard(event);
+    if (activeJob && ["running", "cancelling"].includes(activeJob.state)) {
+      throw new Error("이미 실행 중인 작업이 있습니다.");
+    }
+    const text = normalizeVoiceText(rawOptions.text);
+    if (!text) throw new Error("목소리로 만들 텍스트를 입력해 주세요.");
+    if (text.length > 2_000) throw new Error("텍스트는 한 번에 2,000자까지 입력할 수 있습니다.");
+    const settings = await readAppSettings();
+    const candidateCount = Math.min(8, Math.max(2, Math.round(Number(rawOptions.candidateCount ?? 3))));
+    const options = applyVoiceSettings({
+      name: normalizeEditName(rawOptions.name),
+      text,
+      candidateCount,
+    }, settings);
+    await assertRuntime(options, runtimePaths(settings.paths));
+    activeJob = {
+      id: crypto.randomUUID(),
+      kind: "text-voice",
+      options,
+      state: "running",
+      stage: "voice",
+      children: new Set(),
+      cancelled: false,
+      startedAt: new Date().toISOString(),
+    };
+    const snapshot = jobSnapshot();
+    emit({ type: "text-voice-started", job: snapshot, options });
+    runTextVoiceCandidates(options).catch((error) => {
+      if (!activeJob) return;
+      activeJob.state = activeJob.cancelled ? "cancelled" : "failed";
+      emit({ type: "text-voice-failed", cancelled: activeJob.cancelled, message: error.message });
+    });
+    return snapshot;
+  });
+
+  ipcMain.handle("studio:select-text-voice", async (event, token) => {
+    guard(event);
+    return selectTextVoice(String(token || ""));
+  });
+
   ipcMain.handle("studio:start-finetune", async (event, rawOptions = {}) => {
     guard(event);
     if (activeJob && ["running", "cancelling"].includes(activeJob.state)) {
       throw new Error("이미 실행 중인 작업이 있습니다.");
     }
     await fs.access(FINETUNE_TRAIN_JSONL);
+    const settings = await readAppSettings();
     const options = {
       name: normalizeEditName(rawOptions.name),
       maxSteps: Math.min(500, Math.max(10, Math.round(Number(rawOptions.maxSteps ?? 60)))),
+      paths: settings.paths,
     };
     activeJob = {
       id: crypto.randomUUID(),
@@ -994,9 +1284,11 @@ function registerIpc() {
     if (activeJob && ["running", "cancelling"].includes(activeJob.state)) {
       throw new Error("이미 실행 중인 작업이 있습니다.");
     }
-    const options = applyVoiceSettings(normalizeOptions(rawOptions), await readAppSettings());
-    await assertRuntime(options);
-    const catalog = await loadCatalog();
+    const settings = await readAppSettings();
+    const options = applyVoiceSettings(normalizeOptions(rawOptions), settings);
+    const studio = runtimePaths(settings.paths);
+    await assertRuntime(options, studio);
+    const catalog = await loadCatalog(studio);
     if (options.startPage > catalog.totalPages || (options.endPage && options.endPage > catalog.totalPages)) {
       throw new Error(`페이지는 1~${catalog.totalPages} 사이에서 선택해 주세요.`);
     }
@@ -1033,15 +1325,19 @@ function registerIpc() {
 
   ipcMain.handle("studio:reveal", async (event, target) => {
     guard(event);
-    const directory = resolveOutputTarget(target);
+    const settings = await readAppSettings();
+    const studio = runtimePaths(settings.paths);
+    const directory = resolveOutputTarget(target, studio);
     let file = target.root === "render"
-      ? await findVideo(directory, target.name)
+      ? await findVideo(path.join(studio.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
       : target.root === "edit"
         ? path.join(directory, `${target.name}.mp4`)
-        : path.join(directory, `${target.name}.m4a`);
-    if (target.root === "edit") {
+        : target.root === "voice"
+          ? path.join(directory, "selected.wav")
+          : path.join(directory, `${target.name}.m4a`);
+    if (["render", "edit", "voice"].includes(target.root)) {
       const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
-      file = report?.videoPath || file;
+      file = await safeStat(file) ? file : report?.videoPath || report?.audioPath || file;
     }
     shell.showItemInFolder(await safeStat(file) ? file : directory);
     return true;
@@ -1049,15 +1345,19 @@ function registerIpc() {
 
   ipcMain.handle("studio:open", async (event, target) => {
     guard(event);
-    const directory = resolveOutputTarget(target);
+    const settings = await readAppSettings();
+    const studio = runtimePaths(settings.paths);
+    const directory = resolveOutputTarget(target, studio);
     let file = target.root === "render"
-      ? await findVideo(directory, target.name)
+      ? await findVideo(path.join(studio.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
       : target.root === "edit"
         ? path.join(directory, `${target.name}.mp4`)
-        : path.join(directory, `${target.name}.m4a`);
-    if (target.root === "edit") {
+        : target.root === "voice"
+          ? path.join(directory, "selected.wav")
+          : path.join(directory, `${target.name}.m4a`);
+    if (["render", "edit", "voice"].includes(target.root)) {
       const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
-      file = report?.videoPath || file;
+      file = await safeStat(file) ? file : report?.videoPath || report?.audioPath || file;
     }
     const error = await shell.openPath(await safeStat(file) ? file : directory);
     if (error) throw new Error(error);

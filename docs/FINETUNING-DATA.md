@@ -5,7 +5,7 @@
 
 ## 안전 계약
 
-- 정본: `udemy-agent/deck/voice/training/pvc/master-wav/`
+- 정본: `data/private/voice/training/pvc/master-wav/`
 - 정본은 수정·이동·재인코딩하지 않는다.
 - ASR 전사는 초안이다. 자동으로 학습 승인하지 않는다.
 - `review.tsv`에서 사람이 `accepted`로 표시한 클립만 내보낸다.

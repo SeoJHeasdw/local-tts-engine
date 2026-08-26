@@ -122,6 +122,16 @@ export function normalizeEditName(value) {
   return name;
 }
 
+export function normalizeVoiceText(value) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 export function timeRangeForPages(entries, startPage, endPage) {
   if (!Number.isInteger(startPage) || !Number.isInteger(endPage) || startPage < 1 || endPage < startPage) {
     throw new Error("자를 시작·끝 페이지를 확인해 주세요.");

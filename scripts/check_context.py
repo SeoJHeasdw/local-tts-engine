@@ -7,7 +7,9 @@ import platform
 import sys
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = Path("/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent")
+VOICE_ROOT = PROJECT_ROOT / "data/private/voice"
 REQUIRED_PATHS = [
     SOURCE_ROOT / "NARRATION-PIPELINE.md",
     SOURCE_ROOT / "VIDEO-PACING-GUIDELINES.md",
@@ -15,20 +17,21 @@ REQUIRED_PATHS = [
     SOURCE_ROOT / "deck/narration/pronunciation.ko.json",
     SOURCE_ROOT / "deck/tools/narration.mjs",
     SOURCE_ROOT / "deck/narration.config.json",
-    SOURCE_ROOT / "deck/voice/training/pvc/README.md",
-    SOURCE_ROOT / "deck/voice/training/pvc/manifest.json",
-    SOURCE_ROOT / "deck/voice/ch01/pilot/master-48k-mono.wav",
+    VOICE_ROOT / "training/pvc/README.md",
+    VOICE_ROOT / "training/pvc/manifest.json",
+    VOICE_ROOT / "ch01/pilot/master-48k-mono.wav",
 ]
 
 
 def main() -> int:
     missing = [path for path in REQUIRED_PATHS if not path.exists()]
-    manifest_path = SOURCE_ROOT / "deck/voice/training/pvc/manifest.json"
+    manifest_path = VOICE_ROOT / "training/pvc/manifest.json"
 
     print(f"machine: {platform.machine()}")
     print(f"macOS: {platform.mac_ver()[0] or 'unknown'}")
     print(f"python: {platform.python_version()}")
     print(f"source project: {SOURCE_ROOT}")
+    print(f"voice library: {VOICE_ROOT}")
 
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

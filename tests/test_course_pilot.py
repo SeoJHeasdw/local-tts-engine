@@ -7,10 +7,12 @@ from local_tts_engine.course_pilot import (
     apply_pronunciation,
     apply_adapter_scale,
     adapter_identity,
+    build_parser,
     course_entries,
     course_page_catalog,
     gap_after,
     group_course_entries,
+    load_or_create_alignment,
     parse_script,
     slide_ids_from_source,
     trim_and_fade_audio,
@@ -244,3 +246,51 @@ def test_adapter_scale_accepts_continuous_065_value() -> None:
     model = Model()
     assert apply_adapter_scale(model, 0.65) == 1
     assert model.module.scale == 0.65
+
+
+def test_alignment_no_cache_rebuilds_existing_file(tmp_path: Path) -> None:
+    entry = CourseEntry("ch00", "slide-a", 1, 0, "새", "새")
+    chunk = CourseChunk((entry,))
+    alignment = tmp_path / "alignment.json"
+    alignment.write_text(
+        json.dumps({"words": [{"text": "오래된", "startMs": 0, "endMs": 1}]}),
+        encoding="utf-8",
+    )
+
+    class Item:
+        text = "새"
+        start_time = 0.1
+        end_time = 0.2
+
+    class Result:
+        items = [Item()]
+
+    class Aligner:
+        calls = 0
+
+        def generate(self, **_kwargs):
+            self.calls += 1
+            return Result()
+
+    aligner = Aligner()
+    words = load_or_create_alignment(
+        chunk,
+        {"audioPath": "/tmp/new.wav", "hash": "fresh"},
+        aligner,
+        alignment,
+        use_cache=False,
+    )
+
+    assert aligner.calls == 1
+    assert words == [{"text": "새", "startMs": 100, "endMs": 200}]
+
+
+def test_no_cache_cli_flag_disables_result_reuse() -> None:
+    args = build_parser().parse_args([
+        "--output-dir", "/tmp/out",
+        "--reference", "/tmp/ref.wav",
+        "--reference-text", "/tmp/ref.txt",
+        "--no-cache",
+    ])
+
+    assert args.no_cache is True

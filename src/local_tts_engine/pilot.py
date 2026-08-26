@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import re
 import subprocess
@@ -109,6 +110,35 @@ def sha256_file(path: Path) -> str:
 def sha256_text(text: str) -> str:
     """UTF-8 인코딩된 문자열의 SHA-256 다이제스트를 반환한다."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def resolve_model_path(repository: str, downloader: Any) -> Path:
+    """Prefer an installed Hugging Face snapshot and only download as fallback."""
+    direct = Path(repository).expanduser()
+    if direct.exists():
+        return direct
+
+    hub_root = Path(
+        os.environ.get(
+            "HF_HUB_CACHE",
+            Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub",
+        )
+    )
+    cache_root = hub_root / f"models--{repository.replace('/', '--')}"
+    ref = cache_root / "refs/main"
+    if ref.is_file():
+        revision = ref.read_text(encoding="utf-8").strip()
+        snapshot = cache_root / "snapshots" / revision
+        if snapshot.is_dir():
+            return snapshot
+    snapshots = sorted(
+        (cache_root / "snapshots").glob("*"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    ) if (cache_root / "snapshots").is_dir() else []
+    if snapshots:
+        return snapshots[0]
+    return Path(downloader(repository))
 
 
 def run_checked(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -300,7 +330,7 @@ def synthesize(
         raise ValueError("참조 전사문이 비어 있습니다.")
 
     mx.random.seed(seed)
-    model_path = get_model_path(spec.repository)
+    model_path = resolve_model_path(spec.repository, get_model_path)
     load_started = time.perf_counter()
     model = load_model(model_path)
     load_ms = round((time.perf_counter() - load_started) * 1000)

@@ -22,6 +22,7 @@
 
         <nav aria-label="주 메뉴">
           <button class="nav-item active" type="button" data-view="new"><span>◉</span> 새 영상</button>
+          <button class="nav-item" type="button" data-view="voice"><span>♪</span> 목소리 만들기</button>
           <button class="nav-item" type="button" data-view="edit"><span>✂</span> 영상 편집</button>
           <button class="nav-item" type="button" data-view="results"><span>▤</span> 최근 결과</button>
         </nav>
@@ -106,15 +107,33 @@
             <div class="card-heading">
               <div>
                 <span class="step-number">02</span>
-                <h2>진행 상황</h2>
+                <h2 id="job-panel-title">제작 브리프</h2>
               </div>
               <span class="job-state idle" id="job-state">대기</span>
             </div>
 
-            <div class="idle-hero" id="idle-hero">
-              <div class="sound-orbit"><i></i><i></i><i></i><i></i><i></i></div>
-              <h3>설정을 고르고 시작해 주세요</h3>
-              <p>나머지는 자동으로 확인합니다.</p>
+            <div class="production-brief" id="idle-hero">
+              <div class="brief-hero">
+                <div><span class="brief-kicker">READY TO BUILD</span><strong id="brief-scope">30초 미리보기 · 1페이지</strong></div>
+                <span class="brief-ready-mark">✓</span>
+                <p id="brief-page">페이지 정보를 불러오는 중입니다.</p>
+              </div>
+
+              <div class="brief-grid">
+                <article><span>VOICE</span><strong id="brief-voice">Jaeho LoRA · 0.60</strong><small>강의용 승인 프로필</small></article>
+                <article><span>OUTPUT</span><strong id="brief-output">완성 영상</strong><small id="brief-caption">화면 자막 + SRT/VTT</small></article>
+              </div>
+
+              <div class="preflight-list" aria-label="제작 전 확인">
+                <div><i>01</i><span><strong>새 음성으로 생성</strong><small>이전 TTS·정렬 결과를 재사용하지 않음</small></span><b>FRESH</b></div>
+                <div><i>02</i><span><strong>실제 길이로 동기화</strong><small>음성 측정 후 자막과 화면 전환 계산</small></span><b>AUTO</b></div>
+                <div><i>03</i><span><strong>완료 후 자동 검증</strong><small>음성·자막·화면·파일 길이 확인</small></span><b>CHECK</b></div>
+              </div>
+
+              <div class="brief-destination">
+                <span>결과 저장 위치</span>
+                <strong id="brief-destination">설정에서 경로를 불러오는 중입니다.</strong>
+              </div>
             </div>
 
             <div class="active-progress hidden" id="active-progress">
@@ -147,6 +166,69 @@
             </details>
           </section>
         </section>
+        </section>
+
+        <section class="page-view hidden" id="view-voice">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">VOICE LAB</p>
+              <h1>텍스트로 목소리 만들기</h1>
+              <p class="lede">같은 문장을 여러 버전으로 동시에 만든 뒤 직접 듣고 고릅니다.</p>
+            </div>
+            <div class="top-status" id="voice-top-status"><span class="pulse"></span><span>준비됨</span></div>
+          </header>
+
+          <section class="voice-lab-workspace">
+            <form class="card voice-lab-card" id="text-voice-form">
+              <div class="card-heading">
+                <div><span class="step-number">01</span><h2>후보 만들기</h2></div>
+                <span class="save-note">캐시 사용 안 함</span>
+              </div>
+              <label class="field full">
+                <span>결과 이름</span>
+                <input id="text-voice-name" autocomplete="off" spellcheck="false" required>
+              </label>
+              <label class="field full">
+                <span>읽을 텍스트</span>
+                <textarea id="text-voice-input" maxlength="2000" rows="9" placeholder="목소리로 만들 문장을 입력하세요." required></textarea>
+                <small><span id="text-voice-length">0</span> / 2,000자 · 발음 사전은 음성에만 적용됩니다.</small>
+              </label>
+              <label class="field full">
+                <span>비교할 후보 수</span>
+                <input id="text-voice-count" type="number" min="2" max="8" value="3">
+                <small>설정된 병렬 수만큼 동시에 만들며, 각 후보는 서로 다른 시드를 사용합니다.</small>
+              </label>
+              <button class="primary-button full" id="start-text-voices" type="submit"><span>목소리 후보 만들기</span><span>→</span></button>
+            </form>
+            <aside class="card voice-design-panel">
+              <div class="design-head">
+                <div><span class="brief-kicker">VOICE BLUEPRINT</span><h2>발화 설계</h2></div>
+                <span class="design-live">LIVE</span>
+              </div>
+
+              <div class="voice-profile-summary">
+                <span class="profile-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+                <div><small>현재 목소리</small><strong id="voice-design-profile">Jaeho LoRA · 0.60</strong><p>사람 발화 노이즈와 AI 특성을 낮춘 강의용 승인값</p></div>
+              </div>
+
+              <div class="script-metrics">
+                <div><span id="voice-metric-chars">0</span><small>글자</small></div>
+                <div><span id="voice-metric-breaths">0</span><small>호흡</small></div>
+                <div><span id="voice-metric-candidates">3</span><small>후보</small></div>
+              </div>
+
+              <div class="breath-map">
+                <div class="mini-heading"><span>호흡 단위</span><small id="voice-breath-note">줄바꿈이 발화 호흡으로 보존됩니다.</small></div>
+                <ol id="voice-breath-list"><li class="empty-breath">텍스트를 입력하면 발화 구조가 여기에 나타납니다.</li></ol>
+              </div>
+
+              <div class="generation-plan">
+                <div><span>생성 계획</span><strong id="voice-generation-plan">후보 3개 · 2개씩 병렬</strong></div>
+                <div><span>영문 용어</span><strong id="voice-foreign-terms">감지되지 않음</strong></div>
+                <p id="voice-design-advice">문장마다 줄을 나누면 의도한 쉼과 리듬을 더 안정적으로 전달할 수 있습니다.</p>
+              </div>
+            </aside>
+          </section>
         </section>
 
         <section class="page-view hidden" id="view-edit">
@@ -263,9 +345,21 @@
       <div class="modal-body">
         <label class="field"><span>기본 모델</span><select id="global-model"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 설치됨</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 설치됨</option></select></label>
         <label class="field"><span>목소리 어댑터</span><select id="global-adapter"></select></label>
-        <div class="field" id="global-scale-field"><div class="field-line"><span>파인튜닝 적용 강도</span><output id="global-scale-output">0.60</output></div><input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6"><div class="range-labels"><span>0.10 · 기본 모델에 가깝게</span><span>1.00 · 학습값 그대로</span></div></div>
-        <p class="setting-explain">0.60, 0.65, 0.80은 별도 모델이 아니라 같은 어댑터의 학습 보정값을 연속적으로 적용하는 강도입니다.</p>
+        <div class="field" id="global-scale-field"><div class="field-line"><span>내 목소리 LoRA 반영 강도</span><output id="global-scale-output">0.60</output></div><input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6"><div class="range-labels"><span>0.10 · 기본 모델에 가깝게</span><span>1.00 · 학습값 그대로</span></div></div>
+        <p class="setting-explain">제작 기본값 0.60은 LoRA v1의 목소리 특징을 적당히 반영하면서 1.00에서 들리던 사람 발화 노이즈와 과한 AI 특성을 줄인 강의용 승인값입니다. 숫자는 서로 다른 모델이 아니라 같은 어댑터의 반영 강도입니다.</p>
         <label class="field"><span>목소리 후보 생성 병렬 작업</span><select id="global-parallelism"><option value="2">후보 2개씩 병렬 · M4 Max 36GB 권장</option><option value="1">후보 1개씩 순차 · 메모리 절약</option></select></label>
+        <div class="divider"></div>
+        <div class="path-settings">
+          <div><h3>파일 위치</h3><p>강의 소스만 udemy-agent를 가리키고, 음성·자막·영상 결과는 이 프로젝트가 관리합니다.</p></div>
+          <label class="path-field"><span>강의 소스 프로젝트</span><div><input id="path-sourceProjectRoot" readonly><button type="button" data-pick-path="sourceProjectRoot">선택</button></div></label>
+          <label class="path-field"><span>내 목소리 원본</span><div><input id="path-voiceLibraryRoot" readonly><button type="button" data-pick-path="voiceLibraryRoot">선택</button></div></label>
+          <label class="path-field"><span>TTS 작업 결과</span><div><input id="path-ttsOutputRoot" readonly><button type="button" data-pick-path="ttsOutputRoot">선택</button></div></label>
+          <label class="path-field"><span>텍스트 목소리 후보</span><div><input id="path-voiceOutputRoot" readonly><button type="button" data-pick-path="voiceOutputRoot">선택</button></div></label>
+          <label class="path-field"><span>자막·타임라인 결과</span><div><input id="path-captionOutputRoot" readonly><button type="button" data-pick-path="captionOutputRoot">선택</button></div></label>
+          <label class="path-field"><span>완성 영상 결과</span><div><input id="path-videoOutputRoot" readonly><button type="button" data-pick-path="videoOutputRoot">선택</button></div></label>
+          <label class="path-field"><span>참조 음성</span><div><input id="path-referenceAudioPath" readonly><button type="button" data-pick-path="referenceAudioPath">선택</button></div></label>
+          <label class="path-field"><span>참조 전사문</span><div><input id="path-referenceTextPath" readonly><button type="button" data-pick-path="referenceTextPath">선택</button></div></label>
+        </div>
         <div class="modal-actions"><button class="secondary-small" type="button" id="open-finetune-panel">새 파인튜닝</button><button class="primary-small" type="button" id="save-model-settings">설정 저장</button></div>
       </div>
       <div class="finetune-panel hidden" id="finetune-panel">

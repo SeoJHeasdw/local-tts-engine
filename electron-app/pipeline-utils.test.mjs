@@ -5,6 +5,7 @@ import {
   isInside,
   makeJobName,
   mapWithConcurrency,
+  normalizeVoiceText,
   normalizeOptions,
   parseTimecode,
   presetFromManifest,
@@ -12,7 +13,7 @@ import {
   timeRangeForPages,
 } from "./pipeline-utils.mjs";
 
-test("기본 작업은 파인튜닝 A 0.6과 30초 미리보기다", () => {
+test("기본 작업은 제작 LoRA v1 0.6과 30초 미리보기다", () => {
   const options = normalizeOptions({ name: "lecture-a" });
   assert.equal(options.voiceMode, "finetuned");
   assert.equal(options.adapterScale, 0.6);
@@ -88,4 +89,11 @@ test("목소리 작업을 최대 2개씩 병렬 처리하고 결과 순서를 �
   });
   assert.equal(peak, 2);
   assert.deepEqual(results, [10, 20, 30, 40]);
+});
+
+test("텍스트 목소리는 줄바꿈 호흡을 보존하고 줄 안의 공백만 정리한다", () => {
+  assert.equal(
+    normalizeVoiceText("  첫 문장  입니다.\r\n\r\n 둘째 문장입니다.  "),
+    "첫 문장 입니다.\n둘째 문장입니다.",
+  );
 });
