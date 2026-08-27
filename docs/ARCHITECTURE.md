@@ -95,6 +95,28 @@ Electron 앱이 강의 소스 경로와 모든 산출물 경로를 로컬 JSON�
 - 모델은 사용자 공용 Hugging Face 캐시에 둔다.
 - 벤치마크 출력은 `artifacts/`에 두고 Git에서 제외한다.
 - 소스 녹음은 `data/private/voice/`를 읽기 전용으로 사용한다.
-- 자막·타임라인 기본값은 `artifacts/production/captions/`이다.
-- 최종 영상 기본값은 `artifacts/production/videos/`이다.
-- 실제 경로는 `artifacts/app-settings.json`에 저장하며 앱에서 변경할 수 있다.
+- 앱에서는 단일 `outputRoot`만 설정하고 기본값은 프로젝트의 `output/`이다.
+- `output/videos`, `output/voices`, `output/tts`, `output/projects`, `output/edits`는
+  앱이 자동으로 만들고 관리한다.
+- 실제 입력 경로와 `outputRoot`는 `artifacts/app-settings.json`에 저장한다.
+- 이전 `artifacts/course-pilots`, `artifacts/voice-candidates`,
+  `artifacts/production`, `artifacts/video-edits` 결과는 읽기 호환만 유지한다.
+
+## 결과 검수 상태
+
+앱의 자동 검증과 사용자 청취 승인은 서로 다른 상태다. 자동 검증은 음성·영상
+파일, 실제 길이, 타임라인과 자막 범위를 검사한다. 사용자가 결과를 직접 들은 뒤
+누르는 `청취 승인`은 같은 산출물 폴더의 `validation-report.json`에 선택 필드로
+추가한다.
+
+```json
+{
+  "review": {
+    "status": "approved",
+    "updatedAt": "2026-08-27T00:00:00.000Z"
+  }
+}
+```
+
+승인 취소는 `status`를 `pending`으로 바꾼다. 자동 검증 결과는 이 동작으로
+변경하지 않는다.

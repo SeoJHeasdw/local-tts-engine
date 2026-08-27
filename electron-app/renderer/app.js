@@ -1,3 +1,10 @@
+import {
+  buildChapterRanges,
+  filterOutputItems,
+  outputKind,
+  summarizePageRange,
+} from "./view-utils.mjs";
+
 const api = window.ttsStudio;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -27,6 +34,19 @@ let appSettings = null;
 let voiceCandidates = [];
 let selectedCandidateToken = null;
 let candidatePurpose = "edit";
+let catalogChapters = [];
+let outputItems = [];
+let outputFilter = "all";
+
+function showToast(message, kind = "success") {
+  const toast = document.createElement("div");
+  toast.className = `toast ${kind}`;
+  toast.innerHTML = "<span></span><div></div>";
+  toast.querySelector("span").textContent = kind === "error" ? "!" : "✓";
+  toast.querySelector("div").textContent = message;
+  $("#toast-stack").append(toast);
+  setTimeout(() => toast.remove(), 3600);
+}
 
 function dateStamp(date = new Date()) {
   const two = (value) => String(value).padStart(2, "0");
@@ -49,6 +69,39 @@ function pageMeta(pageNumber) {
   const page = catalogPages[Number(pageNumber) - 1];
   if (!page) return "페이지 범위를 확인해 주세요";
   return `${page.chapter.toUpperCase()} · ${page.slideId} · ${page.firstStep}~${page.lastStep}스텝`;
+}
+
+function chapterForPage(pageNumber) {
+  return catalogChapters.find((chapter) => pageNumber >= chapter.start && pageNumber <= chapter.end) || null;
+}
+
+function populateChapterJump() {
+  catalogChapters = buildChapterRanges(catalogPages);
+  const select = $("#chapter-jump");
+  select.replaceChildren(...catalogChapters.map((chapter) => {
+    const option = document.createElement("option");
+    option.value = chapter.id;
+    option.textContent = `${chapter.id.toUpperCase()} · ${chapter.start}–${chapter.end}페이지 · ${chapter.stepCount}스텝`;
+    return option;
+  }));
+}
+
+function moveToPage(pageNumber) {
+  const next = Math.min(totalPages, Math.max(1, Math.round(Number(pageNumber) || 1)));
+  $("#start-page").value = String(next);
+  if (Number($("#end-page").value) < next) $("#end-page").value = String(next);
+  updatePageScope();
+}
+
+function updateCourseNavigator(start, end) {
+  const chapter = chapterForPage(start);
+  if (chapter) $("#chapter-jump").value = chapter.id;
+  $("#previous-page").disabled = start <= 1;
+  $("#next-page").disabled = start >= totalPages;
+  const summary = summarizePageRange(catalogPages, start, productionMode === "bundle" ? end : start);
+  $("#scope-chapter-stat").textContent = summary.chapterLabel;
+  $("#scope-page-stat").textContent = productionMode === "bundle" ? `${summary.pageCount}페이지` : `${start}페이지 시작`;
+  $("#scope-step-stat").textContent = productionMode === "bundle" ? `${summary.stepCount}스텝` : `${summary.stepCount}스텝부터`;
 }
 
 function fileName(value) {
@@ -148,6 +201,7 @@ function updatePageScope() {
     ? "30초 음성을 만든 뒤 실제 30초 촬영이 이어집니다."
     : "선택한 범위를 전부 생성한 뒤 실제 재생 길이만큼 촬영합니다.";
   $("#job-name").value = suggestedName();
+  updateCourseNavigator(start, end);
   updateProductionBrief();
 }
 
@@ -507,29 +561,76 @@ function handleTextVoiceEvent(event) {
   }
 }
 
-async function loadOutputs() {
-  const list = await api.listOutputs();
+function outputLabel(item) {
+  if (item.root === "voice") return "텍스트 목소리";
+  if (item.root === "edit") {
+    return { merge: "합친 영상", trim: "자른 영상", voice: "목소리 교체", "voice-batch": "목소리 교체" }[item.operation] || "편집 영상";
+  }
+  if (item.root === "pilot") return "강의 음성";
+  return item.video ? "완성 강의 영상" : "강의 자막·음성";
+}
+
+function renderOutputSummary() {
+  const approved = outputItems.filter((item) => item.review?.status === "approved").length;
+  $("#result-total-count").textContent = String(outputItems.length);
+  $("#result-approved-count").textContent = String(approved);
+  $("#result-pending-count").textContent = String(outputItems.length - approved);
+  $("#results-count").textContent = String(outputItems.length);
+}
+
+function renderOutputs() {
+  const list = filterOutputItems(outputItems, $("#result-search").value, outputFilter);
   const container = $("#output-list");
   if (!list.length) {
-    container.innerHTML = '<div class="empty-output">아직 완성된 영상이 없습니다.</div>';
+    container.innerHTML = `<div class="empty-output">${outputItems.length ? "조건에 맞는 결과가 없습니다." : "아직 완성된 결과가 없습니다."}</div>`;
     return;
   }
   container.replaceChildren(...list.map((item) => {
+    const kind = outputKind(item);
+    const approved = item.review?.status === "approved";
     const row = document.createElement("article");
     row.className = "output-item";
     row.innerHTML = `
-      <div class="output-type">${item.video ? "▶" : "♪"}</div>
+      <div class="output-type ${kind}">${kind === "edit" ? "✂" : item.video ? "▶" : "♪"}</div>
       <div class="output-copy"><strong></strong><small></small></div>
-      <span class="${item.ok ? "verified" : "unverified"}">${item.ok ? "✓ 자동 검증 통과" : "검증 기록 없음"}</span>
-      <div class="item-actions"><button type="button">열기</button><button type="button">Finder</button></div>`;
+      <div class="output-status"><span class="${item.ok ? "verified" : "unverified"}">${item.ok ? `✓ 자동 검증 ${item.passed || ""}/${item.total || ""}`.replace(/\s*\/$/, "") : "검증 기록 없음"}</span><span class="${approved ? "reviewed" : "review-pending"}">${approved ? "✓ 청취 승인됨" : "○ 청취 확인 필요"}</span></div>
+      <div class="item-actions"><button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "승인 취소" : "청취 승인"}</button><button class="open-button" type="button">열기</button><button type="button">Finder</button></div>`;
     row.querySelector("strong").textContent = item.name;
-    row.querySelector("small").textContent = `${formatDuration(item.durationMs)} · ${formatDate(item.updatedAt)}`;
+    row.querySelector("small").textContent = `${outputLabel(item)} · ${formatDuration(item.durationMs)} · ${formatDate(item.updatedAt)}`;
     const buttons = row.querySelectorAll("button");
-    const target = { root: item.root, name: item.name, day: item.day };
-    buttons[0].addEventListener("click", () => api.open(target));
-    buttons[1].addEventListener("click", () => api.reveal(target));
+    const target = { root: item.root, name: item.name, day: item.day, store: item.store };
+    buttons[0].addEventListener("click", async () => {
+      try {
+        const review = await api.setOutputReview(target, approved ? "pending" : "approved");
+        item.review = review;
+        renderOutputSummary();
+        renderOutputs();
+        showToast(approved ? "청취 승인을 취소했습니다." : "사람 청취 승인으로 표시했습니다.");
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+    });
+    buttons[1].addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
+    buttons[2].addEventListener("click", () => api.reveal(target).catch((error) => showToast(error.message, "error")));
     return row;
   }));
+}
+
+async function loadOutputs() {
+  const refresh = $("#refresh-outputs");
+  refresh.disabled = true;
+  refresh.textContent = "불러오는 중";
+  try {
+    outputItems = await api.listOutputs();
+    renderOutputSummary();
+    renderOutputs();
+  } catch (error) {
+    $("#output-list").innerHTML = '<div class="empty-output">결과를 불러오지 못했습니다.</div>';
+    showToast(error.message, "error");
+  } finally {
+    refresh.disabled = false;
+    refresh.textContent = "새로고침";
+  }
 }
 
 function renderSettings(settings) {
@@ -558,9 +659,38 @@ function renderSettings(settings) {
     const input = $(`#path-${key}`);
     if (input) input.value = value;
   }
+  $("#output-root-name").textContent = fileName(settings.paths?.outputRoot || "output");
   updateVoicePageMeta();
   updateProductionBrief();
   updateVoiceDesign();
+  updateProfileGuard();
+}
+
+function updateProfileGuard() {
+  const modelId = $("#global-model").value;
+  const adapterId = $("#global-adapter").value;
+  const adapter = appSettings?.adapters?.find((item) => item.id === adapterId);
+  const scale = Number($("#global-scale").value);
+  const approved = modelId === "qwen3-tts" && adapter?.label === "jaeho-ko-r16-v1" && Math.abs(scale - 0.6) < 0.001;
+  const guard = $("#profile-guard");
+  guard.classList.toggle("approved", approved);
+  guard.classList.toggle("experimental", !approved);
+  guard.querySelector(":scope > span").textContent = approved ? "✓" : "!";
+  $("#profile-guard-title").textContent = approved ? "승인된 제작 음성" : "실험 설정 사용 중";
+  $("#profile-guard-copy").textContent = approved
+    ? "Qwen3-TTS · jaeho-ko-r16-v1 · 0.60"
+    : "장시간 강의에 쓰기 전 짧은 샘플을 들어 확인해 주세요.";
+}
+
+function restoreProductionProfile() {
+  const adapter = appSettings?.adapters?.find((item) => item.label === "jaeho-ko-r16-v1");
+  $("#global-model").value = "qwen3-tts";
+  $("#global-adapter").disabled = false;
+  if (adapter) $("#global-adapter").value = adapter.id;
+  $("#global-scale").value = "0.6";
+  $("#global-scale-field").classList.toggle("hidden", !adapter);
+  paintGlobalRange();
+  updateProfileGuard();
 }
 
 async function openModelSettings() {
@@ -652,6 +782,7 @@ async function initialize() {
   renderSettings(settings);
   catalogPages = status.catalog?.pages || [];
   totalPages = status.catalog?.totalPages || 715;
+  populateChapterJump();
   for (const selector of ["#start-page", "#end-page"]) {
     $(selector).max = String(totalPages);
   }
@@ -706,6 +837,20 @@ $("#start-page").addEventListener("input", () => {
   updatePageScope();
 });
 $("#end-page").addEventListener("input", updatePageScope);
+$("#previous-page").addEventListener("click", () => moveToPage(Number($("#start-page").value) - 1));
+$("#next-page").addEventListener("click", () => moveToPage(Number($("#start-page").value) + 1));
+$("#chapter-jump").addEventListener("change", () => {
+  const chapter = catalogChapters.find((item) => item.id === $("#chapter-jump").value);
+  if (chapter) moveToPage(chapter.start);
+});
+$("#select-chapter-range").addEventListener("click", () => {
+  const chapter = catalogChapters.find((item) => item.id === $("#chapter-jump").value);
+  if (!chapter) return;
+  $("#start-page").value = String(chapter.start);
+  $("#end-page").value = String(chapter.end);
+  setProductionMode("bundle");
+  showToast(`${chapter.id.toUpperCase()} 전체 ${chapter.pageCount}페이지를 선택했습니다.`);
+});
 $("#deliverable").addEventListener("change", (event) => {
   $("#burn-captions").disabled = event.target.value !== "video";
   updateProductionBrief();
@@ -750,6 +895,12 @@ $("#cancel-button").addEventListener("click", () => api.cancel());
 $("#open-latest").addEventListener("click", () => latestTarget && api.open(latestTarget));
 $("#reveal-latest").addEventListener("click", () => latestTarget && api.reveal(latestTarget));
 $("#refresh-outputs").addEventListener("click", loadOutputs);
+$("#result-search").addEventListener("input", renderOutputs);
+$$("#result-filters button").forEach((button) => button.addEventListener("click", () => {
+  outputFilter = button.dataset.outputFilter;
+  $$("#result-filters button").forEach((item) => item.classList.toggle("selected", item === button));
+  renderOutputs();
+}));
 $$("#edit-operation-tabs button").forEach((button) => button.addEventListener("click", () => setEditOperation(button.dataset.operation)));
 $$("#voice-source-tabs button").forEach((button) => button.addEventListener("click", () => setVoiceSource(button.dataset.source)));
 $$("#trim-mode-tabs button").forEach((button) => button.addEventListener("click", () => setTrimMode(button.dataset.trimMode)));
@@ -833,13 +984,19 @@ $("#open-model-settings").addEventListener("click", openModelSettings);
 $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => $(`#${button.dataset.closeDialog}`).close()));
 $("#global-adapter").addEventListener("change", () => {
   $("#global-scale-field").classList.toggle("hidden", $("#global-adapter").value === "none");
+  updateProfileGuard();
 });
 $("#global-model").addEventListener("change", () => {
   const qwen = $("#global-model").value === "qwen3-tts";
   $("#global-adapter").disabled = !qwen;
   $("#global-scale-field").classList.toggle("hidden", !qwen || $("#global-adapter").value === "none");
+  updateProfileGuard();
 });
-$("#global-scale").addEventListener("input", paintGlobalRange);
+$("#global-scale").addEventListener("input", () => {
+  paintGlobalRange();
+  updateProfileGuard();
+});
+$("#restore-production-profile").addEventListener("click", restoreProductionProfile);
 $("#save-model-settings").addEventListener("click", async () => {
   const settings = await api.saveSettings({
     modelId: $("#global-model").value,
@@ -855,7 +1012,10 @@ $("#save-model-settings").addEventListener("click", async () => {
 });
 $$('[data-pick-path]').forEach((button) => button.addEventListener("click", async () => {
   const value = await api.pickLocation(button.dataset.pickPath);
-  if (value) $(`#path-${button.dataset.pickPath}`).value = value;
+  if (value) {
+    $(`#path-${button.dataset.pickPath}`).value = value;
+    if (button.dataset.pickPath === "outputRoot") $("#output-root-name").textContent = fileName(value);
+  }
 }));
 $("#open-finetune-panel").addEventListener("click", () => $("#finetune-panel").classList.toggle("hidden"));
 $("#start-finetune").addEventListener("click", async () => {
@@ -918,6 +1078,25 @@ $$('[data-view]').forEach((button) => button.addEventListener("click", async () 
   if (view === "results") await loadOutputs();
   window.scrollTo({ top: 0, behavior: "instant" });
 }));
+
+document.addEventListener("keydown", (event) => {
+  if (!event.metaKey || event.altKey || event.ctrlKey) return;
+  if (["1", "2", "3", "4"].includes(event.key)) {
+    event.preventDefault();
+    const view = ["new", "voice", "edit", "results"][Number(event.key) - 1];
+    $(`[data-view='${view}']`)?.click();
+  } else if (event.key === ",") {
+    event.preventDefault();
+    openModelSettings();
+  } else if (event.key === "Enter" && !document.querySelector("dialog[open]")) {
+    const active = $(".nav-item.active")?.dataset.view;
+    const form = { new: "#job-form", voice: "#text-voice-form", edit: "#edit-form" }[active];
+    if (form) {
+      event.preventDefault();
+      $(form).requestSubmit();
+    }
+  }
+});
 
 initialize().catch((error) => {
   $("#runtime-label").textContent = "환경 확인 실패";

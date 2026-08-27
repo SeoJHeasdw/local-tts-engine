@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("ttsStudio", {
   selectTextVoice: (token) => ipcRenderer.invoke("studio:select-text-voice", token),
   startFinetune: (options) => ipcRenderer.invoke("studio:start-finetune", options),
   listOutputs: () => ipcRenderer.invoke("studio:list-outputs"),
+  setOutputReview: (target, status) => ipcRenderer.invoke("studio:set-output-review", target, status),
   pickVideos: (multiple) => ipcRenderer.invoke("studio:pick-videos", Boolean(multiple)),
   pickAudio: () => ipcRenderer.invoke("studio:pick-audio"),
   registerDroppedFiles: (files, kind) => {

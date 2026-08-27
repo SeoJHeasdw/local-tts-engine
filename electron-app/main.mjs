@@ -11,17 +11,18 @@ import {
   normalizeEditName,
   normalizeOptions,
   normalizeVoiceText,
+  outputPathsForRoot,
   parseTimecode,
   presetFromManifest,
   providerForOptions,
   summarizeChecks,
   timeRangeForPages,
+  withOutputReview,
 } from "./pipeline-utils.mjs";
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(APP_DIR);
 const RENDERER_DIR = path.join(APP_DIR, "renderer");
-const EDIT_ROOT = path.join(ROOT, "artifacts/video-edits");
 const APP_SETTINGS_PATH = path.join(ROOT, "artifacts/app-settings.json");
 const FINETUNE_RUN_ROOT = path.join(ROOT, "artifacts/finetune-runs");
 const FINETUNE_TRAIN_JSONL = path.join(ROOT, "artifacts/finetune-datasets/jaeho-ko-v1/official/train.jsonl");
@@ -34,12 +35,16 @@ const FFMPEG = "/opt/homebrew/bin/ffmpeg";
 const DEFAULT_STUDIO_PATHS = Object.freeze({
   sourceProjectRoot: "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent",
   voiceLibraryRoot: path.join(ROOT, "data/private/voice"),
+  outputRoot: path.join(ROOT, "output"),
+  referenceAudioPath: path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.wav"),
+  referenceTextPath: path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.txt"),
+});
+const LEGACY_OUTPUT_PATHS = Object.freeze({
   ttsOutputRoot: path.join(ROOT, "artifacts/course-pilots"),
   voiceOutputRoot: path.join(ROOT, "artifacts/voice-candidates"),
   captionOutputRoot: path.join(ROOT, "artifacts/production/captions"),
   videoOutputRoot: path.join(ROOT, "artifacts/production/videos"),
-  referenceAudioPath: path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.wav"),
-  referenceTextPath: path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.txt"),
+  editOutputRoot: path.join(ROOT, "artifacts/video-edits"),
 });
 
 let mainWindow = null;
@@ -49,12 +54,13 @@ let catalogCacheRoot = null;
 const selectedFiles = new Map();
 
 function normalizeStudioPaths(raw = {}) {
-  return Object.fromEntries(
+  const inputs = Object.fromEntries(
     Object.entries(DEFAULT_STUDIO_PATHS).map(([key, fallback]) => {
       const value = String(raw?.[key] || fallback).trim();
       return [key, path.resolve(value || fallback)];
     }),
   );
+  return { ...inputs, ...outputPathsForRoot(inputs.outputRoot) };
 }
 
 function runtimePaths(raw = {}) {
@@ -118,7 +124,7 @@ async function saveAppSettings(raw = {}) {
     voiceParallelism: Math.min(2, Math.max(1, Math.round(Number(raw.voiceParallelism ?? current.voiceParallelism)))),
     paths: normalizeStudioPaths(raw.paths || current.paths),
   };
-  for (const key of ["voiceLibraryRoot", "ttsOutputRoot", "voiceOutputRoot", "captionOutputRoot", "videoOutputRoot"]) {
+  for (const key of ["voiceLibraryRoot", "outputRoot", "ttsOutputRoot", "voiceOutputRoot", "captionOutputRoot", "videoOutputRoot", "editOutputRoot"]) {
     await fs.mkdir(settings.paths[key], { recursive: true });
   }
   const studio = runtimePaths(settings.paths);
@@ -131,7 +137,12 @@ async function saveAppSettings(raw = {}) {
     if (!(await safeStat(requiredPath))) throw new Error(`${label} 경로를 찾지 못했습니다: ${requiredPath}`);
   }
   await fs.mkdir(path.dirname(APP_SETTINGS_PATH), { recursive: true });
-  await fs.writeFile(APP_SETTINGS_PATH, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+  const storedSettings = {
+    ...settings,
+    paths: Object.fromEntries(["sourceProjectRoot", "voiceLibraryRoot", "outputRoot", "referenceAudioPath", "referenceTextPath"]
+      .map((key) => [key, settings.paths[key]])),
+  };
+  await fs.writeFile(APP_SETTINGS_PATH, `${JSON.stringify(storedSettings, null, 2)}\n`, "utf8");
   catalogCache = null;
   catalogCacheRoot = null;
   return { ...settings, adapters: current.adapters };
@@ -870,7 +881,8 @@ async function runVoiceBatchEdit(options, outputDir) {
 
 async function runVideoEdit(options) {
   const job = activeJob;
-  const outputDir = path.join(EDIT_ROOT, dateFolder(), options.name);
+  const studio = runtimePaths(options.paths);
+  const outputDir = path.join(studio.editOutputRoot, dateFolder(), options.name);
   await fs.mkdir(outputDir, { recursive: true });
   if (options.operation === "voice-candidates") {
     const candidates = await runVoiceCandidates(options, outputDir);
@@ -930,7 +942,7 @@ async function listDirectories(root) {
   return entries.filter((item) => item.isDirectory() && /^[a-z0-9][a-z0-9-]*$/.test(item.name));
 }
 
-async function listOutputs(studio) {
+async function listOutputs(studio, { includeLegacy = true, storeId = "current" } = {}) {
   const result = [];
   for (const entry of await listDirectories(studio.captionOutputRoot)) {
     const dir = path.join(studio.captionOutputRoot, entry.name);
@@ -942,13 +954,17 @@ async function listOutputs(studio) {
       || await findVideo(dir, entry.name);
     if (!videoPath && !report) continue;
     result.push({
-      key: `render:${entry.name}`,
+      key: `${storeId}:render:${entry.name}`,
+      store: storeId,
       root: "render",
       name: entry.name,
       updatedAt: stat?.mtime.toISOString(),
       durationMs: report?.durationMs || null,
       video: Boolean(videoPath),
       ok: report?.summary?.ok ?? null,
+      passed: report?.summary?.passed ?? null,
+      total: report?.summary?.total ?? null,
+      review: report?.review || null,
       path: videoPath || dir,
     });
   }
@@ -961,7 +977,8 @@ async function listOutputs(studio) {
       if (!report || report.renderDir) continue;
       const stat = await safeStat(dir);
       result.push({
-        key: `pilot:${dayEntry.name}:${entry.name}`,
+        key: `${storeId}:pilot:${dayEntry.name}:${entry.name}`,
+        store: storeId,
         root: "pilot",
         day: dayEntry.name,
         name: entry.name,
@@ -969,6 +986,9 @@ async function listOutputs(studio) {
         durationMs: report.durationMs || null,
         video: false,
         ok: report.summary?.ok ?? null,
+        passed: report.summary?.passed ?? null,
+        total: report.summary?.total ?? null,
+        review: report.review || null,
         path: report.audioPath || dir,
       });
     }
@@ -982,7 +1002,8 @@ async function listOutputs(studio) {
       if (!report?.audioPath) continue;
       const stat = await safeStat(dir);
       result.push({
-        key: `voice:${dayEntry.name}:${entry.name}`,
+        key: `${storeId}:voice:${dayEntry.name}:${entry.name}`,
+        store: storeId,
         root: "voice",
         day: dayEntry.name,
         name: entry.name,
@@ -991,20 +1012,24 @@ async function listOutputs(studio) {
         durationMs: report.durationMs || null,
         video: false,
         ok: report.summary?.ok ?? null,
+        passed: report.summary?.passed ?? null,
+        total: report.summary?.total ?? null,
+        review: report.review || null,
         path: report.audioPath,
       });
     }
   }
-  const editDays = await fs.readdir(EDIT_ROOT, { withFileTypes: true }).catch(() => []);
+  const editDays = await fs.readdir(studio.editOutputRoot, { withFileTypes: true }).catch(() => []);
   for (const dayEntry of editDays.filter((item) => item.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(item.name))) {
-    const dayRoot = path.join(EDIT_ROOT, dayEntry.name);
+    const dayRoot = path.join(studio.editOutputRoot, dayEntry.name);
     for (const entry of await listDirectories(dayRoot)) {
       const dir = path.join(dayRoot, entry.name);
       const report = await fs.readFile(path.join(dir, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
       if (!report) continue;
       const stat = await safeStat(dir);
       result.push({
-        key: `edit:${dayEntry.name}:${entry.name}`,
+        key: `${storeId}:edit:${dayEntry.name}:${entry.name}`,
+        store: storeId,
         root: "edit",
         day: dayEntry.name,
         name: entry.name,
@@ -1013,34 +1038,61 @@ async function listOutputs(studio) {
         durationMs: report.durationMs || null,
         video: true,
         ok: report.summary?.ok ?? null,
+        passed: report.summary?.passed ?? null,
+        total: report.summary?.total ?? null,
+        review: report.review || null,
         path: report.videoPath || dir,
       });
     }
   }
+  if (includeLegacy) {
+    const currentKey = [studio.ttsOutputRoot, studio.voiceOutputRoot, studio.captionOutputRoot, studio.videoOutputRoot, studio.editOutputRoot].join("\n");
+    const legacyKey = Object.values(LEGACY_OUTPUT_PATHS).join("\n");
+    if (currentKey !== legacyKey) {
+      result.push(...await listOutputs({ ...studio, ...LEGACY_OUTPUT_PATHS }, { includeLegacy: false, storeId: "legacy" }));
+    }
+  }
   return result.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, 30);
+}
+
+function outputStoreForTarget(target, studio) {
+  return target?.store === "legacy" ? { ...studio, ...LEGACY_OUTPUT_PATHS } : studio;
 }
 
 function resolveOutputTarget(target, studio) {
   if (!target || !["render", "pilot", "edit", "voice"].includes(target.root) || !/^[a-z0-9][a-z0-9-]*$/.test(target.name || "")) {
     throw new Error("열 수 없는 결과입니다.");
   }
-  let root = studio.captionOutputRoot;
+  const store = outputStoreForTarget(target, studio);
+  let root = store.captionOutputRoot;
   let directory = path.join(root, target.name);
   if (target.root === "pilot") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(target.day || "")) throw new Error("결과 날짜가 올바르지 않습니다.");
-    root = path.join(studio.ttsOutputRoot, target.day);
+    root = path.join(store.ttsOutputRoot, target.day);
     directory = path.join(root, target.name);
   } else if (target.root === "edit") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(target.day || "")) throw new Error("결과 날짜가 올바르지 않습니다.");
-    root = path.join(EDIT_ROOT, target.day);
+    root = path.join(store.editOutputRoot, target.day);
     directory = path.join(root, target.name);
   } else if (target.root === "voice") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(target.day || "")) throw new Error("결과 날짜가 올바르지 않습니다.");
-    root = path.join(studio.voiceOutputRoot, target.day);
+    root = path.join(store.voiceOutputRoot, target.day);
     directory = path.join(root, target.name);
   }
   if (!isInside(root, directory)) throw new Error("결과 경로가 올바르지 않습니다.");
   return directory;
+}
+
+async function setOutputReview(target, status, studio) {
+  const directory = resolveOutputTarget(target, studio);
+  const reportPath = path.join(directory, "validation-report.json");
+  const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
+  if (!report) throw new Error("자동 검증 기록이 있는 결과만 청취 승인할 수 있습니다.");
+  const reviewed = withOutputReview(report, status);
+  const temporary = `${reportPath}.review-${process.pid}.tmp`;
+  await fs.writeFile(temporary, `${JSON.stringify(reviewed, null, 2)}\n`, "utf8");
+  await fs.rename(temporary, reportPath);
+  return reviewed.review;
 }
 
 function registerIpc() {
@@ -1083,23 +1135,31 @@ function registerIpc() {
     return listOutputs(runtimePaths(settings.paths));
   });
 
+  ipcMain.handle("studio:set-output-review", async (event, target, status) => {
+    guard(event);
+    const settings = await readAppSettings();
+    return setOutputReview(target, status, runtimePaths(settings.paths));
+  });
+
   ipcMain.handle("studio:pick-location", async (event, key) => {
     guard(event);
     const directoryKeys = new Set([
       "sourceProjectRoot",
       "voiceLibraryRoot",
-      "ttsOutputRoot",
-      "voiceOutputRoot",
-      "captionOutputRoot",
-      "videoOutputRoot",
+      "outputRoot",
     ]);
     const fileOptions = {
       referenceAudioPath: { title: "참조 음성 선택", extensions: ["wav", "m4a", "flac"] },
       referenceTextPath: { title: "참조 전사문 선택", extensions: ["txt", "md"] },
     };
+    const directoryTitles = {
+      sourceProjectRoot: "강의 소스 선택",
+      voiceLibraryRoot: "내 목소리 원본 선택",
+      outputRoot: "결과물 폴더 선택",
+    };
     if (!directoryKeys.has(key) && !fileOptions[key]) throw new Error("지원하지 않는 경로 설정입니다.");
     const result = await dialog.showOpenDialog(mainWindow, directoryKeys.has(key)
-      ? { title: "폴더 선택", properties: ["openDirectory", "createDirectory"] }
+      ? { title: directoryTitles[key] || "폴더 선택", properties: ["openDirectory", "createDirectory"] }
       : {
           title: fileOptions[key].title,
           properties: ["openFile"],
@@ -1327,9 +1387,10 @@ function registerIpc() {
     guard(event);
     const settings = await readAppSettings();
     const studio = runtimePaths(settings.paths);
+    const store = outputStoreForTarget(target, studio);
     const directory = resolveOutputTarget(target, studio);
     let file = target.root === "render"
-      ? await findVideo(path.join(studio.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
+      ? await findVideo(path.join(store.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
       : target.root === "edit"
         ? path.join(directory, `${target.name}.mp4`)
         : target.root === "voice"
@@ -1347,9 +1408,10 @@ function registerIpc() {
     guard(event);
     const settings = await readAppSettings();
     const studio = runtimePaths(settings.paths);
+    const store = outputStoreForTarget(target, studio);
     const directory = resolveOutputTarget(target, studio);
     let file = target.root === "render"
-      ? await findVideo(path.join(studio.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
+      ? await findVideo(path.join(store.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
       : target.root === "edit"
         ? path.join(directory, `${target.name}.mp4`)
         : target.root === "voice"

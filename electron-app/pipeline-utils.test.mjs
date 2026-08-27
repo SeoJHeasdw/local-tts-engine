@@ -7,10 +7,12 @@ import {
   mapWithConcurrency,
   normalizeVoiceText,
   normalizeOptions,
+  outputPathsForRoot,
   parseTimecode,
   presetFromManifest,
   summarizeChecks,
   timeRangeForPages,
+  withOutputReview,
 } from "./pipeline-utils.mjs";
 
 test("기본 작업은 제작 LoRA v1 0.6과 30초 미리보기다", () => {
@@ -49,6 +51,17 @@ test("작업 이름과 경로를 제한한다", () => {
   assert.throws(() => normalizeOptions({ name: "../escape" }));
   assert.equal(isInside("/tmp/root", "/tmp/root/item"), true);
   assert.equal(isInside("/tmp/root", "/tmp/other"), false);
+});
+
+test("결과물 폴더 하나에서 내부 출력 경로를 만든다", () => {
+  assert.deepEqual(outputPathsForRoot("/tmp/studio-output"), {
+    outputRoot: "/tmp/studio-output",
+    ttsOutputRoot: "/tmp/studio-output/tts",
+    voiceOutputRoot: "/tmp/studio-output/voices",
+    captionOutputRoot: "/tmp/studio-output/projects",
+    videoOutputRoot: "/tmp/studio-output/videos",
+    editOutputRoot: "/tmp/studio-output/edits",
+  });
 });
 
 test("작업 이름과 검증 요약을 결정적으로 만든다", () => {
@@ -96,4 +109,12 @@ test("텍스트 목소리는 줄바꿈 호흡을 보존하고 줄 안의 공백�
     normalizeVoiceText("  첫 문장  입니다.\r\n\r\n 둘째 문장입니다.  "),
     "첫 문장 입니다.\n둘째 문장입니다.",
   );
+});
+
+test("자동 검증과 별도로 사람 청취 승인 상태를 기록한다", () => {
+  const now = new Date("2026-08-27T01:02:03.000Z");
+  const reviewed = withOutputReview({ name: "lesson-a", summary: { ok: true } }, "approved", now);
+  assert.deepEqual(reviewed.review, { status: "approved", updatedAt: "2026-08-27T01:02:03.000Z" });
+  assert.equal(reviewed.summary.ok, true);
+  assert.throws(() => withOutputReview({}, "rejected", now));
 });

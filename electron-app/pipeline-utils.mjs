@@ -92,6 +92,18 @@ export function isInside(root, candidate) {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
 }
 
+export function outputPathsForRoot(outputRoot) {
+  const root = path.resolve(String(outputRoot || "output"));
+  return {
+    outputRoot: root,
+    ttsOutputRoot: path.join(root, "tts"),
+    voiceOutputRoot: path.join(root, "voices"),
+    captionOutputRoot: path.join(root, "projects"),
+    videoOutputRoot: path.join(root, "videos"),
+    editOutputRoot: path.join(root, "edits"),
+  };
+}
+
 export function summarizeChecks(checks) {
   const failed = checks.filter((item) => !item.ok);
   return {
@@ -99,6 +111,22 @@ export function summarizeChecks(checks) {
     passed: checks.length - failed.length,
     total: checks.length,
     failed: failed.map((item) => item.label),
+  };
+}
+
+export function withOutputReview(report, status, now = new Date()) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    throw new Error("청취 검수 기록을 저장할 결과가 없습니다.");
+  }
+  if (!["approved", "pending"].includes(status)) {
+    throw new Error("지원하지 않는 청취 검수 상태입니다.");
+  }
+  return {
+    ...report,
+    review: {
+      status,
+      updatedAt: now.toISOString(),
+    },
   };
 }
 

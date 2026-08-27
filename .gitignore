@@ -26,6 +26,7 @@ huggingface/
 data/raw/
 data/private/
 artifacts/
+output/
 outputs/
 cache/
 *.wav
