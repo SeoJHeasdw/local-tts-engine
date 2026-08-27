@@ -18,8 +18,9 @@ const stageNames = {
   verify: "최종 결과 검증 중",
 };
 const orderedStages = ["voice", "captions", "capture", "verify"];
-let productionMode = "preview";
+let productionMode = "lesson";
 let catalogPages = [];
+let catalogLessons = [];
 let totalPages = 715;
 let latestTarget = null;
 let latestEditTarget = null;
@@ -55,7 +56,10 @@ function dateStamp(date = new Date()) {
 
 function suggestedName() {
   const start = Number($("#start-page")?.value || 1);
-  const suffix = productionMode === "bundle"
+  const lesson = selectedLesson();
+  const suffix = productionMode === "lesson" && lesson
+    ? lesson.id
+    : productionMode === "bundle"
     ? `p${start}-p${Number($("#end-page")?.value || start)}`
     : `preview-p${start}`;
   return `studio-${dateStamp()}-${suffix}`;
@@ -69,6 +73,37 @@ function pageMeta(pageNumber) {
   const page = catalogPages[Number(pageNumber) - 1];
   if (!page) return "페이지 범위를 확인해 주세요";
   return `${page.chapter.toUpperCase()} · ${page.slideId} · ${page.firstStep}~${page.lastStep}스텝`;
+}
+
+function selectedLesson() {
+  return catalogLessons.find((lesson) => lesson.id === $("#lesson-select")?.value) || catalogLessons[0] || null;
+}
+
+function populateLessons() {
+  const select = $("#lesson-select");
+  select.replaceChildren(...catalogLessons.map((lesson) => {
+    const option = document.createElement("option");
+    option.value = lesson.id;
+    option.textContent = lesson.title;
+    return option;
+  }));
+  if (catalogLessons.length) select.value = catalogLessons[0].id;
+  if (catalogLessons.length) applySelectedLesson();
+  else setProductionMode("preview");
+}
+
+function applySelectedLesson() {
+  const lesson = selectedLesson();
+  if (!lesson) {
+    $("#lesson-title").textContent = "등록된 레슨이 없습니다.";
+    $("#lesson-meta").textContent = "페이지 직접 선택을 사용해 주세요.";
+    return;
+  }
+  $("#start-page").value = String(lesson.startPage);
+  $("#end-page").value = String(lesson.endPage);
+  $("#lesson-title").textContent = lesson.title;
+  $("#lesson-meta").textContent = `${lesson.pageCount}페이지 · ${lesson.stepCount}스텝`;
+  updatePageScope();
 }
 
 function chapterForPage(pageNumber) {
@@ -109,10 +144,11 @@ function fileName(value) {
 }
 
 function voiceProfileLabel() {
-  if (appSettings?.modelId === "chatterbox-v3") return "Chatterbox V3";
-  if (appSettings?.adapterId === "none") return "Qwen3 기본 복제";
+  if (appSettings?.modelId === "chatterbox-v3") return "실험 목소리";
+  if (appSettings?.adapterId === "none") return "기본 복제 목소리";
   const adapter = appSettings?.adapters?.find((item) => item.id === appSettings.adapterId);
-  return `${adapter?.label || "Jaeho LoRA"} · ${Number(appSettings?.adapterScale || 0.6).toFixed(2)}`;
+  const approved = adapter?.label === "jaeho-ko-r16-v1" && Math.abs(Number(appSettings?.adapterScale || 0.6) - 0.6) < 0.001;
+  return approved ? "내 목소리 · 승인됨" : "내 목소리 · 실험 설정";
 }
 
 function updateProductionBrief() {
@@ -120,25 +156,25 @@ function updateProductionBrief() {
   const end = Math.max(start, Number($("#end-page")?.value || start));
   const deliverable = $("#deliverable")?.value || "video";
   const labels = {
-    video: ["완성 영상", $("#burn-captions")?.checked ? "화면 자막 + SRT/VTT" : "무자막 영상 + SRT/VTT"],
-    captions: ["음성 + 자막", "SRT/VTT + 타임라인"],
-    audio: ["음성 파일", "48kHz mono WAV"],
+    video: ["완성 영상", $("#burn-captions")?.checked ? "자막 포함" : "자막 없음"],
+    captions: ["음성과 자막", "영상은 만들지 않음"],
+    audio: ["음성만", "영상은 만들지 않음"],
   };
-  const outputPathKey = deliverable === "video"
-    ? "videoOutputRoot"
-    : deliverable === "captions"
-      ? "captionOutputRoot"
-      : "ttsOutputRoot";
-  $("#brief-scope").textContent = productionMode === "bundle"
-    ? `페이지 묶음 · ${start}–${end}`
-    : `30초 미리보기 · ${start}페이지`;
-  $("#brief-page").textContent = productionMode === "bundle"
-    ? `${pageMeta(start)} → ${pageMeta(end)}`
-    : pageMeta(start);
+  const lesson = selectedLesson();
+  $("#brief-scope").textContent = productionMode === "lesson" && lesson
+    ? lesson.title
+    : productionMode === "bundle"
+      ? `${start}–${end}페이지`
+      : `${start}페이지부터 30초`;
+  $("#brief-page").textContent = productionMode === "lesson" && lesson
+    ? `${lesson.pageCount}페이지 · ${lesson.stepCount}스텝`
+    : productionMode === "bundle"
+      ? `${pageMeta(start)} → ${pageMeta(end)}`
+      : pageMeta(start);
   $("#brief-voice").textContent = voiceProfileLabel();
   $("#brief-output").textContent = labels[deliverable][0];
   $("#brief-caption").textContent = labels[deliverable][1];
-  $("#brief-destination").textContent = appSettings?.paths?.[outputPathKey] || "설정에서 경로를 불러오는 중입니다.";
+  $("#advanced-output-summary").textContent = `${labels[deliverable][0]}${deliverable === "video" && $("#burn-captions")?.checked ? " · 자막 포함" : ""}`;
 }
 
 function textBreathLines(value) {
@@ -153,40 +189,20 @@ function updateVoiceDesign() {
   const text = $("#text-voice-input")?.value || "";
   const lines = textBreathLines(text);
   const candidateCount = Math.min(8, Math.max(2, Number($("#text-voice-count")?.value || 3)));
-  const parallelism = Math.min(candidateCount, Number(appSettings?.voiceParallelism || 2));
   const foreignTerms = [...new Set(text.match(/[A-Za-z][A-Za-z0-9.-]*/g) || [])];
-  $("#voice-metric-chars").textContent = new Intl.NumberFormat("ko-KR").format(text.trim().length);
-  $("#voice-metric-breaths").textContent = String(lines.length);
-  $("#voice-metric-candidates").textContent = String(candidateCount);
   $("#voice-design-profile").textContent = voiceProfileLabel();
-  $("#voice-generation-plan").textContent = `후보 ${candidateCount}개 · ${parallelism}개씩 병렬`;
-  $("#voice-foreign-terms").textContent = foreignTerms.length
-    ? `${foreignTerms.slice(0, 3).join(", ")}${foreignTerms.length > 3 ? ` 외 ${foreignTerms.length - 3}개` : ""}`
-    : "감지되지 않음";
-
-  const list = $("#voice-breath-list");
+  $("#voice-generation-plan").textContent = `후보 ${candidateCount}개`;
+  $("#voice-breath-summary").textContent = lines.length > 1 ? `${lines.length}개 호흡` : "줄바꿈 없음";
+  $("#voice-term-summary").textContent = foreignTerms.length ? `영문 용어 ${foreignTerms.length}개` : "영문 용어 없음";
   if (!lines.length) {
-    list.innerHTML = '<li class="empty-breath">텍스트를 입력하면 발화 구조가 여기에 나타납니다.</li>';
-    $("#voice-design-advice").textContent = "문장마다 줄을 나누면 의도한 쉼과 리듬을 더 안정적으로 전달할 수 있습니다.";
+    $("#voice-design-advice").textContent = "문장을 입력하면 읽기 편한 구조인지 확인해 드립니다.";
     return;
   }
-  const visibleLines = lines.slice(0, 6);
-  list.replaceChildren(...visibleLines.map((line) => {
-    const item = document.createElement("li");
-    item.textContent = line;
-    return item;
-  }));
-  if (lines.length > visibleLines.length) {
-    const more = document.createElement("li");
-    more.textContent = `나머지 ${lines.length - visibleLines.length}개 호흡 단위`;
-    more.className = "breath-more";
-    list.append(more);
-  }
   $("#voice-design-advice").textContent = lines.length === 1 && text.length > 45
-    ? "문장이 깁니다. 의도한 쉼표나 문장 경계에서 줄을 나누면 후보 간 편차를 줄일 수 있습니다."
+    ? "문장이 깁니다. 자연스럽게 쉬고 싶은 지점에서 줄을 나눠 주세요."
     : foreignTerms.length
-      ? "영문 용어가 감지됐습니다. 생성 후 발음을 확인하고 필요하면 발음 사전에 등록하세요."
-      : `${lines.length}개 줄바꿈 호흡을 유지해 후보를 생성합니다.`;
+      ? "영문 용어는 후보를 들어보고 발음을 확인해 주세요."
+      : lines.length > 1 ? "줄바꿈을 쉼의 기준으로 유지합니다." : "읽기 좋은 길이입니다.";
 }
 
 function updatePageScope() {
@@ -194,23 +210,29 @@ function updatePageScope() {
   const end = Math.max(start, Number($("#end-page").value || start));
   $("#start-page-meta").textContent = pageMeta(start);
   $("#end-page-meta").textContent = `${pageMeta(end)} · 마지막 스텝까지`;
-  $("#scope-explanation").textContent = productionMode === "preview"
-    ? `${start}페이지의 0스텝부터 약 30초 분량을 만듭니다.`
-    : `${start}페이지의 0스텝부터 ${end}페이지의 마지막 스텝까지 빠짐없이 만듭니다.`;
+  const lesson = selectedLesson();
+  $("#scope-explanation").textContent = productionMode === "lesson" && lesson
+    ? `${lesson.title} 전체를 만듭니다.`
+    : productionMode === "preview"
+      ? `${start}페이지부터 약 30초 분량을 만듭니다.`
+      : `${start}페이지부터 ${end}페이지까지 만듭니다.`;
   $("#time-note").textContent = productionMode === "preview"
-    ? "30초 음성을 만든 뒤 실제 30초 촬영이 이어집니다."
-    : "선택한 범위를 전부 생성한 뒤 실제 재생 길이만큼 촬영합니다.";
+    ? "짧게 확인한 뒤 필요한 범위로 확장하세요."
+    : "완료되면 결과를 바로 열어 확인할 수 있습니다.";
   $("#job-name").value = suggestedName();
   updateCourseNavigator(start, end);
   updateProductionBrief();
 }
 
 function setProductionMode(mode) {
-  productionMode = mode === "bundle" ? "bundle" : "preview";
+  productionMode = ["lesson", "preview", "bundle"].includes(mode) ? mode : "lesson";
   $$("#mode-options button").forEach((button) => button.classList.toggle("selected", button.dataset.mode === productionMode));
+  $("#lesson-panel").classList.toggle("hidden", productionMode !== "lesson");
+  $("#manual-scope").classList.toggle("hidden", productionMode === "lesson");
   $("#range-arrow").classList.toggle("hidden", productionMode !== "bundle");
   $("#end-page-group").classList.toggle("hidden", productionMode !== "bundle");
-  updatePageScope();
+  if (productionMode === "lesson") applySelectedLesson();
+  else updatePageScope();
 }
 
 function paintGlobalRange() {
@@ -226,7 +248,7 @@ function showJobView(view) {
   $("#idle-hero").classList.toggle("hidden", view !== "idle");
   $("#active-progress").classList.toggle("hidden", view !== "active");
   $("#complete-panel").classList.toggle("hidden", view !== "complete");
-  $("#job-panel-title").textContent = { idle: "제작 브리프", active: "제작 진행", complete: "검수 완료" }[view] || "제작 브리프";
+  $("#job-panel-title").textContent = { idle: "선택한 작업", active: "제작 진행", complete: "검수 완료" }[view] || "선택한 작업";
 }
 
 function setBusy(busy) {
@@ -276,9 +298,9 @@ function optionPayload() {
   return {
     name: $("#job-name").value.trim(),
     title: `${$("#job-name").value.trim()} 강의 영상`,
-    mode: productionMode,
+    mode: productionMode === "preview" ? "preview" : "bundle",
     startPage: Number($("#start-page").value),
-    endPage: productionMode === "bundle" ? Number($("#end-page").value) : null,
+    endPage: productionMode === "preview" ? null : Number($("#end-page").value),
     deliverable: $("#deliverable").value,
     burnCaptions: $("#burn-captions").checked,
   };
@@ -436,7 +458,7 @@ function renderVoiceCandidates(candidates) {
     const title = document.createElement("strong");
     title.textContent = candidate.name;
     const meta = document.createElement("small");
-    meta.textContent = `seed ${candidate.seed}`;
+    meta.textContent = candidate.durationMs ? `${formatDuration(candidate.durationMs)} 길이` : "새로 만든 발화";
     const audio = document.createElement("audio");
     audio.controls = true;
     audio.preload = "metadata";
@@ -571,11 +593,8 @@ function outputLabel(item) {
 }
 
 function renderOutputSummary() {
-  const approved = outputItems.filter((item) => item.review?.status === "approved").length;
-  $("#result-total-count").textContent = String(outputItems.length);
-  $("#result-approved-count").textContent = String(approved);
-  $("#result-pending-count").textContent = String(outputItems.length - approved);
   $("#results-count").textContent = String(outputItems.length);
+  $("#result-count-summary").textContent = `${outputItems.length}개`;
 }
 
 function renderOutputs() {
@@ -593,8 +612,8 @@ function renderOutputs() {
     row.innerHTML = `
       <div class="output-type ${kind}">${kind === "edit" ? "✂" : item.video ? "▶" : "♪"}</div>
       <div class="output-copy"><strong></strong><small></small></div>
-      <div class="output-status"><span class="${item.ok ? "verified" : "unverified"}">${item.ok ? `✓ 자동 검증 ${item.passed || ""}/${item.total || ""}`.replace(/\s*\/$/, "") : "검증 기록 없음"}</span><span class="${approved ? "reviewed" : "review-pending"}">${approved ? "✓ 청취 승인됨" : "○ 청취 확인 필요"}</span></div>
-      <div class="item-actions"><button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "승인 취소" : "청취 승인"}</button><button class="open-button" type="button">열기</button><button type="button">Finder</button></div>`;
+      <div class="output-status"><span class="${item.ok ? "verified" : "unverified"}">${item.ok ? "✓ 파일 확인 완료" : "파일 확인 기록 없음"}</span><span class="${approved ? "reviewed" : "review-pending"}">${approved ? "✓ 직접 확인 완료" : "○ 직접 확인 필요"}</span></div>
+      <div class="item-actions"><button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "확인 취소" : "확인 완료"}</button><button class="open-button" type="button">열기</button><button type="button">Finder</button></div>`;
     row.querySelector("strong").textContent = item.name;
     row.querySelector("small").textContent = `${outputLabel(item)} · ${formatDuration(item.durationMs)} · ${formatDate(item.updatedAt)}`;
     const buttons = row.querySelectorAll("button");
@@ -605,7 +624,7 @@ function renderOutputs() {
         item.review = review;
         renderOutputSummary();
         renderOutputs();
-        showToast(approved ? "청취 승인을 취소했습니다." : "사람 청취 승인으로 표시했습니다.");
+        showToast(approved ? "확인 완료 표시를 취소했습니다." : "직접 확인한 결과로 표시했습니다.");
       } catch (error) {
         showToast(error.message, "error");
       }
@@ -650,11 +669,10 @@ function renderSettings(settings) {
   $("#global-parallelism").value = String(settings.voiceParallelism);
   $("#global-scale-field").classList.toggle("hidden", settings.modelId !== "qwen3-tts" || settings.adapterId === "none");
   paintGlobalRange();
-  const selected = settings.adapters?.find((item) => item.id === settings.adapterId);
-  $("#sidebar-model").textContent = settings.modelId === "chatterbox-v3" ? "Chatterbox V3" : "Qwen3-TTS 1.7B";
-  $("#sidebar-adapter").textContent = selected
-    ? `${selected.label} · ${Number(settings.adapterScale).toFixed(2)}`
-    : "기본 복제 · 어댑터 없음";
+  $("#sidebar-model").textContent = "내 목소리";
+  $("#sidebar-adapter").textContent = voiceProfileLabel().includes("승인됨")
+    ? "제작 프로필 사용 중"
+    : "실험 설정 사용 중";
   for (const [key, value] of Object.entries(settings.paths || {})) {
     const input = $(`#path-${key}`);
     if (input) input.value = value;
@@ -676,10 +694,11 @@ function updateProfileGuard() {
   guard.classList.toggle("approved", approved);
   guard.classList.toggle("experimental", !approved);
   guard.querySelector(":scope > span").textContent = approved ? "✓" : "!";
-  $("#profile-guard-title").textContent = approved ? "승인된 제작 음성" : "실험 설정 사용 중";
+  $("#profile-guard-title").textContent = approved ? "제작 목소리 준비됨" : "실험 설정 사용 중";
   $("#profile-guard-copy").textContent = approved
-    ? "Qwen3-TTS · jaeho-ko-r16-v1 · 0.60"
+    ? "장시간 강의용으로 확인한 설정입니다."
     : "장시간 강의에 쓰기 전 짧은 샘플을 들어 확인해 주세요.";
+  $("#restore-production-profile").classList.toggle("hidden", approved);
 }
 
 function restoreProductionProfile() {
@@ -697,6 +716,8 @@ async function openModelSettings() {
   renderSettings(await api.getSettings());
   $("#finetune-name").value = `jaeho-ko-r16-${dateStamp()}`.toLowerCase();
   $("#finetune-panel").classList.add("hidden");
+  $(".advanced-engine-settings").open = false;
+  $(".advanced-paths").open = false;
   $("#model-settings-dialog").showModal();
 }
 
@@ -781,8 +802,10 @@ async function initialize() {
   const [status, settings] = await Promise.all([api.getStatus(), api.getSettings()]);
   renderSettings(settings);
   catalogPages = status.catalog?.pages || [];
+  catalogLessons = status.catalog?.lessons || [];
   totalPages = status.catalog?.totalPages || 715;
   populateChapterJump();
+  populateLessons();
   for (const selector of ["#start-page", "#end-page"]) {
     $(selector).max = String(totalPages);
   }
@@ -830,6 +853,7 @@ async function initialize() {
 }
 
 $$("#mode-options button").forEach((button) => button.addEventListener("click", () => setProductionMode(button.dataset.mode)));
+$("#lesson-select").addEventListener("change", applySelectedLesson);
 $("#start-page").addEventListener("input", () => {
   if (Number($("#end-page").value) < Number($("#start-page").value)) {
     $("#end-page").value = $("#start-page").value;
@@ -1078,25 +1102,6 @@ $$('[data-view]').forEach((button) => button.addEventListener("click", async () 
   if (view === "results") await loadOutputs();
   window.scrollTo({ top: 0, behavior: "instant" });
 }));
-
-document.addEventListener("keydown", (event) => {
-  if (!event.metaKey || event.altKey || event.ctrlKey) return;
-  if (["1", "2", "3", "4"].includes(event.key)) {
-    event.preventDefault();
-    const view = ["new", "voice", "edit", "results"][Number(event.key) - 1];
-    $(`[data-view='${view}']`)?.click();
-  } else if (event.key === ",") {
-    event.preventDefault();
-    openModelSettings();
-  } else if (event.key === "Enter" && !document.querySelector("dialog[open]")) {
-    const active = $(".nav-item.active")?.dataset.view;
-    const form = { new: "#job-form", voice: "#text-voice-form", edit: "#edit-form" }[active];
-    if (form) {
-      event.preventDefault();
-      $(form).requestSubmit();
-    }
-  }
-});
 
 initialize().catch((error) => {
   $("#runtime-label").textContent = "환경 확인 실패";

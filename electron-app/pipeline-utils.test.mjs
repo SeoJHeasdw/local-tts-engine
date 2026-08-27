@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   isInside,
+  lessonCatalogFromPresets,
   makeJobName,
   mapWithConcurrency,
   normalizeVoiceText,
@@ -62,6 +63,26 @@ test("결과물 폴더 하나에서 내부 출력 경로를 만든다", () => {
     videoOutputRoot: "/tmp/studio-output/videos",
     editOutputRoot: "/tmp/studio-output/edits",
   });
+});
+
+test("기술용 preset을 제외하고 사용자용 레슨 범위를 만든다", () => {
+  const pages = [
+    { page: 1, chapter: "ch00", slideId: "open", stepCount: 2 },
+    { page: 2, chapter: "ch00", slideId: "close", stepCount: 3 },
+  ];
+  const lessons = lessonCatalogFromPresets(pages, {
+    ch00: { title: "오리엔테이션", startChapter: "ch00", startSlide: "open", endChapter: "ch00", endSlide: "close" },
+    "ch00-preview": { title: "개발 미리보기", startChapter: "ch00", startSlide: "open", endChapter: "ch00", endSlide: "open" },
+  });
+  assert.deepEqual(lessons, [{
+    id: "ch00",
+    title: "오리엔테이션",
+    chapter: "ch00",
+    startPage: 1,
+    endPage: 2,
+    pageCount: 2,
+    stepCount: 5,
+  }]);
 });
 
 test("작업 이름과 검증 요약을 결정적으로 만든다", () => {
