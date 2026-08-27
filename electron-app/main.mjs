@@ -228,20 +228,37 @@ async function assertRuntime(options, studio = runtimePaths(options.paths)) {
   }
 }
 
-function stopActiveProcess() {
+function stopActiveProcess(signal = "SIGTERM") {
   const children = activeJob?.children || new Set(activeJob?.child ? [activeJob.child] : []);
+  let signalled = 0;
   for (const child of children) {
     if (!child?.pid) continue;
     try {
-      process.kill(-child.pid, "SIGTERM");
+      process.kill(-child.pid, signal);
+      signalled += 1;
     } catch {
-      try { child.kill("SIGTERM"); } catch { /* already finished */ }
+      try {
+        if (child.kill(signal)) signalled += 1;
+      } catch { /* already finished */ }
     }
   }
+  return signalled;
+}
+
+function forceStopIfNeeded(job) {
+  const timer = setTimeout(() => {
+    if (activeJob !== job || job.state !== "cancelling") return;
+    const signalled = stopActiveProcess("SIGKILL");
+    if (signalled > 0) {
+      emit({ type: "log", stream: "stderr", text: "중지되지 않은 작업을 강제로 종료했습니다.\n" });
+    }
+  }, 3_000);
+  timer.unref?.();
 }
 
 function runProcess(stage, executable, args, { cwd = ROOT, capture = false } = {}) {
   if (!activeJob) throw new Error("실행 중인 작업이 없습니다.");
+  if (activeJob.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
   activeJob.stage = stage;
   emit({ type: "stage", stage, state: "running" });
 
@@ -464,6 +481,9 @@ async function runPipeline(options) {
   const studio = runtimePaths(options.paths);
   const sourceDir = path.join(studio.ttsOutputRoot, dateFolder(), options.name);
   const renderDir = path.join(studio.captionOutputRoot, options.name);
+  const captureSiteDir = options.deliverable === "video"
+    ? path.join(renderDir, ".capture-site")
+    : null;
   const providerName = `${options.name}-provider`;
   const ttsArgs = [
     "-m", "local_tts_engine.course_pilot",
@@ -479,6 +499,23 @@ async function runPipeline(options) {
   if (options.mode === "bundle") ttsArgs.push("--end-page", String(options.endPage));
   if (options.voiceMode === "finetuned") {
     ttsArgs.push("--adapter", options.adapterPath || ADAPTER, "--adapter-scale", String(options.adapterScale));
+  }
+
+  if (captureSiteDir) {
+    await fs.mkdir(renderDir, { recursive: true });
+    job.captureSiteDir = captureSiteDir;
+    await runProcess("snapshot", NODE, [
+      path.join(studio.deckRoot, "node_modules/vite/bin/vite.js"),
+      "build",
+      "--mode", "capture",
+      "--outDir", captureSiteDir,
+      "--emptyOutDir",
+    ], { cwd: studio.deckRoot });
+    emit({
+      type: "log",
+      stream: "stdout",
+      text: "촬영 화면을 고정했습니다. 이제 강의 소스를 수정해도 이번 영상에는 반영되지 않습니다.\n",
+    });
   }
 
   await runProcess("voice", TRAIN_PYTHON, ttsArgs);
@@ -509,8 +546,19 @@ async function runPipeline(options) {
         "--provider", providerName,
         "--no-cache",
       ];
+      if (captureSiteDir) captureArgs.push("--site-dir", captureSiteDir);
       if (options.burnCaptions) captureArgs.push("--burn-captions");
-      await runProcess("capture", NODE, captureArgs, { cwd: studio.deckRoot });
+      try {
+        await runProcess("capture", NODE, captureArgs, { cwd: studio.deckRoot });
+      } catch (error) {
+        if (job.cancelled) throw error;
+        emit({
+          type: "log",
+          stream: "stderr",
+          text: "화면 촬영이 중간에 멈춰 같은 음성과 타임라인으로 한 번 다시 시도합니다.\n",
+        });
+        await runProcess("capture", NODE, captureArgs, { cwd: studio.deckRoot });
+      }
     }
   } finally {
     if (previousContract) await restoreDeckContract(options, providerName, previousContract, studio);
@@ -518,9 +566,17 @@ async function runPipeline(options) {
 
   const report = await validateResult({ sourceDir, renderDir, options, studio });
   if (activeJob !== job) return;
+  if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
   job.state = "done";
   job.stage = "done";
   emit({ type: "complete", report });
+}
+
+async function cleanupCaptureSite(job) {
+  if (!job?.captureSiteDir) return;
+  const directory = job.captureSiteDir;
+  job.captureSiteDir = null;
+  await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
 }
 
 async function inspectMedia(file) {
@@ -1387,21 +1443,25 @@ function registerIpc() {
     };
     const snapshot = jobSnapshot();
     emit({ type: "started", job: snapshot, options });
+    const job = activeJob;
     runPipeline(options).catch((error) => {
-      if (!activeJob) return;
-      activeJob.state = activeJob.cancelled ? "cancelled" : "failed";
-      emit({ type: "failed", cancelled: activeJob.cancelled, message: error.message });
-    });
+      if (activeJob !== job) return;
+      job.state = job.cancelled ? "cancelled" : "failed";
+      emit({ type: "failed", cancelled: job.cancelled, message: error.message });
+    }).finally(() => cleanupCaptureSite(job));
     return snapshot;
   });
 
   ipcMain.handle("studio:cancel", async (event) => {
     guard(event);
-    if (!activeJob || activeJob.state !== "running") return false;
+    if (!activeJob || !["running", "cancelling"].includes(activeJob.state)) return false;
+    if (activeJob.state === "cancelling") return true;
+    const job = activeJob;
     activeJob.cancelled = true;
     activeJob.state = "cancelling";
-    stopActiveProcess();
     emit({ type: "cancelling" });
+    stopActiveProcess("SIGTERM");
+    forceStopIfNeeded(job);
     return true;
   });
 

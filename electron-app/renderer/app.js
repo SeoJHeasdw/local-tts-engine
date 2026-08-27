@@ -11,6 +11,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 const stageNames = {
   starting: "준비 중",
+  snapshot: "촬영 화면 고정 중",
   voice: "목소리 생성 중",
   export: "영상 자료 연결 중",
   captions: "자막 생성 중",
@@ -257,6 +258,34 @@ function setBusy(busy) {
   $(".top-status").classList.toggle("running", busy);
 }
 
+function resetCancelButton(button) {
+  button.disabled = false;
+  button.textContent = "작업 중지";
+  button.removeAttribute("aria-busy");
+}
+
+async function requestJobCancellation(button, kind) {
+  button.disabled = true;
+  button.textContent = "중지 요청 중…";
+  button.setAttribute("aria-busy", "true");
+  if (kind === "create") {
+    setJobState("중지 요청 중", "running");
+    $("#current-stage").textContent = "실행 중인 작업을 종료하고 있습니다.";
+  } else {
+    $("#edit-running-label").textContent = "실행 중인 작업을 종료하고 있습니다.";
+  }
+  try {
+    const accepted = await api.cancel();
+    if (!accepted) {
+      resetCancelButton(button);
+      showToast("현재 중지할 작업이 없습니다.", "error");
+    }
+  } catch (error) {
+    resetCancelButton(button);
+    showToast(`중지 요청 실패: ${error.message}`, "error");
+  }
+}
+
 function setJobState(text, kind = "idle") {
   const badge = $("#job-state");
   badge.textContent = text;
@@ -265,7 +294,7 @@ function setJobState(text, kind = "idle") {
 }
 
 function updateStages(current, done = false) {
-  const mapped = current === "export" ? "voice" : current;
+  const mapped = ["snapshot", "export"].includes(current) ? "voice" : current;
   const currentIndex = orderedStages.indexOf(mapped);
   $$(".stage-list li").forEach((item) => {
     const index = orderedStages.indexOf(item.dataset.stage);
@@ -436,6 +465,7 @@ function openJobDialog(title) {
   $("#candidate-gallery").classList.add("hidden");
   $("#batch-progress").classList.add("hidden");
   $("#cancel-edit-button").classList.remove("hidden");
+  resetCancelButton($("#cancel-edit-button"));
   $("#open-edit-result").classList.add("hidden");
   $("#reveal-edit-result").classList.add("hidden");
   $("#apply-voice-candidate").classList.add("hidden");
@@ -510,6 +540,8 @@ function handleEditEvent(event) {
     $("#close-edit-dialog").classList.remove("hidden");
   } else if (event.type === "cancelling") {
     $("#edit-running-label").textContent = "안전하게 중지 중";
+    $("#cancel-edit-button").disabled = true;
+    $("#cancel-edit-button").textContent = "중지 중…";
   } else if (event.type === "edit-failed") {
     setEditBusy(false);
     $("#edit-dialog-spinner").classList.add("hidden");
@@ -764,6 +796,7 @@ function handleJobEvent(event) {
     showJobView("active");
     setBusy(true);
     setJobState("실행 중", "running");
+    resetCancelButton($("#cancel-button"));
     updateStages("starting");
   } else if (event.type === "stage") {
     updateStages(event.stage, event.state === "done" && event.stage === "verify");
@@ -772,14 +805,18 @@ function handleJobEvent(event) {
   } else if (event.type === "cancelling") {
     setJobState("중지 중", "running");
     $("#current-stage").textContent = "안전하게 중지 중";
+    $("#cancel-button").disabled = true;
+    $("#cancel-button").textContent = "중지 중…";
   } else if (event.type === "failed") {
     setBusy(false);
+    resetCancelButton($("#cancel-button"));
     showJobView("active");
     setJobState(event.cancelled ? "중지됨" : "오류", event.cancelled ? "idle" : "failed");
     $("#current-stage").textContent = event.message;
     appendLog(`\n[중단] ${event.message}\n`);
   } else if (event.type === "complete") {
     setBusy(false);
+    resetCancelButton($("#cancel-button"));
     showJobView("complete");
     setJobState("완료", "idle");
     updateStages("verify", true);
@@ -917,7 +954,7 @@ $("#text-voice-form").addEventListener("submit", async (event) => {
     $("#close-edit-dialog").classList.remove("hidden");
   }
 });
-$("#cancel-button").addEventListener("click", () => api.cancel());
+$("#cancel-button").addEventListener("click", (event) => requestJobCancellation(event.currentTarget, "create"));
 $("#open-latest").addEventListener("click", () => latestTarget && api.open(latestTarget));
 $("#reveal-latest").addEventListener("click", () => latestTarget && api.reveal(latestTarget));
 $("#refresh-outputs").addEventListener("click", loadOutputs);
@@ -979,7 +1016,7 @@ $("#edit-form").addEventListener("submit", async (event) => {
     $("#close-edit-dialog").classList.remove("hidden");
   }
 });
-$("#cancel-edit-button").addEventListener("click", () => api.cancel());
+$("#cancel-edit-button").addEventListener("click", (event) => requestJobCancellation(event.currentTarget, "edit"));
 $("#open-edit-result").addEventListener("click", () => latestEditTarget && api.open(latestEditTarget));
 $("#reveal-edit-result").addEventListener("click", () => latestEditTarget && api.reveal(latestEditTarget));
 $("#apply-voice-candidate").addEventListener("click", async () => {
