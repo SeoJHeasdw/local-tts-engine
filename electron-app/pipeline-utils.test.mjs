@@ -6,6 +6,7 @@ import {
   lessonCatalogFromPresets,
   makeJobName,
   mapWithConcurrency,
+  nextDisplayVideoFileName,
   normalizeVoiceText,
   normalizeOptions,
   outputPathsForRoot,
@@ -91,6 +92,15 @@ test("작업 이름과 검증 요약을 결정적으로 만든다", () => {
     { label: "audio", ok: true },
     { label: "video", ok: false },
   ]), { ok: false, passed: 1, total: 2, failed: ["video"] });
+});
+
+test("레슨 제목으로 완성 영상 이름을 만들고 기존 파일은 번호를 붙여 보존한다", () => {
+  assert.equal(nextDisplayVideoFileName("CH01 L00 챕터 프레임", []), "CH01 L00 챕터 프레임.mp4");
+  assert.equal(nextDisplayVideoFileName("CH01 L00 챕터 프레임", [
+    "CH01 L00 챕터 프레임.mp4",
+    "CH01 L00 챕터 프레임 (2).mp4",
+  ]), "CH01 L00 챕터 프레임 (3).mp4");
+  assert.equal(nextDisplayVideoFileName("CH01 / 오프닝", []), "CH01 ／ 오프닝.mp4");
 });
 
 test("초와 시:분:초 타임코드를 해석한다", () => {

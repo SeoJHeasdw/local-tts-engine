@@ -47,7 +47,7 @@ export function outputKind(item = {}) {
 export function filterOutputItems(items = [], query = "", filter = "all") {
   const needle = String(query || "").trim().toLocaleLowerCase("ko-KR");
   return items.filter((item) => {
-    const matchesQuery = !needle || [item.name, item.operation, item.root]
+    const matchesQuery = !needle || [item.displayName, item.name, item.operation, item.root]
       .some((value) => String(value || "").toLocaleLowerCase("ko-KR").includes(needle));
     if (!matchesQuery) return false;
     if (filter === "pending") return item.review?.status !== "approved";

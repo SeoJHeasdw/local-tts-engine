@@ -16,6 +16,45 @@ export function makeJobName(now = new Date(), seconds = 30) {
   return `studio-${stamp}-${length}`;
 }
 
+export function displayVideoFileStem(value) {
+  const replacements = {
+    "<": "＜",
+    ">": "＞",
+    ":": "：",
+    '"': "＂",
+    "/": "／",
+    "\\": "＼",
+    "|": "｜",
+    "?": "？",
+    "*": "＊",
+  };
+  const stem = String(value || "완성 영상")
+    .normalize("NFC")
+    .replace(/\.mp4$/i, "")
+    .replace(/[<>:"/\\|?*]/g, (character) => replacements[character])
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .slice(0, 180);
+  return stem || "완성 영상";
+}
+
+export function nextDisplayVideoFileName(title, existingNames = []) {
+  const stem = displayVideoFileStem(title);
+  const normalized = new Set(Array.from(existingNames, (name) => (
+    String(name).normalize("NFC").toLocaleLowerCase("ko-KR")
+  )));
+  const available = (name) => !normalized.has(name.normalize("NFC").toLocaleLowerCase("ko-KR"));
+  const first = `${stem}.mp4`;
+  if (available(first)) return first;
+  for (let sequence = 2; sequence < 10_000; sequence += 1) {
+    const candidate = `${stem} (${sequence}).mp4`;
+    if (available(candidate)) return candidate;
+  }
+  throw new Error("같은 이름의 영상이 너무 많아 새 파일명을 정하지 못했습니다.");
+}
+
 export function normalizeOptions(raw = {}) {
   const mode = raw.mode === "bundle" ? "bundle" : "preview";
   const targetSeconds = 30;

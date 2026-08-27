@@ -295,9 +295,11 @@ function formatDate(value) {
 }
 
 function optionPayload() {
+  const lesson = productionMode === "lesson" ? selectedLesson() : null;
+  const name = $("#job-name").value.trim();
   return {
-    name: $("#job-name").value.trim(),
-    title: `${$("#job-name").value.trim()} 강의 영상`,
+    name,
+    title: lesson?.title || `${name} 강의 영상`,
     mode: productionMode === "preview" ? "preview" : "bundle",
     startPage: Number($("#start-page").value),
     endPage: productionMode === "preview" ? null : Number($("#end-page").value),
@@ -614,7 +616,7 @@ function renderOutputs() {
       <div class="output-copy"><strong></strong><small></small></div>
       <div class="output-status"><span class="${item.ok ? "verified" : "unverified"}">${item.ok ? "✓ 파일 확인 완료" : "파일 확인 기록 없음"}</span><span class="${approved ? "reviewed" : "review-pending"}">${approved ? "✓ 직접 확인 완료" : "○ 직접 확인 필요"}</span></div>
       <div class="item-actions"><button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "확인 취소" : "확인 완료"}</button><button class="open-button" type="button">열기</button><button type="button">Finder</button></div>`;
-    row.querySelector("strong").textContent = item.name;
+    row.querySelector("strong").textContent = item.displayName || item.name;
     row.querySelector("small").textContent = `${outputLabel(item)} · ${formatDuration(item.durationMs)} · ${formatDate(item.updatedAt)}`;
     const buttons = row.querySelectorAll("button");
     const target = { root: item.root, name: item.name, day: item.day, store: item.store };

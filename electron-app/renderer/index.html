@@ -27,10 +27,14 @@
           <button class="nav-item" type="button" data-view="results"><span>▤</span><b>최근 결과</b><em id="results-count">0</em></button>
         </nav>
 
-        <button class="local-card" id="open-model-settings" type="button">
-          <div class="local-row"><span class="status-dot" id="runtime-dot"></span><strong id="runtime-label">환경 확인 중</strong></div>
-          <p id="sidebar-model">내 목소리</p>
-          <small id="sidebar-adapter">제작 프로필</small>
+        <button class="local-card" id="open-model-settings" type="button" aria-label="Voice Studio 설정 열기">
+          <span class="local-glyph" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="local-card-copy">
+            <span class="local-runtime"><i class="status-dot" id="runtime-dot"></i><span id="runtime-label">환경 확인 중</span></span>
+            <strong id="sidebar-model">내 목소리</strong>
+            <small id="sidebar-adapter">제작 프로필</small>
+          </span>
+          <span class="local-card-arrow" aria-hidden="true">›</span>
         </button>
       </aside>
 
@@ -301,46 +305,53 @@
       </main>
     </div>
 
-    <dialog class="modal" id="model-settings-dialog">
-      <div class="modal-head"><div><p class="eyebrow">설정</p><h2>Voice Studio 설정</h2></div><button type="button" class="icon-button" data-close-dialog="model-settings-dialog">×</button></div>
+    <dialog class="modal settings-modal" id="model-settings-dialog">
+      <div class="modal-head"><div><p class="eyebrow">설정</p><h2>Voice Studio 설정</h2><p class="modal-subtitle">저장 위치와 강의 제작에 사용할 목소리를 관리합니다.</p></div><button type="button" class="icon-button" data-close-dialog="model-settings-dialog" aria-label="설정 닫기">×</button></div>
       <div class="modal-body">
-        <div class="profile-guard approved" id="profile-guard">
-          <span aria-hidden="true">✓</span>
-          <div><strong id="profile-guard-title">제작 목소리 준비됨</strong><p id="profile-guard-copy">장시간 강의용으로 확인한 설정입니다.</p></div>
-          <button type="button" id="restore-production-profile">제작값 복원</button>
-        </div>
-        <div class="path-settings">
-          <div><h3>저장 위치</h3><p>입력 두 곳과 결과물 폴더 하나만 정하면 나머지는 앱이 자동으로 정리합니다.</p></div>
-          <label class="path-field"><span>강의 소스</span><div><input id="path-sourceProjectRoot" readonly><button type="button" data-pick-path="sourceProjectRoot">선택</button></div><small>대본과 슬라이드가 있는 강의 프로젝트</small></label>
-          <label class="path-field"><span>내 목소리 원본</span><div><input id="path-voiceLibraryRoot" readonly><button type="button" data-pick-path="voiceLibraryRoot">선택</button></div><small>수정하지 않고 읽기 전용으로 사용하는 음성 정본</small></label>
-          <label class="path-field output-root-field"><span>결과물 폴더</span><div><input id="path-outputRoot" readonly><button type="button" data-pick-path="outputRoot">선택</button></div><small>기본값은 이 프로젝트의 output 폴더입니다.</small></label>
+        <div class="settings-layout">
+          <section class="settings-section path-settings">
+            <div class="settings-section-head"><span class="settings-section-icon" aria-hidden="true">⌂</span><div><h3>파일과 결과물</h3><p>입력 두 곳과 결과물 폴더만 정하면 나머지는 자동으로 정리합니다.</p></div></div>
+            <label class="path-field"><span>강의 소스</span><div><input id="path-sourceProjectRoot" readonly><button type="button" data-pick-path="sourceProjectRoot">선택</button></div><small>대본과 슬라이드가 있는 강의 프로젝트</small></label>
+            <label class="path-field"><span>내 목소리 원본</span><div><input id="path-voiceLibraryRoot" readonly><button type="button" data-pick-path="voiceLibraryRoot">선택</button></div><small>수정하지 않고 읽기 전용으로 사용하는 음성 정본</small></label>
+            <label class="path-field output-root-field"><span>결과물 폴더</span><div><input id="path-outputRoot" readonly><button type="button" data-pick-path="outputRoot">선택</button></div><small>기본값은 이 프로젝트의 output 폴더입니다.</small></label>
 
-          <div class="output-structure" aria-label="결과물 폴더 구성">
-            <div class="output-root-name"><span aria-hidden="true">▾</span><strong id="output-root-name">output</strong><small>앱이 자동 정리</small></div>
-            <div><i>01</i><span><strong>videos</strong><small>완성 영상</small></span></div>
-            <div><i>02</i><span><strong>voices</strong><small>선택한 목소리와 후보</small></span></div>
-            <div><i>03</i><span><strong>tts</strong><small>강의 TTS 작업 결과</small></span></div>
-            <div><i>••</i><span><strong>작업 파일</strong><small>자막·타임라인·편집 파일은 내부에서 관리</small></span></div>
-          </div>
+            <div class="output-structure" aria-label="결과물 폴더 구성">
+              <div class="output-root-name"><span aria-hidden="true">▾</span><strong id="output-root-name">output</strong><small>앱이 자동 정리</small></div>
+              <div><i>01</i><span><strong>videos</strong><small>완성 영상</small></span></div>
+              <div><i>02</i><span><strong>voices</strong><small>선택한 목소리와 후보</small></span></div>
+              <div><i>03</i><span><strong>tts</strong><small>강의 TTS 작업 결과</small></span></div>
+              <div><i>••</i><span><strong>작업 파일</strong><small>자막·타임라인·편집 파일은 내부에서 관리</small></span></div>
+            </div>
 
-          <details class="advanced-paths">
-            <summary>고급 입력 설정</summary>
-            <p>제작 음성 프로필을 바꿀 때만 수정합니다.</p>
-            <label class="path-field"><span>참조 음성</span><div><input id="path-referenceAudioPath" readonly><button type="button" data-pick-path="referenceAudioPath">선택</button></div></label>
-            <label class="path-field"><span>참조 전사문</span><div><input id="path-referenceTextPath" readonly><button type="button" data-pick-path="referenceTextPath">선택</button></div></label>
-          </details>
+            <details class="advanced-paths">
+              <summary>고급 입력 설정</summary>
+              <p>제작 음성 프로필을 바꿀 때만 수정합니다.</p>
+              <label class="path-field"><span>참조 음성</span><div><input id="path-referenceAudioPath" readonly><button type="button" data-pick-path="referenceAudioPath">선택</button></div></label>
+              <label class="path-field"><span>참조 전사문</span><div><input id="path-referenceTextPath" readonly><button type="button" data-pick-path="referenceTextPath">선택</button></div></label>
+            </details>
+          </section>
+
+          <section class="settings-section voice-settings">
+            <div class="settings-section-head"><span class="settings-section-icon voice" aria-hidden="true">♪</span><div><h3>제작 목소리</h3><p>현재 강의에 적용할 음성 프로필입니다.</p></div></div>
+            <div class="profile-guard approved" id="profile-guard">
+              <span aria-hidden="true">✓</span>
+              <div><strong id="profile-guard-title">제작 목소리 준비됨</strong><p id="profile-guard-copy">장시간 강의용으로 확인한 설정입니다.</p></div>
+              <button type="button" id="restore-production-profile">제작값 복원</button>
+            </div>
+            <div class="production-profile-summary"><span>승인된 제작값</span><strong>Qwen3-TTS</strong><small>jaeho-ko-r16-v1 · 0.60</small></div>
+            <details class="advanced-engine-settings">
+              <summary>고급 모델 설정</summary>
+              <div>
+                <label class="field"><span>기본 모델</span><select id="global-model"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 설치됨</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 설치됨</option></select></label>
+                <label class="field"><span>목소리 어댑터</span><select id="global-adapter"></select></label>
+                <div class="field" id="global-scale-field"><div class="field-line"><span>내 목소리 LoRA 반영 강도</span><output id="global-scale-output">0.60</output></div><input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6"><div class="range-labels"><span>기본 모델에 가깝게</span><span>학습값 그대로</span></div></div>
+                <p class="setting-explain">제작 기본값 0.60은 장시간 강의 청취를 기준으로 승인된 값입니다. 변경 후에는 짧은 샘플을 먼저 들어보세요.</p>
+                <label class="field"><span>동시에 만들 후보</span><select id="global-parallelism"><option value="2">2개 · 이 Mac 권장</option><option value="1">1개 · 메모리 절약</option></select></label>
+                <button class="secondary-small advanced-action" type="button" id="open-finetune-panel">새 파인튜닝</button>
+              </div>
+            </details>
+          </section>
         </div>
-        <details class="advanced-engine-settings">
-          <summary>고급 모델 설정</summary>
-          <div>
-            <label class="field"><span>기본 모델</span><select id="global-model"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 설치됨</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 설치됨</option></select></label>
-            <label class="field"><span>목소리 어댑터</span><select id="global-adapter"></select></label>
-            <div class="field" id="global-scale-field"><div class="field-line"><span>내 목소리 LoRA 반영 강도</span><output id="global-scale-output">0.60</output></div><input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6"><div class="range-labels"><span>기본 모델에 가깝게</span><span>학습값 그대로</span></div></div>
-            <p class="setting-explain">제작 기본값 0.60은 장시간 강의 청취를 기준으로 승인된 값입니다. 변경 후에는 짧은 샘플을 먼저 들어보세요.</p>
-            <label class="field"><span>동시에 만들 후보</span><select id="global-parallelism"><option value="2">2개 · 이 Mac 권장</option><option value="1">1개 · 메모리 절약</option></select></label>
-            <button class="secondary-small advanced-action" type="button" id="open-finetune-panel">새 파인튜닝</button>
-          </div>
-        </details>
         <div class="modal-actions"><button class="primary-small" type="button" id="save-model-settings">설정 저장</button></div>
       </div>
       <div class="finetune-panel hidden" id="finetune-panel">

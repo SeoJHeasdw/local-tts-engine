@@ -9,6 +9,7 @@ import {
   isInside,
   lessonCatalogFromPresets,
   mapWithConcurrency,
+  nextDisplayVideoFileName,
   normalizeEditName,
   normalizeOptions,
   normalizeVoiceText,
@@ -365,12 +366,28 @@ async function findVideo(renderDir, name) {
   return mp4 ? path.join(renderDir, mp4) : null;
 }
 
-async function publishVideo(source, studio, name) {
+async function publishedVideoNames(root) {
+  const names = [];
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".mp4")) names.push(entry.name);
+    if (!entry.isDirectory()) continue;
+    const children = await fs.readdir(path.join(root, entry.name), { withFileTypes: true }).catch(() => []);
+    names.push(...children
+      .filter((child) => child.isFile() && child.name.toLowerCase().endsWith(".mp4"))
+      .map((child) => child.name));
+  }
+  return names;
+}
+
+async function publishVideo(source, studio, name, title) {
   const outputDir = path.join(studio.videoOutputRoot, name);
   await fs.mkdir(outputDir, { recursive: true });
-  const target = path.join(outputDir, path.basename(source));
+  const target = path.join(
+    outputDir,
+    nextDisplayVideoFileName(title, await publishedVideoNames(studio.videoOutputRoot)),
+  );
   if (path.resolve(source) === path.resolve(target)) return target;
-  await fs.rm(target, { force: true });
   try {
     await fs.rename(source, target);
   } catch (error) {
@@ -418,12 +435,13 @@ async function validateResult({ sourceDir, renderDir, options, studio }) {
 
   const summary = summarizeChecks(checks);
   if (summary.ok && videoPath) {
-    videoPath = await publishVideo(videoPath, studio, options.name);
+    videoPath = await publishVideo(videoPath, studio, options.name, options.title);
   }
   const report = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     name: options.name,
+    displayName: options.title,
     sourceDir,
     renderDir: options.deliverable === "audio" ? null : renderDir,
     audioPath: manifest.audioPath,
@@ -961,6 +979,7 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
       store: storeId,
       root: "render",
       name: entry.name,
+      displayName: report?.displayName || entry.name,
       updatedAt: stat?.mtime.toISOString(),
       durationMs: report?.durationMs || null,
       video: Boolean(videoPath),

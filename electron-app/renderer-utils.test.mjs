@@ -41,3 +41,8 @@ test("최근 결과를 종류와 청취 승인 상태로 거른다", () => {
   assert.deepEqual(filterOutputItems(items, "one", "pending").map((item) => item.name), ["voice-one", "edit-one"]);
   assert.deepEqual(filterOutputItems(items, "voice", "voice").map((item) => item.name), ["voice-one"]);
 });
+
+test("최근 결과는 내부 작업명뿐 아니라 레슨 제목으로도 검색한다", () => {
+  const items = [{ name: "studio-20260827-120000-ch01-l00", displayName: "CH01 L00 챕터 프레임", root: "render" }];
+  assert.deepEqual(filterOutputItems(items, "챕터 프레임").map((item) => item.name), [items[0].name]);
+});
