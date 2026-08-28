@@ -9,9 +9,11 @@ from local_tts_engine.course_pilot import (
     adapter_identity,
     build_parser,
     course_entries,
+    course_lesson_catalog,
     course_page_catalog,
     gap_after,
     group_course_entries,
+    lesson_title_from_source,
     load_or_create_alignment,
     parse_script,
     slide_ids_from_source,
@@ -215,6 +217,79 @@ def test_course_entries_reads_split_chapter_files(tmp_path: Path) -> None:
         "ch01--slide-a--0",
         "ch01--slide-b--0",
     ]
+
+
+def test_lesson_title_drops_slide_count_and_joins_chapter_with_lesson() -> None:
+    source = "/**\n * CH01 · L05 · 기업들이 RAG를 도입하는 이유  (12장)\n */\n"
+    assert lesson_title_from_source(source) == "CH01 L05 · 기업들이 RAG를 도입하는 이유"
+    frame = "/**\n * CH02 · 파트 2 진입 · 그것을 이루는 부품  (3장)\n */\n"
+    assert lesson_title_from_source(frame) == "CH02 · 파트 2 진입 · 그것을 이루는 부품"
+    assert lesson_title_from_source("const slides = [];\n") == ""
+
+
+def _write_split_chapter(tmp_path: Path, files: dict[str, tuple[str, list[str]]]) -> Path:
+    """레슨 파일로 쪼갠 ch01 하나만 있는 최소 deck 을 만든다."""
+    deck = tmp_path / "deck"
+    chapters = deck / "src/production/chapters"
+    split = chapters / "ch01"
+    scripts = deck / "script/course"
+    split.mkdir(parents=True)
+    scripts.mkdir(parents=True)
+    (chapters / "ch01-test.ts").write_text("const slides = [...A, ...B];\n", encoding="utf-8")
+    body = []
+    for name, (title, slide_ids) in files.items():
+        slides = "".join(f'  {{\n    id: "{slide_id}",\n  }},\n' for slide_id in slide_ids)
+        (split / name).write_text(f"/**\n * {title}\n */\n{slides}", encoding="utf-8")
+        body.extend(f"## {slide_id}\n### 0\n본문\n" for slide_id in slide_ids)
+    (scripts / "ch01.md").write_text("".join(body), encoding="utf-8")
+    return deck
+
+
+def test_lesson_catalog_makes_one_video_per_lesson_file(tmp_path: Path) -> None:
+    deck = _write_split_chapter(tmp_path, {
+        "01-L01-open.ts": ("CH01 · L01 · 여는 레슨  (2장)", ["open-a", "open-b"]),
+        "02-L02-close.ts": ("CH01 · L02 · 닫는 레슨  (1장)", ["close"]),
+    })
+    pages = course_page_catalog(tmp_path)
+
+    lessons = course_lesson_catalog(deck, pages)
+
+    assert [(l["id"], l["title"], l["pageCount"], l["stepCount"]) for l in lessons] == [
+        ("ch01-l01", "CH01 L01 · 여는 레슨", 2, 2),
+        ("ch01-l02", "CH01 L02 · 닫는 레슨", 1, 1),
+    ]
+    assert (lessons[0]["startPage"], lessons[0]["endPage"]) == (1, 2)
+    assert lessons[0]["file"] == "01-L01-open.ts"
+
+
+def test_lesson_catalog_rejects_a_file_without_a_lesson_number(tmp_path: Path) -> None:
+    deck = _write_split_chapter(tmp_path, {
+        "01-L01-open.ts": ("CH01 · L01 · 여는 레슨  (1장)", ["open-a"]),
+        "02-part2-open.ts": ("CH01 · 파트 2 진입  (1장)", ["part-two"]),
+    })
+    pages = course_page_catalog(tmp_path)
+
+    try:
+        course_lesson_catalog(deck, pages)
+    except ValueError as error:
+        assert "레슨 번호가 없습니다" in str(error)
+    else:
+        raise AssertionError("레슨 번호 없는 파일을 그대로 받아들였습니다.")
+
+
+def test_lesson_catalog_rejects_a_repeated_lesson_number(tmp_path: Path) -> None:
+    deck = _write_split_chapter(tmp_path, {
+        "01-L01-open.ts": ("CH01 · L01 · 여는 레슨  (1장)", ["open-a"]),
+        "02-L01-again.ts": ("CH01 · L01 · 또 여는 레슨  (1장)", ["open-b"]),
+    })
+    pages = course_page_catalog(tmp_path)
+
+    try:
+        course_lesson_catalog(deck, pages)
+    except ValueError as error:
+        assert "레슨 ID가 겹칩니다" in str(error)
+    else:
+        raise AssertionError("겹치는 레슨 번호를 그대로 받아들였습니다.")
 
 
 def test_adapter_identity_changes_with_scale_and_rejects_missing_files(tmp_path: Path) -> None:

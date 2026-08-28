@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  combineLessonCatalogs,
   isInside,
   lessonCatalogFromPresets,
   mapWithConcurrency,
@@ -323,7 +324,10 @@ async function loadCatalog(studio) {
   ]);
   catalogCache = JSON.parse(raw);
   const deckConfig = await fs.readFile(studio.configPath, "utf8").then(JSON.parse).catch(() => ({}));
-  catalogCache.lessons = lessonCatalogFromPresets(catalogCache.pages, deckConfig.presets);
+  catalogCache.lessons = combineLessonCatalogs(
+    catalogCache.lessons,
+    lessonCatalogFromPresets(catalogCache.pages, deckConfig.presets),
+  );
   catalogCacheRoot = studio.sourceProjectRoot;
   return catalogCache;
 }

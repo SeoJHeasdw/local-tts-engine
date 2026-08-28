@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  combineLessonCatalogs,
   isInside,
   lessonCatalogFromPresets,
   makeJobName,
@@ -84,6 +85,22 @@ test("기술용 preset을 제외하고 사용자용 레슨 범위를 만든다",
     pageCount: 2,
     stepCount: 5,
   }]);
+});
+
+test("deck 레슨 목록을 정본으로 쓰고 안 쪼갠 챕터만 preset으로 채운다", () => {
+  const deckLessons = [
+    { id: "ch01-l01", chapter: "ch01", title: "CH01 L01", startPage: 12, endPage: 30 },
+    { id: "ch02-l01", chapter: "ch02", title: "CH02 L01", startPage: 129, endPage: 136 },
+  ];
+  const presetLessons = [
+    { id: "ch00", chapter: "ch00", title: "CH00", startPage: 1, endPage: 11 },
+    { id: "ch01-l05", chapter: "ch01", title: "묵은 preset", startPage: 75, endPage: 77 },
+  ];
+  assert.deepEqual(combineLessonCatalogs(deckLessons, presetLessons).map((lesson) => lesson.id), [
+    "ch00",
+    "ch01-l01",
+    "ch02-l01",
+  ]);
 });
 
 test("작업 이름과 검증 요약을 결정적으로 만든다", () => {

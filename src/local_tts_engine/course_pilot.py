@@ -378,6 +378,108 @@ def course_page_catalog(source_project: Path) -> list[dict[str, Any]]:
     return pages
 
 
+# ─── 레슨(영상 한 편) 카탈로그 ────────────────────────────────────────────────
+# 레슨의 정본은 deck 의 레슨 파일 하나다 (chapters/<ch>/NN-LNN-<slug>.ts).
+# 파일 하나가 영상 한 편이고, 파일 머리 주석 둘째 줄이 제목, 파일명의 NN 이
+# 강의 순서다. 챕터 여는·닫는 화면처럼 단독으로 영상이 못 되는 조각은 deck
+# 쪽에서 이미 앞뒤 레슨 파일 안에 들어가 있으므로 여기서 다시 묶지 않는다.
+
+LESSON_FILE_PATTERN = re.compile(r"^(\d+)-L(\d+)-")
+
+
+def lesson_title_from_source(source: str) -> str:
+    """레슨 파일 머리 주석에서 제목 한 줄을 읽는다.
+
+    `* CH01 · L05 · 기업들이 RAG를 도입하는 이유  (12장)` 처럼 쓰여 있으면
+    장수 꼬리를 떼고 `CH01 L05 · 기업들이 RAG를 도입하는 이유` 로 만든다.
+    읽을 줄이 없으면 빈 문자열을 반환한다.
+    """
+    for raw in source.splitlines()[:6]:
+        line = raw.strip().lstrip("*").strip()
+        if not line.upper().startswith("CH"):
+            continue
+        line = re.sub(r"\s*\(\d+장\)\s*$", "", line)
+        parts = [part.strip() for part in line.split("·") if part.strip()]
+        if len(parts) >= 3 and re.fullmatch(r"L\d+", parts[1]):
+            return f"{parts[0]} {parts[1]} · " + " · ".join(parts[2:])
+        return " · ".join(parts)
+    return ""
+
+
+def chapter_lesson_files(deck_root: Path) -> list[dict[str, Any]]:
+    """레슨 파일로 쪼개 둔 챕터의 레슨 파일을 강의 순서대로 반환한다.
+
+    단일 파일로 남아 있는 챕터(ch00 등)는 레슨 경계가 없으므로 건너뛴다.
+    그런 챕터는 narration.config.json 의 preset 이 계속 담당한다.
+    """
+    chapters_dir = deck_root / "src/production/chapters"
+    lessons: list[dict[str, Any]] = []
+    for path in sorted(chapters_dir.glob("ch[0-9][0-9]-*.ts")):
+        chapter = path.name[:4]
+        if slide_ids_from_source(path.read_text(encoding="utf-8")):
+            continue  # 레슨으로 쪼개지 않은 챕터
+        for split_path in sorted((chapters_dir / chapter).glob("*.ts")):
+            source = split_path.read_text(encoding="utf-8")
+            slide_ids = slide_ids_from_source(source)
+            if not slide_ids:
+                continue
+            match = LESSON_FILE_PATTERN.match(split_path.name)
+            if not match:
+                raise ValueError(
+                    f"{chapter}/{split_path.name} 에 레슨 번호가 없습니다. "
+                    "레슨 파일 이름은 NN-LNN-<슬러그>.ts 여야 합니다."
+                )
+            lessons.append(
+                {
+                    "chapter": chapter,
+                    "file": split_path.name,
+                    "lesson": f"l{int(match.group(2)):02d}",
+                    "title": lesson_title_from_source(source),
+                    "slideIds": slide_ids,
+                }
+            )
+    return lessons
+
+
+def course_lesson_catalog(
+    deck_root: Path,
+    pages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """영상 한 편 단위의 레슨 목록을 페이지·스텝 수와 함께 반환한다."""
+    page_of = {(page["chapter"], page["slideId"]): page for page in pages}
+    lessons: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    for entry in chapter_lesson_files(deck_root):
+        chapter = entry["chapter"]
+        selected = [
+            page_of[(chapter, slide_id)]
+            for slide_id in entry["slideIds"]
+            if (chapter, slide_id) in page_of
+        ]
+        if not selected:
+            continue
+        lesson_id = f"{chapter}-{entry['lesson']}"
+        if lesson_id in used_ids:
+            raise ValueError(
+                f"레슨 ID가 겹칩니다: {lesson_id} ({chapter}/{entry['file']}). "
+                "한 챕터 안에서 L 번호는 한 번씩만 씁니다."
+            )
+        used_ids.add(lesson_id)
+        lessons.append(
+            {
+                "id": lesson_id,
+                "title": entry["title"] or lesson_id,
+                "chapter": chapter,
+                "file": entry["file"],
+                "startPage": selected[0]["page"],
+                "endPage": selected[-1]["page"],
+                "pageCount": len(selected),
+                "stepCount": sum(int(page["stepCount"]) for page in selected),
+            }
+        )
+    return lessons
+
+
 # ─── CourseEntry 수집 ─────────────────────────────────────────────────────────
 
 def course_entries(

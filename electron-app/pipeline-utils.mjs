@@ -169,6 +169,17 @@ export function lessonCatalogFromPresets(pages = [], presets = {}) {
     .sort((a, b) => a.startPage - b.startPage || a.endPage - b.endPage);
 }
 
+/**
+ * deck 레슨 파일에서 뽑아낸 레슨 목록을 정본으로 쓰고, 아직 레슨으로
+ * 쪼개지 않은 챕터만 narration.config.json 의 preset 으로 채운다.
+ * 한 챕터를 두 곳에서 동시에 정의하면 목록에 같은 구간이 두 번 나온다.
+ */
+export function combineLessonCatalogs(deckLessons = [], presetLessons = []) {
+  const covered = new Set(deckLessons.map((lesson) => lesson.chapter));
+  return [...deckLessons, ...presetLessons.filter((lesson) => !covered.has(lesson.chapter))]
+    .sort((a, b) => a.startPage - b.startPage || a.endPage - b.endPage);
+}
+
 export function summarizeChecks(checks) {
   const failed = checks.filter((item) => !item.ok);
   return {
