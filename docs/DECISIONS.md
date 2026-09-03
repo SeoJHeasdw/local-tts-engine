@@ -186,3 +186,21 @@
   - https://support.google.com/youtube/answer/14328491
   - https://support.google.com/youtube/answer/1311392
   - https://support.google.com/youtube/answer/17133929
+
+## 2026-09-03 — 독립 Whisper 자동 검수와 위험 청크 다중 후보
+
+- 결정: 제작 TTS와 같은 Qwen 계열의 자기평가를 사용하지 않는다. Qwen3-TTS로
+  만든 음성은 독립된 Whisper large-v3-turbo MLX FP16으로 다시 받아쓴다.
+- 이유: 같은 모델 계열은 발음 편향과 오류를 공유할 수 있다. 사용자가 이 문제를
+  현재 가장 중요한 제작 차단점으로 지정했다.
+- 위험 청크는 발음 치환, 숫자 정규화 또는 미해결 영문이 있는 청크다. 서로 다른
+  시드 후보를 최대 3개 생성하고 받아쓰기 문자 오류율, 지정 발음 포함 여부,
+  무음·클리핑·발화 속도로 자동 선택한다. 모두 실패하면 가장 나은 후보를 보존하되
+  페이지를 `needsReview`로 표시한다.
+- Whisper MLX 모델은 0.8B FP16, 약 1.61GB이며 로컬에 내려받았다. 원본 OpenAI
+  Whisper 코드·가중치와 MLX-Audio는 MIT이고, 변환 모델 카드는 원본 모델을
+  참조한다.
+  - https://huggingface.co/mlx-community/whisper-large-v3-turbo-asr-fp16
+  - https://github.com/openai/whisper/blob/main/LICENSE
+  - https://github.com/Blaizzy/mlx-audio/blob/main/LICENSE
+- 제작 음색 모델, `jaeho-ko-r16-v1`, LoRA 강도 0.60은 변경하지 않았다.

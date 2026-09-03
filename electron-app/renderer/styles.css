@@ -122,6 +122,9 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 16px; heigh
 .advanced-options { border:1px solid var(--line); border-radius:11px; background:#141713; }.advanced-options > summary { min-height:44px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 13px; cursor:pointer; list-style:none; }.advanced-options > summary::-webkit-details-marker { display:none; }.advanced-options > summary span { font-size:12px; font-weight:650; }.advanced-options > summary small { color:#899186; font-size:10px; }.advanced-options[open] > summary { border-bottom:1px solid var(--line); }.advanced-options > div { display:grid; gap:14px; padding:14px; }.compact-options { margin-top:2px; }
 .complete-panel { flex: 1; min-height: 370px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .complete-panel h3 { margin: 20px 0 7px; font-size: 15px; }.complete-panel p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.voice-quality-panel { width:100%; margin-top:18px; padding:12px; border:1px solid rgba(255,192,91,.2); border-radius:11px; background:rgba(255,192,91,.04); text-align:left; }
+.voice-quality-panel > div { display:flex; align-items:center; justify-content:space-between; gap:10px; }.voice-quality-panel > div strong { color:#f0d196; font-size:11px; }.voice-quality-panel > div small { color:#847b67; font-size:9px; }
+.voice-quality-panel ul { display:grid; gap:6px; margin:10px 0 0; padding:0; list-style:none; }.voice-quality-panel li { display:grid; grid-template-columns:auto 1fr; gap:9px; align-items:center; padding:8px; border-radius:8px; background:rgba(0,0,0,.14); }.voice-quality-panel li > span { color:#ffd27f; font:700 10px ui-monospace,SFMono-Regular,monospace; }.voice-quality-panel li strong,.voice-quality-panel li small { display:block; }.voice-quality-panel li strong { font-size:10px; }.voice-quality-panel li small { margin-top:3px; color:#8d9188; font-size:9px; }
 .active-progress { flex: 1; padding-top: 26px; }
 .now-making { padding: 15px; display: flex; align-items: center; gap: 12px; border: 1px solid rgba(201,255,91,.2); border-radius: 12px; background: rgba(201,255,91,.04); }
 .now-making small,.now-making strong { display:block; }.now-making small { color:#858d80; font-size:10px; }.now-making strong { margin-top:4px; font-size:14px; }
@@ -175,6 +178,8 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 16px; heigh
 .output-status { display:flex; align-items:center; gap:5px; }
 .status-symbol { display:grid; place-items:center; width:25px; height:25px; border:1px solid var(--line); border-radius:7px; background:#1d211b; font-size:10px; font-weight:800; }
 .status-symbol.verified { color:var(--lime); }.status-symbol.unverified { color:#858d82; }
+.status-symbol.attention { color:#ffc05b; border-color:rgba(255,192,91,.2); background:rgba(255,192,91,.06); }
+.voice-finding-preview { margin-top:5px; color:#c79f58; font-size:9px; line-height:1.45; }
 .status-symbol.reviewed { color:var(--aqua); border-color:rgba(141,235,210,.16); background:rgba(141,235,210,.05); }.status-symbol.review-pending { color:#737b70; }
 .item-actions { display:flex; align-items:center; gap:6px; }
 .item-actions button { height:32px; border:1px solid var(--line); border-radius:7px; background:#20241e; padding:0 10px; cursor:pointer; font-size:10px; }

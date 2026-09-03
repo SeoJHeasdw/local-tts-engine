@@ -11,11 +11,14 @@ import {
   normalizeVoiceText,
   normalizeOptions,
   outputPathsForRoot,
+  pageVoicePatchPlan,
+  patchedTimeline,
   parseTimecode,
   presetFromManifest,
   summarizeChecks,
   timeRangeForPages,
   withOutputReview,
+  voiceQualityFindings,
 } from "./pipeline-utils.mjs";
 
 test("기본 작업은 제작 LoRA v1 0.6과 30초 미리보기다", () => {
@@ -111,6 +114,37 @@ test("작업 이름과 검증 요약을 결정적으로 만든다", () => {
   ]), { ok: false, passed: 1, total: 2, failed: ["video"] });
 });
 
+test("Whisper 실패 청크를 영상 시간대와 페이지로 연결한다", () => {
+  const findings = voiceQualityFindings({
+    chunks: [
+      { key: "chunk-a", startMs: 12_300, endMs: 18_900 },
+      { key: "chunk-b", startMs: 19_100, endMs: 24_000 },
+    ],
+    quality: { chunks: [
+      { chunkKey: "chunk-b", chapter: "ch02", slideId: "toolpick-model", slideNumber: 148, selected: { passed: true } },
+      { chunkKey: "chunk-a", chapter: "ch02", slideId: "toolpick-model", slideNumber: 148, selected: {
+        passed: false,
+        failures: ["지정 발음 불일치"],
+        expectedText: "큐웬삼점육 이십칠비",
+        recognizedText: "큐웬 삼십육 마이너스 이십칠 비",
+        attempt: 3,
+      } },
+    ] },
+  });
+
+  assert.deepEqual(findings, [{
+    chapter: "ch02",
+    slideId: "toolpick-model",
+    slideNumber: 148,
+    startMs: 12_300,
+    endMs: 18_900,
+    reasons: ["지정 발음 불일치"],
+    expectedText: "큐웬삼점육 이십칠비",
+    recognizedText: "큐웬 삼십육 마이너스 이십칠 비",
+    selectedAttempt: 3,
+  }]);
+});
+
 test("레슨 제목으로 완성 영상 이름을 만들고 기존 파일은 번호를 붙여 보존한다", () => {
   assert.equal(nextDisplayVideoFileName("CH01 L00 챕터 프레임", []), "CH01 L00 챕터 프레임.mp4");
   assert.equal(nextDisplayVideoFileName("CH01 L00 챕터 프레임", [
@@ -136,6 +170,54 @@ test("페이지 타임라인의 첫 시작부터 마지막 끝까지 자른다",
   ], 25, 25);
   assert.deepEqual(range, { start: 0.9, end: 2.5 });
   assert.throws(() => timeRangeForPages([], 25, 81));
+});
+
+test("한 페이지만 새 음성 길이에 맞추고 뒤 타임라인을 이동한다", () => {
+  const timeline = {
+    totalMs: 4_000,
+    entries: [
+      { slideNumber: 1, startMs: 0, endMs: 1_000, transitionAtMs: 1_000, speechStartMs: 100, speechEndMs: 900, audio: {}, alignment: { words: [{ startMs: 100, endMs: 900 }] } },
+      { slideNumber: 2, startMs: 1_000, endMs: 2_500, transitionAtMs: 2_500, speechStartMs: 1_100, speechEndMs: 2_400, audio: {}, alignment: { words: [{ startMs: 1_100, endMs: 2_400 }] } },
+      { slideNumber: 3, startMs: 2_500, endMs: 4_000, transitionAtMs: 4_000, speechStartMs: 2_600, speechEndMs: 3_900, audio: {}, alignment: { words: [{ startMs: 2_600, endMs: 3_900 }] } },
+    ],
+  };
+
+  const patched = patchedTimeline(
+    timeline,
+    1_000,
+    2_500,
+    2_000,
+    new Date("2026-09-03T00:00:00.000Z"),
+  );
+
+  assert.equal(patched.totalMs, 4_500);
+  assert.deepEqual(
+    patched.entries.map((entry) => [entry.startMs, entry.endMs]),
+    [[0, 1_000], [1_000, 3_000], [3_000, 4_500]],
+  );
+  assert.deepEqual(patched.voicePatch, {
+    startMs: 1_000,
+    endMs: 2_500,
+    replacementDurationMs: 2_000,
+    deltaMs: 500,
+  });
+});
+
+test("페이지 목소리 교체 필터는 앞·교체·뒤 구간만 다시 잇는다", () => {
+  const plan = pageVoicePatchPlan({
+    videoDuration: 10,
+    targetStart: 2,
+    targetEnd: 5,
+    sourceStart: 1.3,
+    sourceEnd: 5.3,
+    matchAudio: true,
+  });
+
+  assert.equal(plan.replacementDuration, 4);
+  assert.equal(plan.videoFactor, 4 / 3);
+  assert.match(plan.filter, /concat=n=3:v=1:a=0\[vout]/);
+  assert.match(plan.filter, /atrim=start=1\.300000:end=5\.300000/);
+  assert.match(plan.filter, /setpts=1\.333333333\*\(PTS-STARTPTS\)\[vmid]/);
 });
 
 test("목소리 작업을 최대 2개씩 병렬 처리하고 결과 순서를 지킨다", async () => {

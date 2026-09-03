@@ -190,6 +190,31 @@ export function summarizeChecks(checks) {
   };
 }
 
+export function voiceQualityFindings(manifest = {}) {
+  const timings = new Map(
+    (manifest.chunks || []).map((chunk) => [String(chunk.key || ""), chunk]),
+  );
+  return (manifest.quality?.chunks || [])
+    .filter((chunk) => chunk.selected?.passed === false)
+    .map((chunk) => {
+      const timing = timings.get(String(chunk.chunkKey || "")) || {};
+      return {
+        chapter: String(chunk.chapter || ""),
+        slideId: String(chunk.slideId || ""),
+        slideNumber: Number(chunk.slideNumber || 0),
+        startMs: Number(timing.startMs || 0),
+        endMs: Number(timing.endMs || timing.startMs || 0),
+        reasons: Array.isArray(chunk.selected?.failures) && chunk.selected.failures.length
+          ? chunk.selected.failures.map(String)
+          : ["자동 음성 검수 점수 미달"],
+        expectedText: String(chunk.selected?.expectedText || ""),
+        recognizedText: String(chunk.selected?.recognizedText || ""),
+        selectedAttempt: Number(chunk.selected?.attempt || 1),
+      };
+    })
+    .sort((left, right) => left.startMs - right.startMs || left.slideNumber - right.slideNumber);
+}
+
 export function withOutputReview(report, status, now = new Date()) {
   if (!report || typeof report !== "object" || Array.isArray(report)) {
     throw new Error("청취 검수 기록을 저장할 결과가 없습니다.");
@@ -248,6 +273,111 @@ export function timeRangeForPages(entries, startPage, endPage) {
   return {
     start: Number(selected[0].startMs) / 1000,
     end: Number(selected.at(-1).endMs) / 1000,
+  };
+}
+
+export function remapPatchedTimestamp(value, startMs, endMs, factor, deltaMs) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value;
+  if (number <= startMs) return Math.round(number);
+  if (number >= endMs) return Math.round(number + deltaMs);
+  return Math.round(startMs + (number - startMs) * factor);
+}
+
+export function patchedTimeline(timeline, startMs, endMs, replacementDurationMs, now = new Date()) {
+  const originalDurationMs = endMs - startMs;
+  if (!(originalDurationMs > 0) || !(replacementDurationMs > 0)) {
+    throw new Error("교체할 페이지 음성 구간이 올바르지 않습니다.");
+  }
+  const factor = replacementDurationMs / originalDurationMs;
+  const deltaMs = replacementDurationMs - originalDurationMs;
+  const entries = timeline.entries.map((entry) => {
+    const mapped = { ...entry };
+    for (const field of ["startMs", "endMs", "transitionAtMs", "speechStartMs", "speechEndMs"]) {
+      mapped[field] = remapPatchedTimestamp(entry[field], startMs, endMs, factor, deltaMs);
+    }
+    mapped.audio = { ...(entry.audio || {}), durationMs: mapped.endMs - mapped.startMs };
+    if (entry.alignment?.words) {
+      mapped.alignment = {
+        ...entry.alignment,
+        words: entry.alignment.words.map((word) => ({
+          ...word,
+          startMs: remapPatchedTimestamp(word.startMs, startMs, endMs, factor, deltaMs),
+          endMs: remapPatchedTimestamp(word.endMs, startMs, endMs, factor, deltaMs),
+        })),
+      };
+    }
+    mapped.forcedPauses = (entry.forcedPauses || []).map((pause) => ({
+      ...pause,
+      nextSpeechStartMs: remapPatchedTimestamp(
+        pause.nextSpeechStartMs,
+        startMs,
+        endMs,
+        factor,
+        deltaMs,
+      ),
+    }));
+    return mapped;
+  });
+  for (const [index, entry] of entries.entries()) {
+    const nextStart = index + 1 < entries.length
+      ? Number(entries[index + 1].startMs)
+      : Number(timeline.totalMs) + deltaMs;
+    entry.gapAfterMs = Math.max(0, Math.round(nextStart - Number(entry.endMs)));
+  }
+  return {
+    ...timeline,
+    generatedAt: now.toISOString(),
+    totalMs: Math.round(Number(timeline.totalMs) + deltaMs),
+    entries,
+    voicePatch: { startMs, endMs, replacementDurationMs, deltaMs },
+  };
+}
+
+export function pageVoicePatchPlan({
+  videoDuration,
+  targetStart,
+  targetEnd,
+  sourceStart,
+  sourceEnd,
+  matchAudio = true,
+}) {
+  const targetDuration = Number(targetEnd) - Number(targetStart);
+  const generatedDuration = Number(sourceEnd) - Number(sourceStart);
+  if (!(videoDuration > 0) || !(targetDuration > 0) || !(generatedDuration > 0)) {
+    throw new Error("교체할 페이지 음성 구간이 올바르지 않습니다.");
+  }
+  const replacementDuration = matchAudio ? generatedDuration : targetDuration;
+  const videoFactor = replacementDuration / targetDuration;
+  const filters = [];
+  const videoParts = [];
+  const audioParts = [];
+  const addOriginalPart = (label, start, end) => {
+    const endOption = end == null ? "" : `:end=${end.toFixed(6)}`;
+    filters.push(`[0:v]trim=start=${start.toFixed(6)}${endOption},setpts=PTS-STARTPTS[v${label}]`);
+    filters.push(`[0:a]atrim=start=${start.toFixed(6)}${endOption},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono[a${label}]`);
+    videoParts.push(`[v${label}]`);
+    audioParts.push(`[a${label}]`);
+  };
+  if (targetStart > 0.001) addOriginalPart("pre", 0, targetStart);
+  filters.push(`[0:v]trim=start=${targetStart.toFixed(6)}:end=${targetEnd.toFixed(6)},setpts=${videoFactor.toFixed(9)}*(PTS-STARTPTS)[vmid]`);
+  filters.push(`[1:a]atrim=start=${sourceStart.toFixed(6)}:end=${sourceEnd.toFixed(6)},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono,apad=whole_dur=${replacementDuration.toFixed(6)},atrim=duration=${replacementDuration.toFixed(6)}[amid]`);
+  videoParts.push("[vmid]");
+  audioParts.push("[amid]");
+  if (targetEnd < videoDuration - 0.001) addOriginalPart("post", targetEnd, null);
+  if (videoParts.length > 1) {
+    filters.push(`${videoParts.join("")}concat=n=${videoParts.length}:v=1:a=0[vout]`);
+    filters.push(`${audioParts.join("")}concat=n=${audioParts.length}:v=0:a=1[aout]`);
+  } else {
+    filters.push("[vmid]null[vout]");
+    filters.push("[amid]anull[aout]");
+  }
+  return {
+    filter: filters.join(";"),
+    replacementDuration,
+    videoFactor,
+    videoOutput: "[vout]",
+    audioOutput: "[aout]",
   };
 }
 

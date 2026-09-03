@@ -620,7 +620,7 @@ function handleTextVoiceEvent(event) {
 function outputLabel(item) {
   if (item.root === "voice") return "텍스트 목소리";
   if (item.root === "edit") {
-    return { merge: "합친 영상", trim: "자른 영상", voice: "목소리 교체", "voice-batch": "목소리 교체" }[item.operation] || "편집 영상";
+    return { merge: "합친 영상", trim: "자른 영상", voice: "목소리 교체", "voice-page": "페이지 목소리 교체", "voice-batch": "목소리 교체" }[item.operation] || "편집 영상";
   }
   if (item.root === "pilot") return "강의 음성";
   return item.video ? "완성 강의 영상" : "강의 자막·음성";
@@ -667,7 +667,14 @@ function renderOutputs() {
         </details>
       </div>`;
     row.querySelector("strong").textContent = item.displayName || item.name;
-    row.querySelector("small").textContent = `${outputLabel(item)} · ${formatDuration(item.durationMs)} · ${formatDate(item.updatedAt)}`;
+    const reviewPages = (item.needsReview || []).map((value) => `${value.slideNumber}페이지`).join(", ");
+    row.querySelector("small").textContent = `${outputLabel(item)} · ${formatDuration(item.durationMs)} · ${formatDate(item.updatedAt)}${reviewPages ? ` · ${reviewPages} 재생성 필요` : ""}`;
+    const automaticStatus = row.querySelector(".output-status .status-symbol");
+    const automaticLabel = item.ok
+      ? "파일과 음성 자동 검수 완료"
+      : reviewPages ? `음성 확인 필요: ${reviewPages}` : "자동 검증 실패 또는 기록 없음";
+    automaticStatus.dataset.tooltip = automaticLabel;
+    automaticStatus.setAttribute("aria-label", automaticLabel);
     const target = { root: item.root, name: item.name, day: item.day, store: item.store };
     const resultMenu = row.querySelector(".result-menu");
     resultMenu.addEventListener("toggle", () => {
@@ -851,6 +858,7 @@ function handleJobEvent(event) {
     setJobState(event.cancelled ? "중지됨" : "오류", event.cancelled ? "idle" : "failed");
     $("#current-stage").textContent = event.message;
     appendLog(`\n[중단] ${event.message}\n`);
+    loadOutputs();
   } else if (event.type === "complete") {
     setBusy(false);
     resetCancelButton($("#cancel-button"));
@@ -1094,6 +1102,8 @@ $("#apply-voice-candidate").addEventListener("click", async () => {
       videoToken: voiceVideo.token,
       audioSource: "file",
       audioToken: selectedCandidateToken,
+      startPage: Number($("#voice-start-page").value),
+      endPage: Number($("#voice-end-page").value),
       durationPolicy: $("#voice-duration-policy").value,
     });
   } catch (error) {

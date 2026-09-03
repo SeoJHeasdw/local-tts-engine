@@ -1,5 +1,6 @@
 default_permissions = "local-tts-development"
 
+sandbox_mode = "danger-full-access"
 [features]
 network_proxy = true
 

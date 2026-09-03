@@ -15,11 +15,14 @@ import {
   normalizeOptions,
   normalizeVoiceText,
   outputPathsForRoot,
+  pageVoicePatchPlan,
+  patchedTimeline,
   parseTimecode,
   presetFromManifest,
   providerForOptions,
   summarizeChecks,
   timeRangeForPages,
+  voiceQualityFindings,
   withOutputReview,
 } from "./pipeline-utils.mjs";
 import {
@@ -221,6 +224,8 @@ async function assertRuntime(options, studio = runtimePaths(options.paths), requ
       ["강의 도구 Python", runtimeTools.basePython],
       ["강의 설정", studio.configPath],
       ["강의 대본", path.join(studio.deckRoot, "script/course")],
+      ["Whisper 자동 음성 검수 모델", path.join(ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16/config.json")],
+      ["Whisper 자동 음성 검수 가중치", path.join(ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16/model.safetensors")],
     );
   }
   if (requirements.node) required.push(["Node.js", runtimeTools.node]);
@@ -435,6 +440,8 @@ async function publishVideo(source, studio, name, title) {
 
 async function validateResult({ sourceDir, renderDir, options, studio }) {
   const manifest = JSON.parse(await fs.readFile(path.join(sourceDir, "manifest.json"), "utf8"));
+  const voiceQuality = manifest.quality?.enabled ? manifest.quality.summary : null;
+  const voiceFindings = voiceQualityFindings(manifest);
   const audioProbe = await ffprobe(manifest.audioPath);
   const audioDurationMs = Math.round(Number(audioProbe.format?.duration || 0) * 1000);
   const checks = [
@@ -482,6 +489,9 @@ async function validateResult({ sourceDir, renderDir, options, studio }) {
     audioPath: manifest.audioPath,
     videoPath,
     durationMs: Number(manifest.durationMs),
+    voiceQuality,
+    voiceFindings,
+    needsReview: voiceQuality?.needsReview || [],
     target: options.deliverable === "audio"
       ? { root: "pilot", day: path.basename(path.dirname(sourceDir)), name: options.name }
       : { root: "render", name: options.name },
@@ -617,10 +627,18 @@ function chosenFile(token, kind) {
   return chosenRecord(token, kind).path;
 }
 
-async function registerSelected(paths, kind) {
-  return Promise.all(paths.map(async (file) => {
+async function registerSelected(paths, kind, extras = []) {
+  return Promise.all(paths.map(async (file, index) => {
     const token = crypto.randomUUID();
-    const value = { token, kind, path: path.resolve(file), name: path.basename(file), timelinePath: null, pageRange: null };
+    const value = {
+      token,
+      kind,
+      path: path.resolve(file),
+      name: path.basename(file),
+      timelinePath: null,
+      pageRange: null,
+      ...(extras[index] || {}),
+    };
     if (kind === "video") {
       const timelinePath = path.join(path.dirname(value.path), "timeline.json");
       const timeline = await fs.readFile(timelinePath, "utf8").then(JSON.parse).catch(() => null);
@@ -761,7 +779,19 @@ async function generateReplacementVoice(options, outputDir) {
   }
   await runProcess("voice", requireRuntimeTool("trainPython", "음성 생성 Python"), args);
   const manifest = JSON.parse(await fs.readFile(path.join(voiceDir, "manifest.json"), "utf8"));
-  return manifest.audioPath;
+  const firstChunk = manifest.chunks?.[0];
+  const lastChunk = manifest.chunks?.at(-1);
+  if (!firstChunk || !lastChunk) throw new Error("생성된 목소리의 음성 구간을 찾지 못했습니다.");
+  return {
+    audioPath: manifest.audioPath,
+    generatedVoice: {
+      manifestPath: path.join(voiceDir, "manifest.json"),
+      sourceStartMs: Number(firstChunk.startMs),
+      sourceEndMs: Number(lastChunk.endMs),
+      startPage: Number(options.startPage),
+      endPage: Number(options.endPage),
+    },
+  };
 }
 
 async function runVoiceCandidates(options, outputDir) {
@@ -778,13 +808,17 @@ async function runVoiceCandidates(options, outputDir) {
       const candidateDir = path.join(outputDir, "candidates", candidateName);
       await fs.mkdir(candidateDir, { recursive: true });
       const seed = (baseSeed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
-      const audioPath = await generateReplacementVoice({ ...options, seed }, candidateDir);
+      const generated = await generateReplacementVoice({ ...options, seed }, candidateDir);
       completed += 1;
       emit({ type: "voice-item-complete", completed, total: count, name: `후보 ${index + 1}` });
-      return { index: index + 1, seed, audioPath };
+      return { index: index + 1, seed, ...generated };
     },
   );
-  const registered = await registerSelected(candidates.map((item) => item.audioPath), "audio");
+  const registered = await registerSelected(
+    candidates.map((item) => item.audioPath),
+    "audio",
+    candidates.map((item) => ({ generatedVoice: item.generatedVoice })),
+  );
   return candidates.map((item, index) => ({
     ...item,
     token: registered[index].token,
@@ -895,11 +929,76 @@ async function selectTextVoice(token) {
   return report;
 }
 
+async function runPageVoicePatch(videoRecord, audioRecord, options, outputDir) {
+  const timeline = JSON.parse(await fs.readFile(videoRecord.timelinePath, "utf8"));
+  const target = timeRangeForPages(timeline.entries, Number(options.startPage), Number(options.endPage));
+  const targetStart = target.start;
+  const targetEnd = target.end;
+  const generated = audioRecord.generatedVoice;
+  if (
+    Number(generated.startPage) !== Number(options.startPage)
+    || Number(generated.endPage) !== Number(options.endPage)
+  ) {
+    throw new Error("생성한 목소리와 교체할 페이지 범위가 다릅니다. 후보를 다시 만들어 주세요.");
+  }
+  const sourceStart = Number(generated.sourceStartMs) / 1000;
+  const sourceEnd = Number(generated.sourceEndMs) / 1000;
+
+  const videoProbe = await inspectMedia(videoRecord.path);
+  const videoDuration = Number(videoProbe.format?.duration || 0);
+  if (!videoDuration || !videoProbe.streams?.some((stream) => stream.codec_type === "audio")) {
+    throw new Error("페이지 음성 교체에는 기존 음성 트랙과 타임라인이 필요합니다.");
+  }
+  const matchAudio = options.durationPolicy === "match-audio";
+  const patchPlan = pageVoicePatchPlan({
+    videoDuration,
+    targetStart,
+    targetEnd,
+    sourceStart,
+    sourceEnd,
+    matchAudio,
+  });
+
+  const output = path.join(outputDir, `${options.name}.mp4`);
+  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
+    "-y", "-hide_banner", "-nostats", "-i", videoRecord.path, "-i", audioRecord.path,
+    "-filter_complex", patchPlan.filter,
+    "-map", patchPlan.videoOutput, "-map", patchPlan.audioOutput,
+    "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", output,
+  ]);
+
+  const replacementDurationMs = Math.round(patchPlan.replacementDuration * 1000);
+  const nextTimeline = patchedTimeline(
+    timeline,
+    Math.round(targetStart * 1000),
+    Math.round(targetEnd * 1000),
+    replacementDurationMs,
+  );
+  const timelinePath = path.join(outputDir, "timeline.json");
+  await fs.writeFile(timelinePath, `${JSON.stringify(nextTimeline, null, 2)}\n`, "utf8");
+  const report = await validateEditVideo(
+    output,
+    "voice-page",
+    [videoRecord.path, audioRecord.path],
+    outputDir,
+  );
+  report.timelinePath = timelinePath;
+  report.pageRange = { start: Number(options.startPage), end: Number(options.endPage) };
+  await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return report;
+}
+
 async function runVoiceEdit(options, outputDir) {
-  const video = chosenFile(options.videoToken, "video");
-  const audio = options.audioSource === "generate"
-    ? await generateReplacementVoice(options, outputDir)
-    : chosenFile(options.audioToken, "audio");
+  const videoRecord = chosenRecord(options.videoToken, "video");
+  const audioRecord = options.audioSource === "generate"
+    ? await generateReplacementVoice(options, outputDir).then((value) => ({ path: value.audioPath, generatedVoice: value.generatedVoice }))
+    : chosenRecord(options.audioToken, "audio");
+  if (videoRecord.timelinePath && audioRecord.generatedVoice) {
+    return runPageVoicePatch(videoRecord, audioRecord, options, outputDir);
+  }
+  const video = videoRecord.path;
+  const audio = audioRecord.path;
   const [videoProbe, audioProbe] = await Promise.all([inspectMedia(video), inspectMedia(audio)]);
   const videoDuration = Number(videoProbe.format?.duration || 0);
   const audioDuration = Number(audioProbe.format?.duration || 0);
@@ -1060,6 +1159,8 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
       ok: report?.summary?.ok ?? null,
       passed: report?.summary?.passed ?? null,
       total: report?.summary?.total ?? null,
+      needsReview: report?.needsReview || [],
+      voiceFindings: report?.voiceFindings || [],
       review: report?.review || null,
       path: videoPath || dir,
     });
@@ -1084,6 +1185,8 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
         ok: report.summary?.ok ?? null,
         passed: report.summary?.passed ?? null,
         total: report.summary?.total ?? null,
+        needsReview: report.needsReview || [],
+        voiceFindings: report.voiceFindings || [],
         review: report.review || null,
         path: report.audioPath || dir,
       });
@@ -1206,6 +1309,10 @@ function registerIpc() {
       voice: Boolean(await safeStat(studio.referenceAudioPath)),
       voiceLibrary: Boolean(await safeStat(studio.voiceLibraryRoot)),
       adapter: settings.adapterId === "none" || Boolean(await safeStat(selectedAdapter?.path)),
+      qualityModel: Boolean(
+        await safeStat(path.join(ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16/config.json"))
+        && await safeStat(path.join(ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16/model.safetensors")),
+      ),
       deck: Boolean(await safeStat(studio.configPath))
         && Boolean(await safeStat(path.join(studio.deckRoot, "script/course"))),
     };
@@ -1213,7 +1320,7 @@ function registerIpc() {
       textVoice: runtime.trainPython && runtime.ffprobe && runtime.voice && runtime.adapter,
       editing: runtime.ffmpeg && runtime.ffprobe,
       course: runtime.trainPython && runtime.basePython && runtime.node && runtime.ffmpeg
-        && runtime.ffprobe && runtime.voice && runtime.adapter && runtime.deck,
+        && runtime.ffprobe && runtime.voice && runtime.adapter && runtime.qualityModel && runtime.deck,
     };
     const setupIssues = [];
     let catalog = { pages: [], lessons: [], totalPages: 0 };

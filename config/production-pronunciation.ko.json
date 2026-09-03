@@ -1,5 +1,29 @@
 [
   {
+    "from": "Qwen",
+    "to": "큐웬"
+  },
+  {
+    "from": "Runtime",
+    "to": "런타임"
+  },
+  {
+    "from": "Context",
+    "to": "컨텍스트"
+  },
+  {
+    "from": "RAG",
+    "to": "래그"
+  },
+  {
+    "from": "IBM",
+    "to": "아이비엠"
+  },
+  {
+    "from": "Meta",
+    "to": "메타"
+  },
+  {
     "from": "똑같이",
     "to": "똑까치"
   },

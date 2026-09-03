@@ -7,10 +7,11 @@ export_udemy.py가 덱 미디어 계약으로 변환할 manifest.json을 출력�
 처리 순서:
     1. 대본 파싱  → CourseEntry 목록 (챕터·슬라이드·스텝 단위)
     2. 청킹       → CourseChunk 목록 (한 번에 합성할 자연스러운 호흡 단위)
-    3. TTS 생성   → 클립별 WAV 캐시 (해시 기반, 이미 있으면 재사용)
-    4. 트랙 조립  → 패드·갭을 삽입해 단일 WAV로 이어붙임 + ffmpeg 정규화
-    5. 강제 정렬  → Qwen3-ForcedAligner 로 단어별 시작·종료 ms 계산
-    6. 타임라인   → 스텝별 startMs/endMs/transitionAtMs 산출 → manifest.json
+    3. TTS 생성   → 위험 청크는 서로 다른 시드 후보를 최대 3개 생성
+    4. 자동 검수  → 독립 Whisper 받아쓰기와 파형 검사로 후보 자동 선택
+    5. 트랙 조립  → 패드·갭을 삽입해 단일 WAV로 이어붙임 + ffmpeg 정규화
+    6. 강제 정렬  → Qwen3-ForcedAligner 로 단어별 시작·종료 ms 계산
+    7. 타임라인   → 스텝별 startMs/endMs/transitionAtMs 산출 → manifest.json
 
 CLI 진입점:
     python -m local_tts_engine.course_pilot \\
@@ -49,6 +50,19 @@ from .pilot import (
     sha256_text,
     snapshot_revision,
 )
+from .pronunciation import (
+    apply_pronunciation,
+    merge_pronunciation_dictionaries,
+    pronunciation_preflight,
+)
+from .speech_quality import (
+    ASR_LICENSE,
+    ASR_REPOSITORY,
+    MAX_AUTOMATIC_ATTEMPTS,
+    choose_best_candidate,
+    evaluate_candidate,
+    quality_summary,
+)
 
 
 # ─── 프로젝트 경로 ────────────────────────────────────────────────────────────
@@ -57,6 +71,9 @@ DEFAULT_SOURCE_PROJECT = Path("/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent")
 
 # 로컬 발음 교체 사전 위치. 존재하지 않으면 빈 목록으로 처리.
 LOCAL_PRONUNCIATION_PATH = Path(__file__).parents[2] / "config/production-pronunciation.ko.json"
+LOCAL_QUALITY_ASR_PATH = (
+    Path(__file__).parents[2] / "artifacts/models/whisper-large-v3-turbo-asr-fp16"
+)
 
 # MLX 포팅된 8비트 양자화 강제 정렬 모델 (TTS와 별도 Metal 페이즈에서 실행)
 ALIGNER_REPOSITORY = "mlx-community/Qwen3-ForcedAligner-0.6B-8bit"
@@ -121,6 +138,9 @@ class CourseEntry:
     part_index: int = 0       # 한 스텝이 강제 무음으로 나뉜 경우의 0-based 조각 번호
     part_count: int = 1       # 같은 스텝 안의 전체 음성 조각 수
     pause_before_ms: int = 0  # 이 조각 직전에 삽입할 강제 무음
+    pronunciation_matches: tuple[str, ...] = ()
+    required_pronunciations: tuple[str, ...] = ()
+    unresolved_tokens: tuple[str, ...] = ()
 
     @property
     def key(self) -> str:
@@ -165,6 +185,17 @@ class CourseChunk:
     def tts_text(self) -> str:
         """청크 내 모든 스텝의 TTS 텍스트를 공백으로 이어 붙인 문자열."""
         return " ".join(entry.tts_text for entry in self.entries)
+
+    @property
+    def required_pronunciations(self) -> tuple[str, ...]:
+        """Pronunciations that independent ASR must hear in this chunk."""
+        return tuple(
+            dict.fromkeys(
+                pronunciation
+                for entry in self.entries
+                for pronunciation in entry.required_pronunciations
+            )
+        )
 
 
 # ─── 해시·텍스트 유틸리티 ─────────────────────────────────────────────────────
@@ -347,33 +378,6 @@ def parse_script(path: Path) -> dict[str, dict[int, str]]:
     return result
 
 
-# ─── 발음 치환 ────────────────────────────────────────────────────────────────
-
-def apply_pronunciation(text: str, dictionary: list[dict[str, str]]) -> str:
-    """발음 사전을 순서대로 적용해 TTS 입력 텍스트를 생성한다.
-
-    영문자·숫자만으로 구성된 키워드는 단어 경계(\b 대신 직접 구현)를 적용해
-    'API'가 'RAPID' 안에서 치환되지 않도록 한다.
-    한국어 포함 복합 키워드는 전체 일치로 치환한다.
-
-    사전 항목 예시:
-        {"from": "LLM", "to": "엘엘엠"}
-        {"from": "fine-tuning", "to": "파인 튜닝"}
-    """
-    output = text
-    for item in dictionary:
-        source = item["from"]
-        replacement = item["to"]
-        escaped = re.escape(source)
-        # 순수 영숫자 토큰은 좌우 영숫자 경계 검사를 적용한다.
-        if re.fullmatch(r"[A-Za-z0-9]+", source):
-            pattern = rf"(?<![A-Za-z0-9]){escaped}(?![A-Za-z0-9])"
-        else:
-            pattern = escaped
-        output = re.sub(pattern, replacement, output)
-    return output
-
-
 def production_pronunciation() -> list[dict[str, str]]:
     """로컬 프로덕션 발음 사전을 읽어 반환한다.
 
@@ -383,6 +387,17 @@ def production_pronunciation() -> list[dict[str, str]]:
     if not LOCAL_PRONUNCIATION_PATH.is_file():
         return []
     return json.loads(LOCAL_PRONUNCIATION_PATH.read_text(encoding="utf-8"))
+
+
+def course_pronunciation_dictionary(source_project: Path) -> list[dict[str, Any]]:
+    """Load the deck dictionary and apply local production overrides."""
+    deck_dictionary = json.loads(
+        (source_project / "deck/narration/pronunciation.ko.json").read_text(encoding="utf-8")
+    )
+    return merge_pronunciation_dictionaries(
+        deck_dictionary,
+        production_pronunciation(),
+    )
 
 
 # ─── 슬라이드 순서 결정 ───────────────────────────────────────────────────────
@@ -582,11 +597,7 @@ def course_entries(
     """
     deck_root = source_project / "deck"
     # deck 내장 발음 사전 로드 (영어 약어, 숫자 읽기 등)
-    pronunciation = json.loads(
-        (deck_root / "narration/pronunciation.ko.json").read_text(encoding="utf-8")
-    )
-    # 로컬 프로덕션 사전을 뒤에 추가해 우선순위를 높인다
-    pronunciation.extend(production_pronunciation())
+    pronunciation = course_pronunciation_dictionary(source_project)
     order = chapter_slide_order(deck_root)
     # 슬라이드 전체 순서 → 1-based 번호 매핑
     global_numbers = {pair: index + 1 for index, pair in enumerate(order)}
@@ -614,6 +625,7 @@ def course_entries(
         for step in sorted(steps):
             segments = split_forced_pause_segments(steps[step])
             for part_index, (source_text, pause_before_ms) in enumerate(segments):
+                preflight = pronunciation_preflight(source_text, pronunciation)
                 entries.append(
                     CourseEntry(
                         chapter=chapter,
@@ -621,10 +633,18 @@ def course_entries(
                         slide_number=slide_number,
                         step=step,
                         source_text=source_text,
-                        tts_text=apply_pronunciation(source_text, pronunciation),
+                        tts_text=preflight["ttsText"],
                         part_index=part_index,
                         part_count=len(segments),
                         pause_before_ms=pause_before_ms,
+                        pronunciation_matches=tuple(
+                            f"{item['from']} → {item['to']}"
+                            for item in preflight["dictionaryMatches"]
+                        ),
+                        required_pronunciations=tuple(preflight["requiredPronunciations"]),
+                        unresolved_tokens=tuple(
+                            [*preflight["unresolvedAscii"], *preflight["unresolvedNumbers"]]
+                        ),
                     )
                 )
 
@@ -1010,17 +1030,20 @@ def synthesize_excerpt(
     end_page: int | None = None,
     model_key: str = "qwen3-tts",
     use_cache: bool = True,
+    automatic_quality: bool = True,
+    quality_attempts: int = MAX_AUTOMATIC_ATTEMPTS,
 ) -> None:
     """강의 대본 일부를 TTS로 합성하고 정렬된 manifest.json을 생성한다.
 
     흐름:
         1. 대본 → CourseEntry → CourseChunk 목록 생성
-        2. 청크별 TTS 생성 (캐시 히트 시 재사용) + trim/fade 후처리
-        3. 목표 길이(target_seconds)에 가장 가까운 청크 수 선택
-        4. TTS 모델 해제 → ForcedAligner 로드 (Metal 메모리 재사용)
-        5. 청크별 단어 정렬 (캐시 히트 시 재사용)
-        6. 클립 조립 → 정규화 → 미리듣기 M4A 생성
-        7. 스텝별 절대 타이밍 계산 → manifest.json 저장
+        2. 위험 토큰 청크는 서로 다른 시드 후보를 생성
+        3. TTS 모델 해제 → 독립 Whisper ASR로 발음·누락 자동 검수 및 후보 선택
+        4. 목표 길이(target_seconds)에 가장 가까운 청크 수 선택
+        5. Whisper 해제 → ForcedAligner 로드 (Metal 메모리 재사용)
+        6. 청크별 단어 정렬 (캐시 히트 시 재사용)
+        7. 클립 조립 → 정규화 → 미리듣기 M4A 생성
+        8. 스텝별 절대 타이밍 계산 → manifest.json 저장
 
     Metal 메모리 관리:
         TTS 완료 후 모델을 명시적으로 del/gc.collect()/mx.clear_cache()해
@@ -1032,6 +1055,8 @@ def synthesize_excerpt(
 
     if end_page is None and target_seconds <= 0:
         raise ValueError("목표 길이는 0초보다 커야 합니다.")
+    if not 1 <= quality_attempts <= 5:
+        raise ValueError("자동 음성 후보 수는 1~5 사이여야 합니다.")
 
     page_count: int | None = None
     if start_page is not None:
@@ -1063,6 +1088,7 @@ def synthesize_excerpt(
         end_slide_number=end_page,
     )
     chunks = group_course_entries(entries)
+    pronunciation = course_pronunciation_dictionary(source_project)
     reference_text = reference_text_path.read_text(encoding="utf-8").strip()
     reference_hash = sha256_file(reference_path)
     reference_text_hash = sha256_text(reference_text)
@@ -1116,12 +1142,23 @@ def synthesize_excerpt(
     cache_hits = 0
     peak_memory_gb = 0.0
 
-    for index, chunk in enumerate(chunks):
-        # 캐시 키: 모델·설정·참조·텍스트·시드·후처리 파라미터를 모두 포함
-        # schemaVersion을 올리면 기존 캐시가 자동으로 무효화된다.
+    def synthesize_candidate(chunk: CourseChunk, attempt: int) -> dict[str, Any]:
+        """Generate or load one deterministic candidate for a course chunk."""
+        nonlocal generation_ms, cache_hits, peak_memory_gb
+        seed_basis = stable_digest(
+            {
+                "chunkKey": chunk.key,
+                "ttsText": chunk.tts_text,
+                "requestedSeed": seed,
+                "attempt": attempt,
+            }
+        )
+        candidate_seed = (
+            seed ^ int(seed_basis[:8], 16) ^ ((attempt - 1) * 0x9E3779B1)
+        ) & 0xFFFFFFFF
         cache_hash = stable_digest(
             {
-                "schemaVersion": 6,
+                "schemaVersion": 7,
                 "model": spec.repository,
                 "modelRevision": revision,
                 "settings": {"language": spec.language, **settings},
@@ -1130,7 +1167,8 @@ def synthesize_excerpt(
                 "entryKeys": [entry.key for entry in chunk.entries],
                 "ttsText": chunk.tts_text,
                 "pauseBeforeMs": [entry.pause_before_ms for entry in chunk.entries],
-                "seed": seed,
+                "seed": candidate_seed,
+                "attempt": attempt,
                 "adapter": adapter,
                 "edgePadMs": EDGE_PAD_MS,
                 "edgeFadeMs": EDGE_FADE_MS,
@@ -1138,13 +1176,9 @@ def synthesize_excerpt(
                 "targetInternalSilenceMs": TARGET_INTERNAL_SILENCE_MS,
             }
         )
-        clip_path = clips_dir / f"{chunk.key}--{cache_hash[:12]}.wav"
+        clip_path = clips_dir / f"{chunk.key}--take-{attempt}--{cache_hash[:12]}.wav"
         clip_meta_path = clip_path.with_suffix(".json")
-        # 청크별 시드: 전역 시드 XOR 캐시 해시 앞 4바이트
-        entry_seed = seed ^ int(cache_hash[:8], 16)
-
         if use_cache and clip_path.is_file():
-            # ── 캐시 히트: 오디오를 다시 생성하지 않고 파일 정보만 읽는다 ──
             info = sf.info(clip_path)
             rate = int(info.samplerate)
             frames = int(info.frames)
@@ -1160,8 +1194,7 @@ def synthesize_excerpt(
             )
             cache_hits += 1
         else:
-            # ── 캐시 미스: TTS 생성 + trim/fade + WAV 저장 ──
-            mx.random.seed(entry_seed)
+            mx.random.seed(candidate_seed)
             started = time.perf_counter()
             generation_args = {
                 "text": chunk.tts_text,
@@ -1175,10 +1208,10 @@ def synthesize_excerpt(
             results = list(model.generate(**generation_args))
             generation_ms += round((time.perf_counter() - started) * 1000)
             if not results:
-                raise RuntimeError(f"{chunk.key}에서 오디오가 생성되지 않았습니다.")
+                raise RuntimeError(f"{chunk.key} 후보 {attempt}에서 오디오가 생성되지 않았습니다.")
             rate = int(results[0].sample_rate)
             if any(int(result.sample_rate) != rate for result in results):
-                raise RuntimeError(f"{chunk.key}의 샘플레이트가 일치하지 않습니다.")
+                raise RuntimeError(f"{chunk.key} 후보 {attempt}의 샘플레이트가 일치하지 않습니다.")
             raw_audio = np.concatenate([np.asarray(result.audio) for result in results])
             audio, trim_info = trim_and_fade_audio(raw_audio, rate)
             sf.write(clip_path, audio, rate, subtype="PCM_24")
@@ -1188,6 +1221,27 @@ def synthesize_excerpt(
                 peak_memory_gb,
                 *(float(result.peak_memory_usage) for result in results),
             )
+        return {
+            "attempt": attempt,
+            "hash": cache_hash,
+            "seed": candidate_seed,
+            "audioPath": str(clip_path.resolve()),
+            "frames": frames,
+            "sampleRate": rate,
+            "durationMs": round(frames * 1000 / rate),
+            **trim_info,
+        }
+
+    for index, chunk in enumerate(chunks):
+        guarded = any(
+            entry.source_text != entry.tts_text or entry.unresolved_tokens
+            for entry in chunk.entries
+        )
+        attempt_count = quality_attempts if automatic_quality and guarded else 1
+        candidates = [synthesize_candidate(chunk, attempt) for attempt in range(1, attempt_count + 1)]
+        selected = candidates[0]
+        rate = int(selected["sampleRate"])
+        frames = int(selected["frames"])
 
         # 첫 번째 클립에서 샘플레이트와 목표 샘플 수를 확정한다
         if native_rate is None:
@@ -1205,9 +1259,11 @@ def synthesize_excerpt(
             {
                 "chunk": chunk,
                 "key": chunk.key,
-                "hash": cache_hash,
-                "seed": entry_seed,
-                "audioPath": str(clip_path.resolve()),
+                "candidateOptions": candidates,
+                "guarded": guarded,
+                "hash": selected["hash"],
+                "seed": selected["seed"],
+                "audioPath": selected["audioPath"],
                 "frames": frames,
                 "sampleRate": rate,
                 "startSample": start_sample,
@@ -1215,7 +1271,15 @@ def synthesize_excerpt(
                 "startMs": round(start_sample * 1000 / rate),
                 "endMs": round(end_sample * 1000 / rate),
                 "durationMs": round(frames * 1000 / rate),
-                **trim_info,
+                **{
+                    key: selected[key]
+                    for key in (
+                        "trimmedHeadMs",
+                        "trimmedTailMs",
+                        "shortenedSilenceCount",
+                        "shortenedSilenceMs",
+                    )
+                },
             }
         )
 
@@ -1259,13 +1323,136 @@ def synthesize_excerpt(
     else:
         raise RuntimeError("강의 끝까지 생성해도 목표 길이에 도달하지 못했습니다.")
 
-    # Keep TTS and forced alignment in separate Metal phases.
-    # TTS 모델을 명시적으로 해제해 ForcedAligner 가 사용할 Metal 메모리를 확보한다.
+    # Keep TTS, independent ASR review, and forced alignment in separate Metal phases.
+    # TTS 모델을 명시적으로 해제해 Whisper와 ForcedAligner가 메모리를 재사용하게 한다.
     del model
     if training_wrapper is not None:
         del training_wrapper
     gc.collect()
     mx.clear_cache()
+
+    quality_records: list[dict[str, Any]] = []
+    quality_model_path: Path | None = None
+    quality_revision: str | None = None
+    quality_load_ms = 0
+    quality_evaluation_ms = 0
+    if automatic_quality:
+        from mlx_audio.stt.utils import load_model as load_stt_model
+
+        quality_model_path = (
+            LOCAL_QUALITY_ASR_PATH
+            if (LOCAL_QUALITY_ASR_PATH / "config.json").is_file()
+            else resolve_model_path(ASR_REPOSITORY, get_model_path)
+        )
+        quality_revision = snapshot_revision(quality_model_path)
+        started = time.perf_counter()
+        quality_model = load_stt_model(quality_model_path)
+        quality_load_ms = round((time.perf_counter() - started) * 1000)
+        for item_index, item in enumerate(selected_chunks, start=1):
+            chunk: CourseChunk = item["chunk"]
+            evaluations: list[dict[str, Any]] = []
+            for candidate in item["candidateOptions"]:
+                started = time.perf_counter()
+                result = quality_model.generate(
+                    candidate["audioPath"],
+                    language="ko",
+                    task="transcribe",
+                    temperature=0.0,
+                    return_timestamps=False,
+                    condition_on_previous_text=False,
+                    max_tokens=768,
+                )
+                quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
+                evaluation = evaluate_candidate(
+                    expected_text=chunk.tts_text,
+                    recognized_text=result.text,
+                    audio_path=Path(candidate["audioPath"]),
+                    dictionary=pronunciation,
+                    required_pronunciations=chunk.required_pronunciations,
+                    attempt=int(candidate["attempt"]),
+                    seed=int(candidate["seed"]),
+                )
+                evaluation["hash"] = candidate["hash"]
+                evaluations.append(evaluation)
+            best = choose_best_candidate(evaluations)
+            selected = next(
+                candidate
+                for candidate in item["candidateOptions"]
+                if int(candidate["attempt"]) == int(best["attempt"])
+            )
+            for key in (
+                "hash",
+                "seed",
+                "audioPath",
+                "frames",
+                "sampleRate",
+                "durationMs",
+                "trimmedHeadMs",
+                "trimmedTailMs",
+                "shortenedSilenceCount",
+                "shortenedSilenceMs",
+            ):
+                item[key] = selected[key]
+            first = chunk.entries[0]
+            quality_records.append(
+                {
+                    "chunkKey": chunk.key,
+                    "chapter": first.chapter,
+                    "slideId": first.slide_id,
+                    "slideNumber": first.slide_number,
+                    "guarded": bool(item["guarded"]),
+                    "unresolvedTokens": list(
+                        dict.fromkeys(
+                            token
+                            for entry in chunk.entries
+                            for token in entry.unresolved_tokens
+                        )
+                    ),
+                    "candidates": evaluations,
+                    "selected": best,
+                }
+            )
+            status = "통과" if best["passed"] else "확인 필요"
+            print(
+                f"[자동 음성 검수 {item_index}/{len(selected_chunks)}] "
+                f"{chunk.key}: 후보 {best['attempt']} {status}"
+            )
+        del quality_model
+        gc.collect()
+        mx.clear_cache()
+    else:
+        for item in selected_chunks:
+            chunk = item["chunk"]
+            first = chunk.entries[0]
+            quality_records.append(
+                {
+                    "chunkKey": chunk.key,
+                    "chapter": first.chapter,
+                    "slideId": first.slide_id,
+                    "slideNumber": first.slide_number,
+                    "guarded": False,
+                    "unresolvedTokens": [],
+                    "candidates": [],
+                    "selected": {"passed": True, "attempt": 1, "disabled": True},
+                }
+            )
+
+    quality_result = quality_summary(quality_records)
+
+    # Candidate selection can change duration. Rebuild every absolute clip position
+    # before alignment, subtitles, and capture consume the timeline.
+    cursor_samples = milliseconds_to_samples(START_PAD_MS, native_rate)
+    for index, item in enumerate(selected_chunks):
+        item["startSample"] = cursor_samples
+        item["endSample"] = cursor_samples + int(item["frames"])
+        item["startMs"] = round(item["startSample"] * 1000 / native_rate)
+        item["endMs"] = round(item["endSample"] * 1000 / native_rate)
+        item["durationMs"] = round(int(item["frames"]) * 1000 / native_rate)
+        if index + 1 < len(selected_chunks):
+            cursor_samples = item["endSample"] + milliseconds_to_samples(
+                chunk_gap_after(item["chunk"], selected_chunks[index + 1]["chunk"]),
+                native_rate,
+            )
 
     # 정렬 캐시가 모두 있으면 aligner를 로드하지 않는다 (시간·메모리 절약)
     aligner_paths = [
@@ -1394,6 +1581,8 @@ def synthesize_excerpt(
         record["durationMs"] = transition - visual_start
 
     # ─── manifest.json 생성 ──────────────────────────────────────────────────
+    quality_by_chunk = {item["chunkKey"]: item for item in quality_records}
+    selected_entries = [entry for item in selected_chunks for entry in item["chunk"].entries]
     chunk_manifest = [
         {
             "key": item["key"],
@@ -1410,12 +1599,14 @@ def synthesize_excerpt(
             "trimmedTailMs": item["trimmedTailMs"],
             "shortenedSilenceCount": item["shortenedSilenceCount"],
             "shortenedSilenceMs": item["shortenedSilenceMs"],
+            "selectedAttempt": quality_by_chunk[item["key"]]["selected"].get("attempt", 1),
+            "qualityPassed": quality_by_chunk[item["key"]]["selected"].get("passed", True),
         }
         for item in selected_chunks
     ]
 
     metadata = {
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "cachePolicy": "enabled" if use_cache else "disabled",
         "title": (
             f"강의 {start_page}~{end_page}페이지 {model_key} 묶음"
@@ -1430,6 +1621,30 @@ def synthesize_excerpt(
             "model": ALIGNER_REPOSITORY,
             "revision": aligner_revision,
             "license": "Apache-2.0",
+        },
+        "pronunciation": {
+            "dictionaryEntries": len(pronunciation),
+            "changedEntries": sum(item.source_text != item.tts_text for item in selected_entries),
+            "unresolved": [
+                {
+                    "chapter": item.chapter,
+                    "slideId": item.slide_id,
+                    "slideNumber": item.slide_number,
+                    "step": item.step,
+                    "tokens": list(item.unresolved_tokens),
+                }
+                for item in selected_entries
+                if item.unresolved_tokens
+            ],
+        },
+        "quality": {
+            "enabled": automatic_quality,
+            "model": ASR_REPOSITORY if automatic_quality else None,
+            "revision": quality_revision,
+            "license": ASR_LICENSE if automatic_quality else None,
+            "attemptsForRiskyChunks": quality_attempts if automatic_quality else 1,
+            "summary": quality_result,
+            "chunks": quality_records,
         },
         "seed": seed,
         "settings": {"language": spec.language, **settings},
@@ -1472,12 +1687,15 @@ def synthesize_excerpt(
             "slides": len({(item["chapter"], item["slide_id"]) for item in step_records}),
             "steps": len(step_records),
             "clips": len(selected_chunks),
+            "generatedCandidates": sum(len(item["candidateOptions"]) for item in selected_chunks),
             "characters": sum(len(item["source_text"]) for item in step_records),
             "cacheHits": cache_hits,
         },
         "performance": {
             "modelLoadMs": load_ms,
             "generationMs": generation_ms,
+            "qualityLoadMs": quality_load_ms,
+            "qualityEvaluationMs": quality_evaluation_ms,
             "alignmentLoadMs": alignment_load_ms,
             "alignmentMs": alignment_ms,
             "peakMetalMemoryGb": round(peak_memory_gb, 3),
@@ -1555,6 +1773,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="LoRA 적용 강도 (0보다 크고 1 이하, 기본 1.0)")
     parser.add_argument("--no-cache", action="store_true",
                         help="기존 TTS 클립과 정렬 결과를 읽지 않고 모두 새로 생성")
+    parser.add_argument("--no-auto-quality", action="store_true",
+                        help="독립 Whisper 받아쓰기와 위험 청크 다중 후보 선택을 끔")
+    parser.add_argument("--quality-attempts", type=int, default=MAX_AUTOMATIC_ATTEMPTS,
+                        help=f"위험 청크의 자동 후보 수 (1~5, 기본 {MAX_AUTOMATIC_ATTEMPTS})")
     return parser
 
 
@@ -1575,6 +1797,8 @@ def main(argv: list[str] | None = None) -> int:
         end_page=args.end_page,
         model_key=args.model,
         use_cache=not args.no_cache,
+        automatic_quality=not args.no_auto_quality,
+        quality_attempts=args.quality_attempts,
     )
     return 0
 

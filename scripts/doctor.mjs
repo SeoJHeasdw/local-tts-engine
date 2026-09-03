@@ -56,6 +56,15 @@ async function buildReport() {
   const adapterPath = settings.adapterId && settings.adapterId !== "none"
     ? path.join(PROJECT_ROOT, "artifacts/finetune-runs", settings.adapterId, "adapters")
     : null;
+  const localQualityModel = path.join(PROJECT_ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16");
+  const sharedQualityModel = path.join(
+    os.homedir(),
+    ".cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo-asr-fp16",
+  );
+  const qualityModelPath = await exists(path.join(localQualityModel, "config.json"))
+    && await exists(path.join(localQualityModel, "model.safetensors"))
+    ? localQualityModel
+    : await exists(sharedQualityModel) ? sharedQualityModel : null;
   const checks = {
     appleSilicon: process.platform === "darwin" && process.arch === "arm64",
     basePython: Boolean(tools.basePython),
@@ -66,6 +75,7 @@ async function buildReport() {
     referenceAudio: await exists(studio.referenceAudioPath),
     referenceText: await exists(studio.referenceTextPath),
     adapter: !adapterPath || await exists(path.join(adapterPath, "adapters.safetensors")),
+    qualityModel: Boolean(qualityModelPath),
     courseConfig: await exists(path.join(deckRoot, "narration.config.json")),
     courseScripts: await exists(path.join(deckRoot, "script/course")),
     captionRunner: await exists(path.join(deckRoot, "tools/captions.mjs")),
@@ -78,7 +88,7 @@ async function buildReport() {
     courseVideo: checks.appleSilicon && checks.basePython && checks.trainPython
       && checks.node && checks.ffmpeg && checks.ffprobe && checks.referenceAudio
       && checks.referenceText && checks.adapter && checks.courseConfig
-      && checks.courseScripts && checks.captionRunner && checks.captureRunner,
+      && checks.qualityModel && checks.courseScripts && checks.captionRunner && checks.captureRunner,
   };
   const basePythonOutput = executableOutput(tools.basePython);
   const trainPythonOutput = executableOutput(tools.trainPython);
@@ -91,7 +101,7 @@ async function buildReport() {
     trainPython: firstLine(trainPythonOutput),
     ffmpeg: firstLine(ffmpegOutput),
   };
-  const paths = flags.has("--verbose") ? { ...tools, ...studio, adapterPath } : undefined;
+  const paths = flags.has("--verbose") ? { ...tools, ...studio, adapterPath, qualityModelPath } : undefined;
   return {
     generatedAt: new Date().toISOString(),
     machine: `${os.platform()} ${os.arch()}`,
@@ -120,6 +130,7 @@ function printReport(report) {
     referenceAudio: "참조 음성",
     referenceText: "참조 전사문",
     adapter: "선택한 음성 어댑터",
+    qualityModel: "Whisper 자동 음성 검수 모델",
     courseConfig: "강의 설정",
     courseScripts: "강의 대본",
     captionRunner: "자막 자동화 도구",

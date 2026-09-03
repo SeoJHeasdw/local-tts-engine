@@ -92,6 +92,30 @@ def test_apply_pronunciation_respects_ascii_boundaries() -> None:
     )
 
 
+def test_course_pronunciation_preflight_keeps_caption_source_separate(tmp_path: Path) -> None:
+    deck = tmp_path / "deck"
+    (deck / "src/production/chapters").mkdir(parents=True)
+    (deck / "script/course").mkdir(parents=True)
+    (deck / "narration").mkdir(parents=True)
+    (deck / "src/production/chapters/ch00-test.ts").write_text(
+        '  {\n    id: "slide-a",\n  },\n', encoding="utf-8"
+    )
+    (deck / "script/course/ch00.md").write_text(
+        "## slide-a\n### 0\nRuntime과 RAG, Qwen3.6-27B, 같은 50개라도\n",
+        encoding="utf-8",
+    )
+    (deck / "narration/pronunciation.ko.json").write_text(
+        json.dumps([{"from": "RAG", "to": "랙"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    [entry] = course_entries(tmp_path, "ch00", "slide-a")
+
+    assert entry.source_text == "Runtime과 RAG, Qwen3.6-27B, 같은 50개라도"
+    assert entry.tts_text == "런타임과 래그, 큐웬삼점육 이십칠비, 같은 오십 개라도"
+    assert "RAG → 래그" in entry.pronunciation_matches
+
+
 def test_gap_after_uses_step_and_slide_boundaries() -> None:
     first = CourseEntry("ch00", "slide-a", 1, 0, "a", "a")
     same_slide = CourseEntry("ch00", "slide-a", 1, 1, "b", "b")
