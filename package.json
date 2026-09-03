@@ -6,8 +6,16 @@
   "description": "Local Electron control panel for the Korean lecture TTS pipeline",
   "main": "electron-app/main.mjs",
   "scripts": {
+    "start": "electron electron-app/main.mjs",
     "app": "electron electron-app/main.mjs",
-    "test:app": "node --test electron-app/*.test.mjs"
+    "doctor": "node scripts/doctor.mjs",
+    "test": "npm run test:app && npm run test:python",
+    "test:app": "node --test electron-app/*.test.mjs",
+    "test:python": ".venv/bin/python -m pytest -q",
+    "check": "npm run doctor -- --strict && npm test"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "devDependencies": {
     "electron": "44.0.0"

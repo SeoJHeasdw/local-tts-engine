@@ -147,3 +147,42 @@
   어댑터다.
 - 추가 파인튜닝이나 제작 강도 변경은 명확한 품질 가설과 사용자 청취 승인 전에는
   진행하지 않는다.
+
+## 2026-09-03 — 첫 판매 형태는 로컬 데스크톱 유료 베타
+
+- 결정: 현재 코드를 인터넷 서비스로 바로 노출하지 않는다. 첫 고객 제품은 Apple
+  Silicon에서 음성 원본과 결과물을 로컬 처리하는 데스크톱 앱으로 잡는다.
+- 이유: 현재의 품질·비용·개인정보 장점을 유지하면서 계정, 다중 사용자 저장소,
+  GPU 작업 큐와 음성 데이터 삭제 시스템을 한꺼번에 새로 만들지 않아도 된다.
+- 첫 유료 범위는 텍스트 개인 음성 후보와 기존 영상 음성 교체다. 전용
+  `udemy-agent` 계약에 의존하는 강의 영상 자동 제작은 고객 입력 형식을 분리한
+  뒤 공개한다.
+- 개인 제작 프로필 `jaeho-ko-r16-v1`, 학습 데이터와 참조 음성은 고객 빌드에
+  넣지 않는다. 고객 음성은 본인 또는 명시적 허가를 받은 음성이라는 확인 기록을
+  요구한다.
+- 제품화 상세: `docs/PRODUCTIZATION.md`.
+
+## 2026-09-03 — 상업 배포 라이선스와 플랫폼 정책 재확인
+
+- Qwen3-TTS 1.7B Base 모델 카드는 Apache-2.0을 표시하고 한국어와 짧은 참조
+  음성 기반 복제를 지원한다.
+  - https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+- MLX-Audio 저장소의 현재 라이선스는 MIT다.
+  - https://github.com/Blaizzy/mlx-audio/blob/main/LICENSE
+- FFmpeg는 기본 LGPL 2.1 이상이지만 사용한 선택 기능에 따라 GPL이 적용될 수
+  있다. 현재 로컬 FFmpeg 8.1.1은 `--enable-gpl --enable-libx264` 구성이고 영상
+  명령도 `libx264`를 사용한다. 이 바이너리는 고객 앱에 그대로 묶지 않으며,
+  배포용 코덱 경로와 소스 제공·고지 의무를 별도로 검토한다. 이 기록만으로 법률
+  판단을 대신하지 않는다.
+  - https://ffmpeg.org/legal.html
+- Electron 고객 빌드는 현재처럼 context isolation, renderer sandbox, IPC sender
+  검증과 외부 탐색 차단을 유지하고, 서명·hardened runtime·Apple 공증을 거친다.
+  - https://www.electronjs.org/docs/latest/tutorial/security
+  - https://developer.apple.com/documentation/Xcode/preparing-your-app-for-distribution
+- YouTube는 본인 음성 복제를 보이스오버에 쓰는 경우를 공개가 필요 없는 예시로
+  들지만, 실제 타인의 음성·초상을 허가 없이 쓰는 문제는 별도다. 또한 반복적이고
+  대량 생산된 저가치 템플릿 콘텐츠는 수익화에 부적합할 수 있으므로 제품은 업로드
+  수가 아니라 창작자의 독창성과 검수 시간을 개선하는 도구로 설명한다.
+  - https://support.google.com/youtube/answer/14328491
+  - https://support.google.com/youtube/answer/1311392
+  - https://support.google.com/youtube/answer/17133929

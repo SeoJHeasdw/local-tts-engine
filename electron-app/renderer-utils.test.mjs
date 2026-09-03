@@ -5,6 +5,7 @@ import {
   buildChapterRanges,
   filterOutputItems,
   outputKind,
+  shouldOpenMenuUpward,
   summarizePageRange,
 } from "./renderer/view-utils.mjs";
 
@@ -45,4 +46,9 @@ test("최근 결과를 종류와 청취 승인 상태로 거른다", () => {
 test("최근 결과는 내부 작업명뿐 아니라 레슨 제목으로도 검색한다", () => {
   const items = [{ name: "studio-20260827-120000-ch01-l00", displayName: "CH01 L00 챕터 프레임", root: "render" }];
   assert.deepEqual(filterOutputItems(items, "챕터 프레임").map((item) => item.name), [items[0].name]);
+});
+
+test("화면 아래 공간이 부족하면 결과 메뉴를 위로 연다", () => {
+  assert.equal(shouldOpenMenuUpward(80, 120), true);
+  assert.equal(shouldOpenMenuUpward(140, 120), false);
 });

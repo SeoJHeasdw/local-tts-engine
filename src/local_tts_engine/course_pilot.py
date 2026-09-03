@@ -223,6 +223,19 @@ def normalize_script_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def is_narration_direction(line: str) -> bool:
+    """Return whether a whole line is a parenthesized production direction.
+
+    Inline parentheses remain narration. Only a line whose entire Markdown-stripped
+    content is wrapped in round parentheses is treated as a non-spoken direction.
+    """
+    normalized = re.sub(r"^[*_`~\s]+|[*_`~\s]+$", "", line)
+    return any(
+        normalized.startswith(opening) and normalized.endswith(closing)
+        for opening, closing in (("(", ")"), ("（", "）"))
+    )
+
+
 def parse_script(path: Path) -> dict[str, dict[int, str]]:
     """마크다운 대본 파일을 {슬라이드ID: {스텝번호: 텍스트}} 구조로 파싱한다.
 
@@ -233,7 +246,8 @@ def parse_script(path: Path) -> dict[str, dict[int, str]]:
         ### 2
         ...본문...
 
-    > 인용구나 --- 구분선은 내레이션 대상에서 제외한다.
+    > 인용구, --- 구분선과 줄 전체가 괄호인 제작 지시문은 내레이션에서 제외한다.
+      문장 안의 괄호 표현은 그대로 읽는다.
     """
     result: dict[str, dict[int, str]] = {}
     slide_id: str | None = None
@@ -261,8 +275,13 @@ def parse_script(path: Path) -> dict[str, dict[int, str]]:
             slide_id = slide_match.group(1).strip()
             step = None  # 슬라이드가 바뀌면 스텝 번호도 초기화
             continue
-        # 구분선(---) 과 인용구(>) 는 내레이션에서 제외
-        if step is not None and not re.match(r"^---+\s*$", raw) and not raw.startswith(">"):
+        # 구분선, 인용구와 한 줄짜리 괄호 제작 지시문은 내레이션에서 제외
+        if (
+            step is not None
+            and not re.match(r"^---+\s*$", raw)
+            and not raw.startswith(">")
+            and not is_narration_direction(raw)
+        ):
             buffer.append(raw)
     flush()
     return result
@@ -384,7 +403,7 @@ def course_page_catalog(source_project: Path) -> list[dict[str, Any]]:
 # 강의 순서다. 챕터 여는·닫는 화면처럼 단독으로 영상이 못 되는 조각은 deck
 # 쪽에서 이미 앞뒤 레슨 파일 안에 들어가 있으므로 여기서 다시 묶지 않는다.
 
-LESSON_FILE_PATTERN = re.compile(r"^(\d+)-L(\d+)-")
+LESSON_FILE_PATTERN = re.compile(r"^(\d+)-L(\d+)(?:\.(\d+))?-")
 
 
 def lesson_title_from_source(source: str) -> str:
@@ -400,7 +419,7 @@ def lesson_title_from_source(source: str) -> str:
             continue
         line = re.sub(r"\s*\(\d+장\)\s*$", "", line)
         parts = [part.strip() for part in line.split("·") if part.strip()]
-        if len(parts) >= 3 and re.fullmatch(r"L\d+", parts[1]):
+        if len(parts) >= 3 and re.fullmatch(r"L\d+(?:\.\d+)?", parts[1]):
             return f"{parts[0]} {parts[1]} · " + " · ".join(parts[2:])
         return " · ".join(parts)
     return ""
@@ -427,13 +446,16 @@ def chapter_lesson_files(deck_root: Path) -> list[dict[str, Any]]:
             if not match:
                 raise ValueError(
                     f"{chapter}/{split_path.name} 에 레슨 번호가 없습니다. "
-                    "레슨 파일 이름은 NN-LNN-<슬러그>.ts 여야 합니다."
+                    "레슨 파일 이름은 NN-LNN[.N]-<슬러그>.ts 여야 합니다."
                 )
+            lesson = f"l{int(match.group(2)):02d}"
+            if match.group(3) is not None:
+                lesson += f"-{match.group(3)}"
             lessons.append(
                 {
                     "chapter": chapter,
                     "file": split_path.name,
-                    "lesson": f"l{int(match.group(2)):02d}",
+                    "lesson": lesson,
                     "title": lesson_title_from_source(source),
                     "slideIds": slide_ids,
                 }

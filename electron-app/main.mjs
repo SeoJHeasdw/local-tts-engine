@@ -22,6 +22,10 @@ import {
   timeRangeForPages,
   withOutputReview,
 } from "./pipeline-utils.mjs";
+import {
+  defaultStudioPaths,
+  resolveRuntimeTools,
+} from "./runtime-config.mjs";
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(APP_DIR);
@@ -30,18 +34,7 @@ const APP_SETTINGS_PATH = path.join(ROOT, "artifacts/app-settings.json");
 const FINETUNE_RUN_ROOT = path.join(ROOT, "artifacts/finetune-runs");
 const FINETUNE_TRAIN_JSONL = path.join(ROOT, "artifacts/finetune-datasets/jaeho-ko-v1/official/train.jsonl");
 const ADAPTER = path.join(ROOT, "artifacts/finetune-runs/2026-08-25/jaeho-ko-r16-v1/adapters");
-const TRAIN_PYTHON = path.join(ROOT, ".venv-train/bin/python");
-const BASE_PYTHON = path.join(ROOT, ".venv/bin/python");
-const NODE = "/opt/homebrew/bin/node";
-const FFPROBE = "/opt/homebrew/bin/ffprobe";
-const FFMPEG = "/opt/homebrew/bin/ffmpeg";
-const DEFAULT_STUDIO_PATHS = Object.freeze({
-  sourceProjectRoot: "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent",
-  voiceLibraryRoot: path.join(ROOT, "data/private/voice"),
-  outputRoot: path.join(ROOT, "output"),
-  referenceAudioPath: path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.wav"),
-  referenceTextPath: path.join(ROOT, "artifacts/benchmarks/2026-08-23/reference.txt"),
-});
+const DEFAULT_STUDIO_PATHS = Object.freeze(defaultStudioPaths(ROOT));
 const LEGACY_OUTPUT_PATHS = Object.freeze({
   ttsOutputRoot: path.join(ROOT, "artifacts/course-pilots"),
   voiceOutputRoot: path.join(ROOT, "artifacts/voice-candidates"),
@@ -54,6 +47,13 @@ let mainWindow = null;
 let activeJob = null;
 let catalogCache = null;
 let catalogCacheRoot = null;
+let runtimeTools = {
+  basePython: null,
+  trainPython: null,
+  node: null,
+  ffmpeg: null,
+  ffprobe: null,
+};
 const selectedFiles = new Map();
 
 function normalizeStudioPaths(raw = {}) {
@@ -132,8 +132,6 @@ async function saveAppSettings(raw = {}) {
   }
   const studio = runtimePaths(settings.paths);
   for (const [label, requiredPath] of Object.entries({
-    "강의 설정": studio.configPath,
-    "강의 대본": path.join(studio.deckRoot, "script/course"),
     "참조 음성": studio.referenceAudioPath,
     "참조 전사문": studio.referenceTextPath,
   })) {
@@ -206,25 +204,41 @@ function jobSnapshot() {
   };
 }
 
-async function assertRuntime(options, studio = runtimePaths(options.paths)) {
+function requireRuntimeTool(key, label) {
+  const executable = runtimeTools[key];
+  if (!executable) throw new Error(`${label} 실행 도구를 찾지 못했습니다. 먼저 npm run doctor로 환경을 확인해 주세요.`);
+  return executable;
+}
+
+async function assertRuntime(options, studio = runtimePaths(options.paths), requirements = {}) {
   const required = [
-    TRAIN_PYTHON,
-    BASE_PYTHON,
-    NODE,
-    FFPROBE,
-    studio.referenceAudioPath,
-    studio.referenceTextPath,
-    studio.configPath,
+    ["음성 생성 Python", runtimeTools.trainPython],
+    ["참조 음성", studio.referenceAudioPath],
+    ["참조 전사문", studio.referenceTextPath],
   ];
+  if (requirements.course !== false) {
+    required.push(
+      ["강의 도구 Python", runtimeTools.basePython],
+      ["강의 설정", studio.configPath],
+      ["강의 대본", path.join(studio.deckRoot, "script/course")],
+    );
+  }
+  if (requirements.node) required.push(["Node.js", runtimeTools.node]);
+  if (requirements.ffmpeg) required.push(["FFmpeg", runtimeTools.ffmpeg]);
+  if (requirements.ffprobe !== false) required.push(["FFprobe", runtimeTools.ffprobe]);
   if (options.voiceMode === "finetuned") {
     const adapterPath = options.adapterPath || ADAPTER;
-    required.push(path.join(adapterPath, "adapters.safetensors"), path.join(adapterPath, "adapter_config.json"));
+    required.push(
+      ["음성 어댑터", path.join(adapterPath, "adapters.safetensors")],
+      ["음성 어댑터 설정", path.join(adapterPath, "adapter_config.json")],
+    );
   }
-  for (const file of required) {
+  for (const [label, file] of required) {
+    if (!file) throw new Error(`${label}을(를) 찾지 못했습니다. 먼저 npm run doctor로 환경을 확인해 주세요.`);
     try {
       await fs.access(file);
     } catch {
-      throw new Error(`필요한 로컬 파일을 찾지 못했습니다: ${file}`);
+      throw new Error(`${label}을(를) 찾지 못했습니다: ${file}`);
     }
   }
 }
@@ -318,7 +332,7 @@ function runUtility(executable, args, { cwd = ROOT } = {}) {
 
 async function loadCatalog(studio) {
   if (catalogCache && catalogCacheRoot === studio.sourceProjectRoot) return catalogCache;
-  const raw = await runUtility(BASE_PYTHON, [
+  const raw = await runUtility(requireRuntimeTool("basePython", "강의 도구 Python"), [
     "-m", "local_tts_engine.course_catalog",
     "--source-project", studio.sourceProjectRoot,
   ]);
@@ -370,7 +384,7 @@ async function restoreDeckContract(options, providerName, previous, studio) {
 }
 
 async function ffprobe(file) {
-  const output = await runProcess("verify", FFPROBE, [
+  const output = await runProcess("verify", requireRuntimeTool("ffprobe", "FFprobe"), [
     "-v", "error",
     "-show_entries", "format=duration:stream=codec_type,codec_name,width,height",
     "-of", "json",
@@ -508,7 +522,7 @@ async function runPipeline(options) {
   if (captureSiteDir) {
     await fs.mkdir(renderDir, { recursive: true });
     job.captureSiteDir = captureSiteDir;
-    await runProcess("snapshot", NODE, [
+    await runProcess("snapshot", requireRuntimeTool("node", "Node.js"), [
       path.join(studio.deckRoot, "node_modules/vite/bin/vite.js"),
       "build",
       "--mode", "capture",
@@ -522,21 +536,21 @@ async function runPipeline(options) {
     });
   }
 
-  await runProcess("voice", TRAIN_PYTHON, ttsArgs);
+  await runProcess("voice", requireRuntimeTool("trainPython", "음성 생성 Python"), ttsArgs);
   const manifest = JSON.parse(await fs.readFile(path.join(sourceDir, "manifest.json"), "utf8"));
 
   let previousContract = null;
   try {
     if (options.deliverable !== "audio") {
       previousContract = await writeDeckContract(manifest, options, providerName, studio);
-      await runProcess("export", BASE_PYTHON, [
+      await runProcess("export", requireRuntimeTool("basePython", "강의 도구 Python"), [
         "-m", "local_tts_engine.export_udemy",
         "--source-dir", sourceDir,
         "--deck-root", studio.deckRoot,
         "--preset", options.name,
         "--provider", providerName,
       ]);
-      await runProcess("captions", NODE, [
+      await runProcess("captions", requireRuntimeTool("node", "Node.js"), [
         "tools/narration.mjs", "captions",
         "--preset", options.name,
         "--provider", providerName,
@@ -553,7 +567,7 @@ async function runPipeline(options) {
       if (captureSiteDir) captureArgs.push("--site-dir", captureSiteDir);
       if (options.burnCaptions) captureArgs.push("--burn-captions");
       try {
-        await runProcess("capture", NODE, captureArgs, { cwd: studio.deckRoot });
+        await runProcess("capture", requireRuntimeTool("node", "Node.js"), captureArgs, { cwd: studio.deckRoot });
       } catch (error) {
         if (job.cancelled) throw error;
         emit({
@@ -561,7 +575,7 @@ async function runPipeline(options) {
           stream: "stderr",
           text: "화면 촬영이 중간에 멈춰 같은 음성과 타임라인으로 한 번 다시 시도합니다.\n",
         });
-        await runProcess("capture", NODE, captureArgs, { cwd: studio.deckRoot });
+        await runProcess("capture", requireRuntimeTool("node", "Node.js"), captureArgs, { cwd: studio.deckRoot });
       }
     }
   } finally {
@@ -584,7 +598,7 @@ async function cleanupCaptureSite(job) {
 }
 
 async function inspectMedia(file) {
-  const raw = await runUtility(FFPROBE, [
+  const raw = await runUtility(requireRuntimeTool("ffprobe", "FFprobe"), [
     "-v", "error",
     "-show_entries", "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels",
     "-of", "json",
@@ -637,7 +651,7 @@ async function normalizeMergeSegment(input, output) {
     "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
     "-t", duration.toFixed(3), "-movflags", "+faststart", output,
   );
-  await runProcess("edit", FFMPEG, args);
+  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), args);
 }
 
 async function validateEditVideo(outputPath, operation, inputs, outputDir) {
@@ -682,7 +696,7 @@ async function runMergeEdit(options, outputDir) {
   const concatText = segments.map((file) => `file '${file.replaceAll("'", "'\\''")}'`).join("\n");
   await fs.writeFile(concatPath, `${concatText}\n`, "utf8");
   const output = path.join(outputDir, `${options.name}.mp4`);
-  await runProcess("edit", FFMPEG, [
+  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
     "-y", "-hide_banner", "-nostats",
     "-f", "concat", "-safe", "0", "-i", concatPath,
     "-c", "copy", "-movflags", "+faststart", output,
@@ -715,7 +729,7 @@ async function runTrimEdit(options, outputDir) {
     throw new Error(`끝 시간은 시작 이후이며 영상 길이 ${duration.toFixed(2)}초 이하여야 합니다.`);
   }
   const output = path.join(outputDir, `${options.name}.mp4`);
-  await runProcess("edit", FFMPEG, [
+  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
     "-y", "-hide_banner", "-nostats",
     "-ss", start.toFixed(3), "-to", end.toFixed(3), "-i", input,
     "-map", "0:v:0", "-map", "0:a:0?",
@@ -745,7 +759,7 @@ async function generateReplacementVoice(options, outputDir) {
   if (options.voiceMode !== "zero") {
     args.push("--adapter", options.adapterPath || ADAPTER, "--adapter-scale", String(options.adapterScale));
   }
-  await runProcess("voice", TRAIN_PYTHON, args);
+  await runProcess("voice", requireRuntimeTool("trainPython", "음성 생성 Python"), args);
   const manifest = JSON.parse(await fs.readFile(path.join(voiceDir, "manifest.json"), "utf8"));
   return manifest.audioPath;
 }
@@ -814,7 +828,7 @@ async function runTextVoiceCandidates(options) {
       if (options.voiceMode === "finetuned") {
         args.push("--adapter", options.adapterPath || ADAPTER, "--adapter-scale", String(options.adapterScale));
       }
-      await runProcess("voice", TRAIN_PYTHON, args);
+      await runProcess("voice", requireRuntimeTool("trainPython", "음성 생성 Python"), args);
       const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
       completed += 1;
       emit({ type: "voice-item-complete", completed, total: options.candidateCount, name: `후보 ${index + 1}` });
@@ -893,7 +907,7 @@ async function runVoiceEdit(options, outputDir) {
   const output = path.join(outputDir, `${options.name}.mp4`);
   if (options.durationPolicy === "match-audio") {
     const factor = audioDuration / videoDuration;
-    await runProcess("edit", FFMPEG, [
+    await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
       "-y", "-hide_banner", "-nostats", "-i", video, "-i", audio,
       "-map", "0:v:0", "-map", "1:a:0",
       "-vf", `setpts=${factor.toFixed(8)}*PTS,fps=25,format=yuv420p`,
@@ -902,7 +916,7 @@ async function runVoiceEdit(options, outputDir) {
       "-t", audioDuration.toFixed(3), "-movflags", "+faststart", output,
     ]);
   } else {
-    await runProcess("edit", FFMPEG, [
+    await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
       "-y", "-hide_banner", "-nostats", "-i", video, "-i", audio,
       "-filter_complex", `[1:a]apad=whole_dur=${videoDuration.toFixed(3)}[voice]`,
       "-map", "0:v:0", "-map", "[voice]",
@@ -988,7 +1002,7 @@ async function runFineTune(options) {
   const studio = runtimePaths(options.paths);
   const outputDir = path.join(FINETUNE_RUN_ROOT, dateFolder(), options.name);
   await fs.mkdir(outputDir, { recursive: true });
-  await runProcess("training", TRAIN_PYTHON, [
+  await runProcess("training", requireRuntimeTool("trainPython", "음성 생성 Python"), [
     "-m", "local_tts_engine.finetune_mlx",
     "--train-jsonl", FINETUNE_TRAIN_JSONL,
     "--output-dir", outputDir,
@@ -1182,20 +1196,41 @@ function registerIpc() {
     guard(event);
     const settings = await readAppSettings();
     const studio = runtimePaths(settings.paths);
-    const runtime = {};
-    for (const [key, file] of Object.entries({
-      voice: studio.referenceAudioPath,
-      voiceLibrary: studio.voiceLibraryRoot,
-      adapter: ADAPTER,
-      deck: studio.deckRoot,
-      ffmpeg: FFMPEG,
-    })) {
-      runtime[key] = Boolean(await safeStat(file));
+    const selectedAdapter = settings.adapters.find((item) => item.id === settings.adapterId) || null;
+    const runtime = {
+      basePython: Boolean(runtimeTools.basePython),
+      trainPython: Boolean(runtimeTools.trainPython),
+      node: Boolean(runtimeTools.node),
+      ffmpeg: Boolean(runtimeTools.ffmpeg),
+      ffprobe: Boolean(runtimeTools.ffprobe),
+      voice: Boolean(await safeStat(studio.referenceAudioPath)),
+      voiceLibrary: Boolean(await safeStat(studio.voiceLibraryRoot)),
+      adapter: settings.adapterId === "none" || Boolean(await safeStat(selectedAdapter?.path)),
+      deck: Boolean(await safeStat(studio.configPath))
+        && Boolean(await safeStat(path.join(studio.deckRoot, "script/course"))),
+    };
+    const capabilities = {
+      textVoice: runtime.trainPython && runtime.ffprobe && runtime.voice && runtime.adapter,
+      editing: runtime.ffmpeg && runtime.ffprobe,
+      course: runtime.trainPython && runtime.basePython && runtime.node && runtime.ffmpeg
+        && runtime.ffprobe && runtime.voice && runtime.adapter && runtime.deck,
+    };
+    const setupIssues = [];
+    let catalog = { pages: [], lessons: [], totalPages: 0 };
+    if (runtime.basePython && runtime.deck) {
+      try {
+        catalog = await loadCatalog(studio);
+      } catch (error) {
+        setupIssues.push(`강의 목록: ${error.message}`);
+      }
+    } else {
+      setupIssues.push("강의 소스가 없어 강의 영상 제작 기능은 아직 준비되지 않았습니다.");
     }
-    const catalog = await loadCatalog(studio);
     return {
       activeJob: jobSnapshot(),
       runtime,
+      capabilities,
+      setupIssues,
       catalog,
       defaults: { adapterScale: 0.6, mode: "preview", targetSeconds: 30 },
     };
@@ -1293,7 +1328,7 @@ function registerIpc() {
     if (activeJob && ["running", "cancelling"].includes(activeJob.state)) {
       throw new Error("이미 실행 중인 작업이 있습니다.");
     }
-    await fs.access(FFMPEG);
+    requireRuntimeTool("ffmpeg", "FFmpeg");
     const operation = ["merge", "trim", "voice", "voice-candidates"].includes(rawOptions.operation)
       ? rawOptions.operation
       : null;
@@ -1363,7 +1398,7 @@ function registerIpc() {
       text,
       candidateCount,
     }, settings);
-    await assertRuntime(options, runtimePaths(settings.paths));
+    await assertRuntime(options, runtimePaths(settings.paths), { course: false });
     activeJob = {
       id: crypto.randomUUID(),
       kind: "text-voice",
@@ -1429,7 +1464,10 @@ function registerIpc() {
     const settings = await readAppSettings();
     const options = applyVoiceSettings(normalizeOptions(rawOptions), settings);
     const studio = runtimePaths(settings.paths);
-    await assertRuntime(options, studio);
+    await assertRuntime(options, studio, {
+      node: options.deliverable !== "audio",
+      ffmpeg: options.deliverable === "video",
+    });
     const catalog = await loadCatalog(studio);
     if (options.startPage > catalog.totalPages || (options.endPage && options.endPage > catalog.totalPages)) {
       throw new Error(`페이지는 1~${catalog.totalPages} 사이에서 선택해 주세요.`);
@@ -1550,7 +1588,8 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  runtimeTools = await resolveRuntimeTools(ROOT);
   registerIpc();
   createWindow();
   app.on("activate", () => {

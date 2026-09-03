@@ -2,6 +2,7 @@ import {
   buildChapterRanges,
   filterOutputItems,
   outputKind,
+  shouldOpenMenuUpward,
   summarizePageRange,
 } from "./view-utils.mjs";
 
@@ -48,6 +49,18 @@ function showToast(message, kind = "success") {
   toast.querySelector("div").textContent = message;
   $("#toast-stack").append(toast);
   setTimeout(() => toast.remove(), 3600);
+}
+
+function setIconStatus(selector, label, tone = "idle") {
+  const indicator = $(selector);
+  if (!indicator) return;
+  indicator.dataset.tooltip = label;
+  indicator.setAttribute("aria-label", label);
+  indicator.classList.toggle("running", tone === "running");
+  indicator.classList.toggle("failed", tone === "failed");
+  indicator.classList.toggle("complete", tone === "complete");
+  const hiddenLabel = indicator.querySelector(".sr-only");
+  if (hiddenLabel) hiddenLabel.textContent = label;
 }
 
 function dateStamp(date = new Date()) {
@@ -153,28 +166,12 @@ function voiceProfileLabel() {
 }
 
 function updateProductionBrief() {
-  const start = Math.max(1, Number($("#start-page")?.value || 1));
-  const end = Math.max(start, Number($("#end-page")?.value || start));
   const deliverable = $("#deliverable")?.value || "video";
   const labels = {
     video: ["완성 영상", $("#burn-captions")?.checked ? "자막 포함" : "자막 없음"],
     captions: ["음성과 자막", "영상은 만들지 않음"],
     audio: ["음성만", "영상은 만들지 않음"],
   };
-  const lesson = selectedLesson();
-  $("#brief-scope").textContent = productionMode === "lesson" && lesson
-    ? lesson.title
-    : productionMode === "bundle"
-      ? `${start}–${end}페이지`
-      : `${start}페이지부터 30초`;
-  $("#brief-page").textContent = productionMode === "lesson" && lesson
-    ? `${lesson.pageCount}페이지 · ${lesson.stepCount}스텝`
-    : productionMode === "bundle"
-      ? `${pageMeta(start)} → ${pageMeta(end)}`
-      : pageMeta(start);
-  $("#brief-voice").textContent = voiceProfileLabel();
-  $("#brief-output").textContent = labels[deliverable][0];
-  $("#brief-caption").textContent = labels[deliverable][1];
   $("#advanced-output-summary").textContent = `${labels[deliverable][0]}${deliverable === "video" && $("#burn-captions")?.checked ? " · 자막 포함" : ""}`;
 }
 
@@ -246,16 +243,16 @@ function paintGlobalRange() {
 }
 
 function showJobView(view) {
-  $("#idle-hero").classList.toggle("hidden", view !== "idle");
+  $("#job-workspace").classList.toggle("job-idle", view === "idle");
+  $(".progress-card").classList.toggle("hidden", view === "idle");
   $("#active-progress").classList.toggle("hidden", view !== "active");
   $("#complete-panel").classList.toggle("hidden", view !== "complete");
-  $("#job-panel-title").textContent = { idle: "선택한 작업", active: "제작 진행", complete: "검수 완료" }[view] || "선택한 작업";
+  $("#job-panel-title").textContent = { active: "제작 진행", complete: "검수 완료" }[view] || "제작 진행";
 }
 
 function setBusy(busy) {
   $("#start-button").disabled = busy;
   $("#job-form").querySelectorAll("input, select, .segmented button").forEach((element) => { element.disabled = busy; });
-  $(".top-status").classList.toggle("running", busy);
 }
 
 function resetCancelButton(button) {
@@ -290,7 +287,11 @@ function setJobState(text, kind = "idle") {
   const badge = $("#job-state");
   badge.textContent = text;
   badge.className = `job-state ${kind}`;
-  $("#top-status-text").textContent = kind === "running" ? text : text === "완료" ? "검증 완료" : "준비됨";
+  const label = kind === "running"
+    ? text
+    : kind === "failed" ? "확인이 필요한 오류가 있습니다"
+      : text === "완료" ? "제작과 검증이 완료됐습니다" : "새 작업을 시작할 수 있습니다";
+  setIconStatus("#create-top-status", label, kind === "running" ? "running" : kind === "failed" ? "failed" : text === "완료" ? "complete" : "idle");
 }
 
 function updateStages(current, done = false) {
@@ -446,8 +447,7 @@ function editPayload() {
 function setEditBusy(busy) {
   $("#start-edit-button").disabled = busy;
   $("#edit-form").querySelectorAll("input, select, button:not(#cancel-edit-button)").forEach((element) => { element.disabled = busy; });
-  $("#edit-top-status").classList.toggle("running", busy);
-  $("#edit-top-status span:last-child").textContent = busy ? "편집 중" : "준비됨";
+  setIconStatus("#edit-top-status", busy ? "영상 편집 중" : "편집할 영상을 선택하세요", busy ? "running" : "idle");
 }
 
 function appendEditLog(text) {
@@ -529,6 +529,7 @@ function handleEditEvent(event) {
   } else if (event.type === "voice-candidates-ready") {
     candidatePurpose = "edit";
     setEditBusy(false);
+    setIconStatus("#edit-top-status", "생성된 목소리 후보를 비교하고 있습니다");
     renderVoiceCandidates(event.candidates);
     $("#edit-dialog-title").textContent = "목소리 후보 비교";
     $("#edit-dialog-spinner").classList.add("hidden");
@@ -544,6 +545,7 @@ function handleEditEvent(event) {
     $("#cancel-edit-button").textContent = "중지 중…";
   } else if (event.type === "edit-failed") {
     setEditBusy(false);
+    setIconStatus("#edit-top-status", "영상 편집 오류를 확인해 주세요", "failed");
     $("#edit-dialog-spinner").classList.add("hidden");
     $("#edit-dialog-error").classList.remove("hidden");
     $("#edit-error-message").textContent = event.message;
@@ -552,6 +554,7 @@ function handleEditEvent(event) {
     appendEditLog(`\n[중단] ${event.message}\n`);
   } else if (event.type === "edit-complete") {
     setEditBusy(false);
+    setIconStatus("#edit-top-status", "영상 편집과 검증이 완료됐습니다", "complete");
     latestEditTarget = event.report.target;
     $("#edit-dialog-spinner").classList.add("hidden");
     $("#edit-dialog-success").classList.remove("hidden");
@@ -569,8 +572,7 @@ function handleTextVoiceEvent(event) {
   if (event.type === "text-voice-started") {
     candidatePurpose = "text";
     openJobDialog("텍스트 목소리 후보 생성 중");
-    $("#voice-top-status").classList.add("running");
-    $("#voice-top-status span:last-child").textContent = "생성 중";
+    setIconStatus("#voice-top-status", "목소리 후보 생성 중", "running");
     $("#start-text-voices").disabled = true;
   } else if (event.type === "stage") {
     $("#edit-running-label").textContent = "서로 다른 발화 후보를 만들고 있습니다.";
@@ -583,8 +585,7 @@ function handleTextVoiceEvent(event) {
   } else if (event.type === "text-voices-ready") {
     candidatePurpose = "text";
     renderVoiceCandidates(event.candidates);
-    $("#voice-top-status").classList.remove("running");
-    $("#voice-top-status span:last-child").textContent = "비교 중";
+    setIconStatus("#voice-top-status", "생성된 후보를 비교하고 있습니다");
     $("#start-text-voices").disabled = false;
     $("#edit-dialog-title").textContent = "목소리 후보 비교";
     $("#edit-dialog-spinner").classList.add("hidden");
@@ -595,8 +596,7 @@ function handleTextVoiceEvent(event) {
     $("#apply-voice-candidate").classList.remove("hidden");
     $("#close-edit-dialog").classList.remove("hidden");
   } else if (event.type === "text-voice-failed") {
-    $("#voice-top-status").classList.remove("running");
-    $("#voice-top-status span:last-child").textContent = "확인 필요";
+    setIconStatus("#voice-top-status", "목소리 생성 오류를 확인해 주세요", "failed");
     $("#start-text-voices").disabled = false;
     $("#edit-dialog-spinner").classList.add("hidden");
     $("#edit-dialog-error").classList.remove("hidden");
@@ -605,7 +605,7 @@ function handleTextVoiceEvent(event) {
     $("#close-edit-dialog").classList.remove("hidden");
   } else if (event.type === "text-voice-selected") {
     latestEditTarget = event.report.target;
-    $("#voice-top-status span:last-child").textContent = "선택 완료";
+    setIconStatus("#voice-top-status", "목소리 선택과 저장이 완료됐습니다", "complete");
     $("#candidate-gallery").classList.add("hidden");
     $("#edit-dialog-success").classList.remove("hidden");
     $("#edit-complete-summary").textContent = `${formatDuration(event.report.durationMs)} · 선택한 WAV를 별도로 보관했습니다.`;
@@ -631,6 +631,12 @@ function renderOutputSummary() {
   $("#result-count-summary").textContent = `${outputItems.length}개`;
 }
 
+function closeResultMenus({ restoreFocus = false } = {}) {
+  const opened = $$(".result-menu[open]");
+  for (const menu of opened) menu.removeAttribute("open");
+  if (restoreFocus) opened.at(-1)?.querySelector("summary")?.focus();
+}
+
 function renderOutputs() {
   const list = filterOutputItems(outputItems, $("#result-search").value, outputFilter);
   const container = $("#output-list");
@@ -646,13 +652,37 @@ function renderOutputs() {
     row.innerHTML = `
       <div class="output-type ${kind}">${kind === "edit" ? "✂" : item.video ? "▶" : "♪"}</div>
       <div class="output-copy"><strong></strong><small></small></div>
-      <div class="output-status"><span class="${item.ok ? "verified" : "unverified"}">${item.ok ? "✓ 파일 확인 완료" : "파일 확인 기록 없음"}</span><span class="${approved ? "reviewed" : "review-pending"}">${approved ? "✓ 직접 확인 완료" : "○ 직접 확인 필요"}</span></div>
-      <div class="item-actions"><button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "확인 취소" : "확인 완료"}</button><button class="open-button" type="button">열기</button><button type="button">Finder</button></div>`;
+      <div class="output-status" aria-label="결과 상태">
+        <span class="status-symbol ${item.ok ? "verified" : "unverified"}" tabindex="0" data-tooltip="${item.ok ? "자동 파일 검증 완료" : "자동 검증 기록 없음"}" aria-label="${item.ok ? "자동 파일 검증 완료" : "자동 검증 기록 없음"}">${item.ok ? "✓" : "!"}</span>
+        <span class="status-symbol ${approved ? "reviewed" : "review-pending"}" tabindex="0" data-tooltip="${approved ? "직접 확인 완료" : "직접 확인 필요"}" aria-label="${approved ? "직접 확인 완료" : "직접 확인 필요"}">${approved ? "✓" : "○"}</span>
+      </div>
+      <div class="item-actions">
+        <button class="open-button" type="button">열기</button>
+        <details class="result-menu">
+          <summary aria-label="결과 작업 더 보기">•••</summary>
+          <div>
+            <button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "확인 완료 취소" : "확인 완료로 표시"}</button>
+            <button class="reveal-button" type="button">Finder에서 보기</button>
+          </div>
+        </details>
+      </div>`;
     row.querySelector("strong").textContent = item.displayName || item.name;
     row.querySelector("small").textContent = `${outputLabel(item)} · ${formatDuration(item.durationMs)} · ${formatDate(item.updatedAt)}`;
-    const buttons = row.querySelectorAll("button");
     const target = { root: item.root, name: item.name, day: item.day, store: item.store };
-    buttons[0].addEventListener("click", async () => {
+    const resultMenu = row.querySelector(".result-menu");
+    resultMenu.addEventListener("toggle", () => {
+      if (!resultMenu.open) {
+        resultMenu.classList.remove("open-upward");
+        return;
+      }
+      $$(".result-menu[open]").forEach((other) => {
+        if (other !== resultMenu) other.removeAttribute("open");
+      });
+      const popover = resultMenu.querySelector(":scope > div");
+      const availableBelow = window.innerHeight - resultMenu.getBoundingClientRect().bottom;
+      resultMenu.classList.toggle("open-upward", shouldOpenMenuUpward(availableBelow, popover.offsetHeight));
+    });
+    row.querySelector(".review-button").addEventListener("click", async () => {
       try {
         const review = await api.setOutputReview(target, approved ? "pending" : "approved");
         item.review = review;
@@ -663,8 +693,11 @@ function renderOutputs() {
         showToast(error.message, "error");
       }
     });
-    buttons[1].addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
-    buttons[2].addEventListener("click", () => api.reveal(target).catch((error) => showToast(error.message, "error")));
+    row.querySelector(".open-button").addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
+    row.querySelector(".reveal-button").addEventListener("click", () => {
+      resultMenu.removeAttribute("open");
+      api.reveal(target).catch((error) => showToast(error.message, "error"));
+    });
     return row;
   }));
 }
@@ -703,10 +736,14 @@ function renderSettings(settings) {
   $("#global-parallelism").value = String(settings.voiceParallelism);
   $("#global-scale-field").classList.toggle("hidden", settings.modelId !== "qwen3-tts" || settings.adapterId === "none");
   paintGlobalRange();
-  $("#sidebar-model").textContent = "내 목소리";
-  $("#sidebar-adapter").textContent = voiceProfileLabel().includes("승인됨")
-    ? "제작 프로필 사용 중"
-    : "실험 설정 사용 중";
+  const selectedAdapter = settings.adapters?.find((item) => item.id === settings.adapterId) || null;
+  const approved = settings.modelId === "qwen3-tts"
+    && selectedAdapter?.label === "jaeho-ko-r16-v1"
+    && Math.abs(Number(settings.adapterScale || 0.6) - 0.6) < 0.001;
+  $("#sidebar-model").textContent = approved ? "제작 목소리" : "음성 설정";
+  $("#sidebar-adapter").textContent = selectedAdapter
+    ? `${selectedAdapter.label} · ${Number(settings.adapterScale).toFixed(2)}`
+    : settings.modelId === "chatterbox-v3" ? "Chatterbox V3" : "Qwen3 기본 복제";
   for (const [key, value] of Object.entries(settings.paths || {})) {
     const input = $(`#path-${key}`);
     if (input) input.value = value;
@@ -728,10 +765,10 @@ function updateProfileGuard() {
   guard.classList.toggle("approved", approved);
   guard.classList.toggle("experimental", !approved);
   guard.querySelector(":scope > span").textContent = approved ? "✓" : "!";
-  $("#profile-guard-title").textContent = approved ? "제작 목소리 준비됨" : "실험 설정 사용 중";
+  $("#profile-guard-title").textContent = approved ? "제작 목소리" : "실험 설정";
   $("#profile-guard-copy").textContent = approved
-    ? "장시간 강의용으로 확인한 설정입니다."
-    : "장시간 강의에 쓰기 전 짧은 샘플을 들어 확인해 주세요.";
+    ? "jaeho-ko-r16-v1 · 강도 0.60"
+    : `${modelId === "chatterbox-v3" ? "Chatterbox V3" : adapter?.label || "Qwen3 기본 복제"}${adapter ? ` · 강도 ${scale.toFixed(2)}` : ""}`;
   $("#restore-production-profile").classList.toggle("hidden", approved);
 }
 
@@ -833,6 +870,7 @@ async function initialize() {
   window.scrollTo(0, 0);
   if (!api) {
     $("#runtime-label").textContent = "Electron에서 열어 주세요";
+    $("#open-model-settings").dataset.tooltip = "Electron에서 열어 주세요";
     return;
   }
   $("#job-name").value = suggestedName();
@@ -842,7 +880,7 @@ async function initialize() {
   renderSettings(settings);
   catalogPages = status.catalog?.pages || [];
   catalogLessons = status.catalog?.lessons || [];
-  totalPages = status.catalog?.totalPages || 715;
+  totalPages = Math.max(1, Number(status.catalog?.totalPages || 0));
   populateChapterJump();
   populateLessons();
   for (const selector of ["#start-page", "#end-page"]) {
@@ -857,9 +895,16 @@ async function initialize() {
   updateVoicePageMeta();
   updateProductionBrief();
   updateVoiceDesign();
-  const ready = Object.values(status.runtime).every(Boolean);
-  $("#runtime-dot").classList.toggle("ready", ready);
-  $("#runtime-label").textContent = ready ? "로컬 환경 준비됨" : "필요 파일 확인 필요";
+  const capabilities = status.capabilities || {};
+  const readyCount = Object.values(capabilities).filter(Boolean).length;
+  const ready = readyCount === Object.keys(capabilities).length && readyCount > 0;
+  $("#runtime-dot").classList.toggle("ready", readyCount > 0);
+  const runtimeLabel = ready
+    ? "전체 기능 준비됨"
+    : readyCount > 0 ? "일부 기능 준비됨" : "환경 설정 필요";
+  $("#runtime-label").textContent = runtimeLabel;
+  $("#open-model-settings").dataset.tooltip = runtimeLabel;
+  for (const issue of status.setupIssues || []) appendLog(`[환경] ${issue}\n`);
   if (status.activeJob?.state === "running") {
     if (status.activeJob.kind === "edit") {
       openJobDialog("영상 편집 중");
@@ -881,6 +926,14 @@ async function initialize() {
   const initialView = new URLSearchParams(window.location.search).get("view");
   if (["voice", "edit", "results"].includes(initialView)) {
     $(`[data-view='${initialView}']`).click();
+  } else if (["results-menu-bottom", "results-menu-outside"].includes(initialView)) {
+    $("[data-view='results']").click();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const lastResult = $$(".output-item").at(-1);
+    lastResult?.scrollIntoView({ block: "end" });
+    lastResult?.querySelector(".result-menu")?.setAttribute("open", "");
+    if (initialView === "results-menu-outside") $("#output-list").click();
+    return;
   } else if (initialView === "replace-voice") {
     $("[data-view='edit']").click();
     $("[data-operation='voice']").click();
@@ -959,6 +1012,14 @@ $("#open-latest").addEventListener("click", () => latestTarget && api.open(lates
 $("#reveal-latest").addEventListener("click", () => latestTarget && api.reveal(latestTarget));
 $("#refresh-outputs").addEventListener("click", loadOutputs);
 $("#result-search").addEventListener("input", renderOutputs);
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".result-menu")) closeResultMenus();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !document.querySelector(".result-menu[open]")) return;
+  event.preventDefault();
+  closeResultMenus({ restoreFocus: true });
+});
 $$("#result-filters button").forEach((button) => button.addEventListener("click", () => {
   outputFilter = button.dataset.outputFilter;
   $$("#result-filters button").forEach((item) => item.classList.toggle("selected", item === button));

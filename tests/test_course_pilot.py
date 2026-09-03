@@ -34,7 +34,9 @@ def test_parse_script_matches_narration_contract(tmp_path: Path) -> None:
 
 둘째 문장입니다.
 ### 1
+**(한 번만 누르고 다음 문장을 이어서.)**
 **MCP**를 사용합니다.
+문장 안 괄호(본문 설명)는 읽습니다.
 """,
         encoding="utf-8",
     )
@@ -42,7 +44,7 @@ def test_parse_script_matches_narration_contract(tmp_path: Path) -> None:
     assert parse_script(script) == {
         "first-slide": {
             0: "첫 문장입니다. 둘째 문장입니다.",
-            1: "MCP를 사용합니다.",
+            1: "MCP를 사용합니다. 문장 안 괄호(본문 설명)는 읽습니다.",
         }
     }
 
@@ -222,6 +224,8 @@ def test_course_entries_reads_split_chapter_files(tmp_path: Path) -> None:
 def test_lesson_title_drops_slide_count_and_joins_chapter_with_lesson() -> None:
     source = "/**\n * CH01 · L05 · 기업들이 RAG를 도입하는 이유  (12장)\n */\n"
     assert lesson_title_from_source(source) == "CH01 L05 · 기업들이 RAG를 도입하는 이유"
+    fractional = "/**\n * CH03 · L01.5 · 벤더 공통 어휘  (16장)\n */\n"
+    assert lesson_title_from_source(fractional) == "CH03 L01.5 · 벤더 공통 어휘"
     frame = "/**\n * CH02 · 파트 2 진입 · 그것을 이루는 부품  (3장)\n */\n"
     assert lesson_title_from_source(frame) == "CH02 · 파트 2 진입 · 그것을 이루는 부품"
     assert lesson_title_from_source("const slides = [];\n") == ""
@@ -260,6 +264,23 @@ def test_lesson_catalog_makes_one_video_per_lesson_file(tmp_path: Path) -> None:
     ]
     assert (lessons[0]["startPage"], lessons[0]["endPage"]) == (1, 2)
     assert lessons[0]["file"] == "01-L01-open.ts"
+
+
+def test_lesson_catalog_supports_a_fractional_lesson_number(tmp_path: Path) -> None:
+    deck = _write_split_chapter(tmp_path, {
+        "01-L01-open.ts": ("CH01 · L01 · 여는 레슨  (1장)", ["open"]),
+        "02-L01.5-vocabulary.ts": ("CH01 · L01.5 · 공통 어휘  (1장)", ["vocabulary"]),
+        "03-L02-close.ts": ("CH01 · L02 · 닫는 레슨  (1장)", ["close"]),
+    })
+    pages = course_page_catalog(tmp_path)
+
+    lessons = course_lesson_catalog(deck, pages)
+
+    assert [(lesson["id"], lesson["title"]) for lesson in lessons] == [
+        ("ch01-l01", "CH01 L01 · 여는 레슨"),
+        ("ch01-l01-5", "CH01 L01.5 · 공통 어휘"),
+        ("ch01-l02", "CH01 L02 · 닫는 레슨"),
+    ]
 
 
 def test_lesson_catalog_rejects_a_file_without_a_lesson_number(tmp_path: Path) -> None:

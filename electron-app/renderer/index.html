@@ -27,14 +27,13 @@
           <button class="nav-item" type="button" data-view="results"><span>▤</span><b>최근 결과</b><em id="results-count">0</em></button>
         </nav>
 
-        <button class="local-card" id="open-model-settings" type="button" aria-label="Voice Studio 설정 열기">
-          <span class="local-glyph" aria-hidden="true"><i></i><i></i><i></i></span>
+        <button class="local-card" id="open-model-settings" type="button" data-tooltip="환경 확인 중" aria-label="Voice Studio 설정 열기">
+          <span class="local-glyph" aria-hidden="true">♪</span>
           <span class="local-card-copy">
-            <span class="local-runtime"><i class="status-dot" id="runtime-dot"></i><span id="runtime-label">환경 확인 중</span></span>
-            <strong id="sidebar-model">내 목소리</strong>
-            <small id="sidebar-adapter">제작 프로필</small>
+            <strong id="sidebar-model">제작 목소리</strong>
+            <small id="sidebar-adapter">프로필 확인 중</small>
           </span>
-          <span class="local-card-arrow" aria-hidden="true">›</span>
+          <span class="local-runtime" id="runtime-status"><i class="status-dot" id="runtime-dot"></i><span class="sr-only" id="runtime-label">환경 확인 중</span></span>
         </button>
       </aside>
 
@@ -46,10 +45,10 @@
             <h1>강의 영상 만들기</h1>
             <p class="lede">한 번 누르면 음성, 자막, 촬영, 최종 검증까지 이어집니다.</p>
           </div>
-          <div class="top-status"><span class="pulse"></span><span id="top-status-text">준비됨</span></div>
+          <div class="top-status" id="create-top-status" tabindex="0" data-tooltip="새 작업을 시작할 수 있습니다" aria-label="새 작업을 시작할 수 있습니다"><span class="pulse"></span><span class="sr-only" id="top-status-text">대기</span></div>
         </header>
 
-        <section class="workspace">
+        <section class="workspace job-idle" id="job-workspace">
           <form class="card setup-card" id="job-form">
             <div class="card-heading">
               <div><h2>어디까지 만들까요?</h2></div>
@@ -111,17 +110,10 @@
             <p class="time-note full" id="time-note">30초 음성을 만든 뒤 실제 30초 촬영이 이어집니다.</p>
           </form>
 
-          <section class="card progress-card" aria-live="polite">
+          <section class="card progress-card hidden" aria-live="polite">
             <div class="card-heading">
               <div><h2 id="job-panel-title">선택한 작업</h2></div>
               <span class="job-state idle" id="job-state">대기</span>
-            </div>
-
-            <div class="job-summary" id="idle-hero">
-              <div class="summary-primary"><span>범위</span><strong id="brief-scope">레슨 선택</strong><p id="brief-page">레슨 정보를 불러오는 중입니다.</p></div>
-              <dl><div><dt>목소리</dt><dd id="brief-voice">내 목소리</dd></div><div><dt>결과</dt><dd><span id="brief-output">완성 영상</span><small id="brief-caption">자막 포함</small></dd></div></dl>
-              <div class="ready-note"><span>✓</span><p><strong>바로 시작할 수 있습니다.</strong><small>나머지 처리와 검증은 앱이 자동으로 진행합니다.</small></p></div>
-              <details class="process-details"><summary>처리 방식</summary><p>매번 새 음성을 만들고 실제 길이에 맞춰 자막과 화면을 동기화한 뒤 결과를 자동 검증합니다.</p></details>
             </div>
 
             <div class="active-progress hidden" id="active-progress">
@@ -163,7 +155,7 @@
               <h1>텍스트로 목소리 만들기</h1>
               <p class="lede">같은 문장을 여러 버전으로 동시에 만든 뒤 직접 듣고 고릅니다.</p>
             </div>
-            <div class="top-status" id="voice-top-status"><span class="pulse"></span><span>준비됨</span></div>
+            <div class="top-status" id="voice-top-status" tabindex="0" data-tooltip="텍스트를 입력하면 목소리 후보를 만들 수 있습니다" aria-label="텍스트를 입력하면 목소리 후보를 만들 수 있습니다"><span class="pulse"></span><span class="sr-only">대기</span></div>
           </header>
 
           <section class="voice-lab-workspace">
@@ -196,7 +188,7 @@
               <h1>영상 편집</h1>
               <p class="lede">자르고, 목소리를 바꾸고, 원하는 순서로 다시 붙입니다.</p>
             </div>
-            <div class="top-status" id="edit-top-status"><span class="pulse"></span><span>준비됨</span></div>
+            <div class="top-status" id="edit-top-status" tabindex="0" data-tooltip="편집할 영상을 선택하세요" aria-label="편집할 영상을 선택하세요"><span class="pulse"></span><span class="sr-only">대기</span></div>
           </header>
 
           <section class="edit-workspace">
@@ -306,51 +298,41 @@
     </div>
 
     <dialog class="modal settings-modal" id="model-settings-dialog">
-      <div class="modal-head"><div><p class="eyebrow">설정</p><h2>Voice Studio 설정</h2><p class="modal-subtitle">저장 위치와 강의 제작에 사용할 목소리를 관리합니다.</p></div><button type="button" class="icon-button" data-close-dialog="model-settings-dialog" aria-label="설정 닫기">×</button></div>
+      <div class="modal-head"><div><p class="eyebrow">설정</p><h2>Voice Studio 설정</h2><p class="modal-subtitle">목소리와 결과물 저장 위치를 관리합니다.</p></div><button type="button" class="icon-button" data-close-dialog="model-settings-dialog" aria-label="설정 닫기">×</button></div>
       <div class="modal-body">
         <div class="settings-layout">
-          <section class="settings-section path-settings">
-            <div class="settings-section-head"><span class="settings-section-icon" aria-hidden="true">⌂</span><div><h3>파일과 결과물</h3><p>입력 두 곳과 결과물 폴더만 정하면 나머지는 자동으로 정리합니다.</p></div></div>
-            <label class="path-field"><span>강의 소스</span><div><input id="path-sourceProjectRoot" readonly><button type="button" data-pick-path="sourceProjectRoot">선택</button></div><small>대본과 슬라이드가 있는 강의 프로젝트</small></label>
-            <label class="path-field"><span>내 목소리 원본</span><div><input id="path-voiceLibraryRoot" readonly><button type="button" data-pick-path="voiceLibraryRoot">선택</button></div><small>수정하지 않고 읽기 전용으로 사용하는 음성 정본</small></label>
-            <label class="path-field output-root-field"><span>결과물 폴더</span><div><input id="path-outputRoot" readonly><button type="button" data-pick-path="outputRoot">선택</button></div><small>기본값은 이 프로젝트의 output 폴더입니다.</small></label>
-
-            <div class="output-structure" aria-label="결과물 폴더 구성">
-              <div class="output-root-name"><span aria-hidden="true">▾</span><strong id="output-root-name">output</strong><small>앱이 자동 정리</small></div>
-              <div><i>01</i><span><strong>videos</strong><small>완성 영상</small></span></div>
-              <div><i>02</i><span><strong>voices</strong><small>선택한 목소리와 후보</small></span></div>
-              <div><i>03</i><span><strong>tts</strong><small>강의 TTS 작업 결과</small></span></div>
-              <div><i>••</i><span><strong>작업 파일</strong><small>자막·타임라인·편집 파일은 내부에서 관리</small></span></div>
-            </div>
-
-            <details class="advanced-paths">
-              <summary>고급 입력 설정</summary>
-              <p>제작 음성 프로필을 바꿀 때만 수정합니다.</p>
-              <label class="path-field"><span>참조 음성</span><div><input id="path-referenceAudioPath" readonly><button type="button" data-pick-path="referenceAudioPath">선택</button></div></label>
-              <label class="path-field"><span>참조 전사문</span><div><input id="path-referenceTextPath" readonly><button type="button" data-pick-path="referenceTextPath">선택</button></div></label>
-            </details>
-          </section>
-
-          <section class="settings-section voice-settings">
-            <div class="settings-section-head"><span class="settings-section-icon voice" aria-hidden="true">♪</span><div><h3>제작 목소리</h3><p>현재 강의에 적용할 음성 프로필입니다.</p></div></div>
+          <section class="settings-section primary-settings">
+            <div class="settings-section-head"><div><h3>기본 설정</h3><p>평소에는 아래 두 항목만 확인하면 됩니다.</p></div></div>
             <div class="profile-guard approved" id="profile-guard">
               <span aria-hidden="true">✓</span>
-              <div><strong id="profile-guard-title">제작 목소리 준비됨</strong><p id="profile-guard-copy">장시간 강의용으로 확인한 설정입니다.</p></div>
+              <div><strong id="profile-guard-title">제작 목소리</strong><p id="profile-guard-copy">프로필을 불러오는 중입니다.</p></div>
               <button type="button" id="restore-production-profile">제작값 복원</button>
             </div>
-            <div class="production-profile-summary"><span>승인된 제작값</span><strong>Qwen3-TTS</strong><small>jaeho-ko-r16-v1 · 0.60</small></div>
-            <details class="advanced-engine-settings">
-              <summary>고급 모델 설정</summary>
-              <div>
+            <label class="path-field output-root-field"><span>결과물 폴더</span><div><input id="path-outputRoot" readonly><button type="button" data-pick-path="outputRoot">선택</button></div><small>기본값은 이 프로젝트의 output 폴더입니다.</small></label>
+            <div class="output-destination"><span aria-hidden="true">⌂</span><div><strong id="output-root-name">output</strong><small>영상·목소리·작업 파일을 자동으로 나눠 보관합니다.</small></div></div>
+          </section>
+
+          <details class="settings-disclosure advanced-paths">
+            <summary><span><strong>프로젝트와 음성 원본</strong><small>강의 또는 음성 프로필을 바꿀 때만 사용</small></span></summary>
+            <div class="settings-disclosure-body">
+              <label class="path-field"><span>강의 소스</span><div><input id="path-sourceProjectRoot" readonly><button type="button" data-pick-path="sourceProjectRoot">선택</button></div></label>
+              <label class="path-field"><span>내 목소리 원본</span><div><input id="path-voiceLibraryRoot" readonly><button type="button" data-pick-path="voiceLibraryRoot">선택</button></div></label>
+              <label class="path-field"><span>참조 음성</span><div><input id="path-referenceAudioPath" readonly><button type="button" data-pick-path="referenceAudioPath">선택</button></div></label>
+              <label class="path-field"><span>참조 전사문</span><div><input id="path-referenceTextPath" readonly><button type="button" data-pick-path="referenceTextPath">선택</button></div></label>
+            </div>
+          </details>
+
+          <details class="settings-disclosure advanced-engine-settings">
+            <summary><span><strong>고급 모델 설정</strong><small>모델·어댑터·생성 성능 조정</small></span></summary>
+            <div class="settings-disclosure-body">
                 <label class="field"><span>기본 모델</span><select id="global-model"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 설치됨</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 설치됨</option></select></label>
                 <label class="field"><span>목소리 어댑터</span><select id="global-adapter"></select></label>
                 <div class="field" id="global-scale-field"><div class="field-line"><span>내 목소리 LoRA 반영 강도</span><output id="global-scale-output">0.60</output></div><input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6"><div class="range-labels"><span>기본 모델에 가깝게</span><span>학습값 그대로</span></div></div>
                 <p class="setting-explain">제작 기본값 0.60은 장시간 강의 청취를 기준으로 승인된 값입니다. 변경 후에는 짧은 샘플을 먼저 들어보세요.</p>
                 <label class="field"><span>동시에 만들 후보</span><select id="global-parallelism"><option value="2">2개 · 이 Mac 권장</option><option value="1">1개 · 메모리 절약</option></select></label>
                 <button class="secondary-small advanced-action" type="button" id="open-finetune-panel">새 파인튜닝</button>
-              </div>
-            </details>
-          </section>
+            </div>
+          </details>
         </div>
         <div class="modal-actions"><button class="primary-small" type="button" id="save-model-settings">설정 저장</button></div>
       </div>

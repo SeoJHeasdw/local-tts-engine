@@ -55,3 +55,7 @@ export function filterOutputItems(items = [], query = "", filter = "all") {
     return true;
   });
 }
+
+export function shouldOpenMenuUpward(availableBelow, popoverHeight, margin = 10) {
+  return Number(availableBelow) < Number(popoverHeight) + Number(margin);
+}
