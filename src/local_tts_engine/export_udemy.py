@@ -13,7 +13,7 @@ course_pilot.py 가 생성한 manifest.json을 udemy-agent의 narration 계약 �
 출력 결과물 (deck_root/narration/output/<preset_name>/ 하위):
     track.wav          - 정규화된 최종 오디오
     track.m4a          - AAC 미리듣기 파일
-    timeline.json      - narration.mjs 가 소비하는 타임라인 계약
+    timeline.json      - captions.mjs/capture.mjs 가 소비하는 타임라인 계약
     local-import.json  - 재현성 추적용 소스 링크
 
 CLI 진입점:
@@ -68,9 +68,9 @@ def timeline_from_course_manifest(
     preset: dict[str, Any],
     provider: dict[str, Any],
 ) -> dict[str, Any]:
-    """course_pilot manifest를 narration.mjs가 기대하는 timeline 형식으로 변환한다.
+    """course_pilot manifest를 덱 미디어 런타임의 timeline 형식으로 변환한다.
 
-    narration.mjs 계약:
+    course-media.mjs 계약:
         - entries[].order:         0-based 순번
         - entries[].key:           "<slide_id>--<step>" 형식 고유 키
         - entries[].startMs:       화면이 활성화되는 절대 시각 (ms)
@@ -87,7 +87,7 @@ def timeline_from_course_manifest(
         provider: deck narration.config.json 의 provider 항목 (이름 포함).
 
     Returns:
-        narration.mjs 가 직접 소비할 수 있는 timeline 딕셔너리.
+        captions.mjs와 capture.mjs가 직접 소비할 수 있는 timeline 딕셔너리.
     """
     source_entries = manifest["entries"]
     total_ms = int(manifest["durationMs"])
@@ -106,7 +106,7 @@ def timeline_from_course_manifest(
             {
                 "order": index,
                 "chapter": item["chapter"],
-                # narration.mjs 는 "<slide_id>--<step>" 형태의 키를 사용한다.
+                # 덱 미디어 런타임은 "<slide_id>--<step>" 형태의 키를 사용한다.
                 "key": f"{item['slide_id']}--{item['step']}",
                 "slideId": item["slide_id"],
                 "slideNumber": int(item["slide_number"]),
@@ -128,6 +128,8 @@ def timeline_from_course_manifest(
                 "speechStartMs": int(item.get("speechStartMs", item["startMs"])),
                 "speechEndMs": int(item.get("speechEndMs", item["endMs"])),
                 "alignment": item.get("alignment"),   # 단어별 타이밍 (없을 수도 있음)
+                # 같은 화면 스텝 내부의 의도된 무음 구간 (예: 대본의 [2s])
+                "forcedPauses": item.get("forcedPauses", []),
             }
         )
     return {
@@ -159,7 +161,7 @@ def export(
         - manifest["previewPath"] → <output_dir>/audio/track.m4a
 
     저장 목록:
-        - <output_dir>/timeline.json       (narration.mjs 소비)
+        - <output_dir>/timeline.json       (captions.mjs/capture.mjs 소비)
         - <output_dir>/local-import.json   (재현성 추적)
 
     Args:
@@ -195,7 +197,7 @@ def export(
     shutil.copy2(source_manifest["audioPath"], audio_dir / "track.wav")
     shutil.copy2(source_manifest["previewPath"], audio_dir / "track.m4a")
 
-    # narration.mjs 가 읽는 타임라인 파일 저장
+    # 자막 생성과 화면 촬영이 함께 읽는 타임라인 파일 저장
     write_json(output_dir / "timeline.json", timeline)
 
     # 소스 추적: 어느 manifest 에서, 어느 모델로 생성됐는지 기록

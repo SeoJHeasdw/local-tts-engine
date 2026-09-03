@@ -63,7 +63,9 @@
 - `/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/VIDEO-PACING-GUIDELINES.md`
 - `/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/narration/README.md`
 
-기존 Node 도구 `deck/tools/narration.mjs`는 이미 다음을 구현한다.
+Node 미디어 런타임 `deck/tools/course-media.mjs`와 전용 진입점
+`captions.mjs`, `capture.mjs`는 다음을 구현한다. `narration.mjs`는 과거 명령의
+하위 호환용이다.
 
 - 마크다운 대본을 화면 ID와 스텝 단위로 파싱
 - 자막 원문과 발음 사전 적용 TTS 문장을 분리
@@ -109,7 +111,7 @@ MIT로 확인했지만 이 문장만으로 상업 이용 결정을 확정하지 
 5. CH01의 동일한 30~60초 대본을 두 모델로 생성한다.
 6. 생성 시간, 최대 메모리, 오류와 반복을 기록한다.
 7. 사용자가 두 파일을 블라인드에 가깝게 듣고 승인한다.
-8. 승자만 기존 `narration.mjs`에 `local` provider로 연결한다.
+8. 승자만 기존 Node 타임라인 계약에 `local` provider로 연결한다.
 
 첫 작업에서 미세조정, CH01 전체 생성, 전체 7~8시간 생성까지 진행하지 않는다.
 
@@ -149,9 +151,9 @@ Chatterbox V3는 제외했다. `0.60`은 LoRA `1.00`에서 두드러진 사람 �
 - Qwen3-ForcedAligner 0.6B 8-bit로 실제 단어 시각 생성
 - `export_udemy.py`가 정렬값을 기존 Node 타임라인 계약으로 전달
 
-`udemy-agent/deck/tools/narration.mjs`는 정렬 단어로 SRT/VTT와 화면 자막을
-만들고, 다음 스텝 첫 단어 120ms 전에 화면을 전환한다. Playwright의 가변 녹화
-지연은 마젠타 동기 마커 프레임으로 측정해 제거한다.
+`udemy-agent/deck/tools/captions.mjs`는 정렬 단어로 SRT/VTT와 화면 자막을
+만든다. `capture.mjs`는 다음 스텝 첫 단어 120ms 전에 화면을 전환한다.
+Playwright의 가변 녹화 지연은 마젠타 동기 마커 프레임으로 측정해 제거한다.
 
 ### 완성된 산출물 (2026-08-25)
 
@@ -223,8 +225,8 @@ cd /Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine
 
 # captions + capture
 cd /Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck
-node tools/narration.mjs captions --preset ch01-l01 --provider qwen3-local
-node tools/narration.mjs capture --preset ch01-l01 --provider qwen3-local --burn-captions
+node tools/captions.mjs --preset ch01-l01 --provider qwen3-local
+node tools/capture.mjs --preset ch01-l01 --provider qwen3-local --burn-captions
 ```
 
 레슨별 예상 길이 (대본 글자 수 기준 추정, 실측 필요):
@@ -407,3 +409,8 @@ Electron 앱에 독립된 `목소리 만들기` 화면을 추가했다.
 - 강의 대본에서 한 줄 전체가 `(…)` 또는 `（…）`인 문장은 제작 지시문으로 보고
   TTS·자막 입력에서 제외한다. 강조 마커로 감싼 괄호 지시문도 동일하다. 문장
   중간의 괄호 표현은 실제 본문이므로 유지한다.
+- 같은 화면 스텝 안에서 자동 애니메이션을 기다리는 단독 줄 `[Ns]`는 강제
+  무음으로 처리한다. 스텝을 내부 음성 조각으로 나눠 지정한 무음을 넣고, 단어
+  정렬 뒤에는 다시 하나의 화면 스텝으로 합친다. 마커는 TTS·자막에 노출하지
+  않으며 0.1~10초만 허용한다. CH02 138페이지 `toolpick-camera-in` 2스텝에
+  `[2s]`를 적용했다.

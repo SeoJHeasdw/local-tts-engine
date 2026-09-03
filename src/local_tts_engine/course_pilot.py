@@ -2,7 +2,7 @@
 
 udemy-agent 저장소의 강의 대본(deck/script/course/<ch>.md)을 읽어
 Qwen3-TTS로 오디오를 생성하고, ForcedAligner로 단어별 타이밍을 정렬한 뒤
-narration.mjs가 소비하는 manifest.json을 출력한다.
+export_udemy.py가 덱 미디어 계약으로 변환할 manifest.json을 출력한다.
 
 처리 순서:
     1. 대본 파싱  → CourseEntry 목록 (챕터·슬라이드·스텝 단위)
@@ -87,6 +87,11 @@ SLIDE_VISUAL_LEAD_MS = 650
 MAX_CHUNK_CHARS = 300
 # 한 청크에 담을 최대 CourseEntry 수.
 MAX_CHUNK_ENTRIES = 4
+# 대본의 단독 줄 [2s], [1.5s] 같은 강제 무음 마커 허용 범위.
+MIN_FORCED_PAUSE_MS = 100
+MAX_FORCED_PAUSE_MS = 10_000
+FORCED_PAUSE_LINE_PATTERN = re.compile(r"^\s*\[(\d+(?:\.\d+)?)s]\s*$", re.IGNORECASE)
+FORCED_PAUSE_TOKEN_PATTERN = re.compile(r"\[(\d+(?:\.\d+)?)s]", re.IGNORECASE)
 
 
 # ─── 강의 생성 전용 파라미터 오버라이드 ──────────────────────────────────────
@@ -113,11 +118,15 @@ class CourseEntry:
     step: int           # 슬라이드 내 스텝 번호 (대본 ### N 헤더)
     source_text: str    # 원문 (자막, 검색, 교정용)
     tts_text: str       # 발음 치환이 적용된 TTS 입력 텍스트
+    part_index: int = 0       # 한 스텝이 강제 무음으로 나뉜 경우의 0-based 조각 번호
+    part_count: int = 1       # 같은 스텝 안의 전체 음성 조각 수
+    pause_before_ms: int = 0  # 이 조각 직전에 삽입할 강제 무음
 
     @property
     def key(self) -> str:
         """챕터·슬라이드·스텝을 조합한 고유 식별자 문자열."""
-        return f"{self.chapter}--{self.slide_id}--{self.step}"
+        base = f"{self.chapter}--{self.slide_id}--{self.step}"
+        return f"{base}--part-{self.part_index + 1}" if self.part_count > 1 else base
 
 
 @dataclass(frozen=True)
@@ -135,7 +144,17 @@ class CourseChunk:
         """첫 스텝~마지막 스텝 범위를 나타내는 청크 식별자."""
         first = self.entries[0]
         last = self.entries[-1]
-        return f"{first.chapter}--{first.slide_id}--{first.step}-to-{last.step}"
+        first_key = (
+            f"{first.step}-part-{first.part_index + 1}"
+            if first.part_count > 1
+            else str(first.step)
+        )
+        last_key = (
+            f"{last.step}-part-{last.part_index + 1}"
+            if last.part_count > 1
+            else str(last.step)
+        )
+        return f"{first.chapter}--{first.slide_id}--{first_key}-to-{last_key}"
 
     @property
     def source_text(self) -> str:
@@ -236,6 +255,39 @@ def is_narration_direction(line: str) -> bool:
     )
 
 
+def forced_pause_milliseconds(line: str) -> int | None:
+    """Parse a standalone ``[Ns]`` marker and validate its duration."""
+    match = FORCED_PAUSE_LINE_PATTERN.fullmatch(line)
+    if not match:
+        return None
+    milliseconds = round(float(match.group(1)) * 1000)
+    if not MIN_FORCED_PAUSE_MS <= milliseconds <= MAX_FORCED_PAUSE_MS:
+        raise ValueError("강제 무음은 0.1초 이상 10초 이하로 입력해 주세요.")
+    return milliseconds
+
+
+def split_forced_pause_segments(text: str) -> list[tuple[str, int]]:
+    """Split normalized script text into spoken segments and pause-before values."""
+    matches = list(FORCED_PAUSE_TOKEN_PATTERN.finditer(text))
+    if not matches:
+        return [(text, 0)]
+    segments: list[tuple[str, int]] = []
+    cursor = 0
+    pause_before_ms = 0
+    for match in matches:
+        spoken = text[cursor : match.start()].strip()
+        if not spoken:
+            raise ValueError("강제 무음 앞에는 읽을 문장이 있어야 합니다.")
+        segments.append((spoken, pause_before_ms))
+        pause_before_ms = forced_pause_milliseconds(match.group(0)) or 0
+        cursor = match.end()
+    spoken = text[cursor:].strip()
+    if not spoken:
+        raise ValueError("강제 무음 뒤에는 이어서 읽을 문장이 있어야 합니다.")
+    segments.append((spoken, pause_before_ms))
+    return segments
+
+
 def parse_script(path: Path) -> dict[str, dict[int, str]]:
     """마크다운 대본 파일을 {슬라이드ID: {스텝번호: 텍스트}} 구조로 파싱한다.
 
@@ -263,7 +315,7 @@ def parse_script(path: Path) -> dict[str, dict[int, str]]:
                 result.setdefault(slide_id, {})[step] = text
         buffer = []
 
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         slide_match = re.match(r"^##\s+(.+?)\s*$", raw)
         step_match = re.match(r"^###\s+(\d+)\s*$", raw)
         if step_match:
@@ -275,6 +327,14 @@ def parse_script(path: Path) -> dict[str, dict[int, str]]:
             slide_id = slide_match.group(1).strip()
             step = None  # 슬라이드가 바뀌면 스텝 번호도 초기화
             continue
+        pause_ms = forced_pause_milliseconds(raw)
+        if step is not None and pause_ms is not None:
+            buffer.append(f"[{pause_ms / 1000:g}s]")
+            continue
+        if step is not None and FORCED_PAUSE_TOKEN_PATTERN.search(raw):
+            raise ValueError(
+                f"{path}:{line_number} 강제 무음 [Ns]는 다른 문장 없이 단독 줄에 두세요."
+            )
         # 구분선, 인용구와 한 줄짜리 괄호 제작 지시문은 내레이션에서 제외
         if (
             step is not None
@@ -552,17 +612,21 @@ def course_entries(
         if not steps:
             raise ValueError(f"{chapter}/{slide_id}의 대본이 없습니다.")
         for step in sorted(steps):
-            source_text = steps[step]
-            entries.append(
-                CourseEntry(
-                    chapter=chapter,
-                    slide_id=slide_id,
-                    slide_number=slide_number,
-                    step=step,
-                    source_text=source_text,
-                    tts_text=apply_pronunciation(source_text, pronunciation),
+            segments = split_forced_pause_segments(steps[step])
+            for part_index, (source_text, pause_before_ms) in enumerate(segments):
+                entries.append(
+                    CourseEntry(
+                        chapter=chapter,
+                        slide_id=slide_id,
+                        slide_number=slide_number,
+                        step=step,
+                        source_text=source_text,
+                        tts_text=apply_pronunciation(source_text, pronunciation),
+                        part_index=part_index,
+                        part_count=len(segments),
+                        pause_before_ms=pause_before_ms,
+                    )
                 )
-            )
 
     if not started:
         marker = f"{start_chapter}/{start_slide or '<first>'}"
@@ -598,6 +662,7 @@ def group_course_entries(entries: list[CourseEntry]) -> list[CourseChunk]:
         added_chars = len(entry.tts_text) + (1 if current else 0)
         fits = (
             same_slide
+            and entry.pause_before_ms == 0
             and len(current) < MAX_CHUNK_ENTRIES
             and current_chars + added_chars <= MAX_CHUNK_CHARS
         )
@@ -627,6 +692,8 @@ def gap_after(current: CourseEntry, following: CourseEntry) -> int:
     같은 슬라이드 내 전환은 짧게(STEP_GAP_MS),
     슬라이드 간 전환은 길게(SLIDE_GAP_MS) 설정한다.
     """
+    if following.pause_before_ms:
+        return following.pause_before_ms
     if current.chapter == following.chapter and current.slide_id == following.slide_id:
         return STEP_GAP_MS
     return SLIDE_GAP_MS
@@ -821,6 +888,54 @@ def entry_alignment_slices(
     return result
 
 
+def merge_step_record_parts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge forced-pause speech parts back into one visual-step record."""
+    merged: list[dict[str, Any]] = []
+    for record in records:
+        identity = (record["chapter"], record["slide_id"], int(record["step"]))
+        previous_identity = (
+            (merged[-1]["chapter"], merged[-1]["slide_id"], int(merged[-1]["step"]))
+            if merged
+            else None
+        )
+        if identity != previous_identity:
+            merged.append(
+                {
+                    **record,
+                    "key": f"{record['chapter']}--{record['slide_id']}--{record['step']}",
+                    "alignment": {"words": list(record["alignment"]["words"])},
+                    "chunkKeys": [record["chunkKey"]],
+                    "audioPaths": [record["audioPath"]],
+                    "forcedPauses": [],
+                }
+            )
+            continue
+
+        previous = merged[-1]
+        pause_ms = int(record.get("pause_before_ms", 0))
+        if pause_ms <= 0:
+            raise RuntimeError(f"{record['key']}의 분할 음성에 강제 무음이 없습니다.")
+        previous["source_text"] = f"{previous['source_text']} {record['source_text']}"
+        previous["tts_text"] = f"{previous['tts_text']} {record['tts_text']}"
+        previous["speechEndMs"] = int(record["speechEndMs"])
+        previous["alignment"]["words"].extend(record["alignment"]["words"])
+        previous["chunkKeys"].append(record["chunkKey"])
+        previous["audioPaths"].append(record["audioPath"])
+        previous["forcedPauses"].append(
+            {
+                "durationMs": pause_ms,
+                "nextSpeechStartMs": int(record["speechStartMs"]),
+            }
+        )
+        previous["part_count"] = max(
+            int(previous.get("part_count", 1)), int(record.get("part_count", 1))
+        )
+        previous["hash"] = stable_digest(
+            [previous["hash"], record["hash"], pause_ms]
+        )
+    return merged
+
+
 def load_or_create_alignment(
     chunk: CourseChunk,
     clip: dict[str, Any],
@@ -1006,7 +1121,7 @@ def synthesize_excerpt(
         # schemaVersion을 올리면 기존 캐시가 자동으로 무효화된다.
         cache_hash = stable_digest(
             {
-                "schemaVersion": 5,
+                "schemaVersion": 6,
                 "model": spec.repository,
                 "modelRevision": revision,
                 "settings": {"language": spec.language, **settings},
@@ -1014,6 +1129,7 @@ def synthesize_excerpt(
                 "referenceTextSha256": reference_text_hash,
                 "entryKeys": [entry.key for entry in chunk.entries],
                 "ttsText": chunk.tts_text,
+                "pauseBeforeMs": [entry.pause_before_ms for entry in chunk.entries],
                 "seed": seed,
                 "adapter": adapter,
                 "edgePadMs": EDGE_PAD_MS,
@@ -1114,6 +1230,16 @@ def synthesize_excerpt(
             continue
 
         # 30초/시간 기반 모드는 목표 길이에 가장 가까운 청크에서 끝낸다.
+        # 강제 무음으로 나뉜 스텝은 뒷부분까지 포함해야 한 화면의 대본이 잘리지 않는다.
+        last_entry = chunk.entries[-1]
+        if last_entry.part_index + 1 < last_entry.part_count:
+            if index + 1 >= len(chunks):
+                raise RuntimeError(f"{last_entry.key}의 이어지는 음성 조각이 없습니다.")
+            following = chunks[index + 1]
+            cursor_samples = end_sample + milliseconds_to_samples(
+                chunk_gap_after(chunk, following), rate
+            )
+            continue
         total_if_finished = end_sample + milliseconds_to_samples(END_PAD_MS, rate)
         if total_if_finished >= target_samples:
             # 현재 청크를 포함하는 것이 목표에 더 가까운지, 이전 청크까지가 더 가까운지 비교
@@ -1238,6 +1364,8 @@ def synthesize_excerpt(
                 }
             )
 
+    step_records = merge_step_record_parts(step_records)
+
     # ─── 스텝별 화면 전환 타이밍 계산 ────────────────────────────────────────
     # transitionAtMs: 다음 스텝 발화 시작 직전에 화면을 전환해 시각적 리듬을 맞춘다.
     total_ms = int(final_probe["durationMs"])
@@ -1287,7 +1415,7 @@ def synthesize_excerpt(
     ]
 
     metadata = {
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "cachePolicy": "enabled" if use_cache else "disabled",
         "title": (
             f"강의 {start_page}~{end_page}페이지 {model_key} 묶음"
@@ -1331,6 +1459,8 @@ def synthesize_excerpt(
             "targetInternalSilenceMs": TARGET_INTERNAL_SILENCE_MS,
             "stepVisualLeadMs": STEP_VISUAL_LEAD_MS,
             "slideVisualLeadMs": SLIDE_VISUAL_LEAD_MS,
+            "forcedPauseMinMs": MIN_FORCED_PAUSE_MS,
+            "forcedPauseMaxMs": MAX_FORCED_PAUSE_MS,
         },
         "chunking": {
             "maxCharacters": MAX_CHUNK_CHARS,

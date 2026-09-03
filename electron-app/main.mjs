@@ -551,7 +551,7 @@ async function runPipeline(options) {
         "--provider", providerName,
       ]);
       await runProcess("captions", requireRuntimeTool("node", "Node.js"), [
-        "tools/narration.mjs", "captions",
+        "tools/captions.mjs",
         "--preset", options.name,
         "--provider", providerName,
       ], { cwd: studio.deckRoot });
@@ -559,7 +559,7 @@ async function runPipeline(options) {
 
     if (options.deliverable === "video") {
       const captureArgs = [
-        "tools/narration.mjs", "capture",
+        "tools/capture.mjs",
         "--preset", options.name,
         "--provider", providerName,
         "--no-cache",

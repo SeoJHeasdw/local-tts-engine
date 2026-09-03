@@ -68,7 +68,8 @@ async function buildReport() {
     adapter: !adapterPath || await exists(path.join(adapterPath, "adapters.safetensors")),
     courseConfig: await exists(path.join(deckRoot, "narration.config.json")),
     courseScripts: await exists(path.join(deckRoot, "script/course")),
-    courseRunner: await exists(path.join(deckRoot, "tools/narration.mjs")),
+    captionRunner: await exists(path.join(deckRoot, "tools/captions.mjs")),
+    captureRunner: await exists(path.join(deckRoot, "tools/capture.mjs")),
   };
   const capabilities = {
     textVoice: checks.appleSilicon && checks.trainPython && checks.ffprobe
@@ -77,7 +78,7 @@ async function buildReport() {
     courseVideo: checks.appleSilicon && checks.basePython && checks.trainPython
       && checks.node && checks.ffmpeg && checks.ffprobe && checks.referenceAudio
       && checks.referenceText && checks.adapter && checks.courseConfig
-      && checks.courseScripts && checks.courseRunner,
+      && checks.courseScripts && checks.captionRunner && checks.captureRunner,
   };
   const basePythonOutput = executableOutput(tools.basePython);
   const trainPythonOutput = executableOutput(tools.trainPython);
@@ -121,7 +122,8 @@ function printReport(report) {
     adapter: "선택한 음성 어댑터",
     courseConfig: "강의 설정",
     courseScripts: "강의 대본",
-    courseRunner: "영상 자동화 도구",
+    captionRunner: "자막 자동화 도구",
+    captureRunner: "영상 촬영 도구",
   };
   console.log("Voice Studio 환경 진단");
   console.log(`기기: ${report.machine}`);

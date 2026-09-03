@@ -27,6 +27,9 @@ def test_timeline_from_course_manifest_preserves_actual_timing() -> None:
                 "alignment": {
                     "words": [{"text": "원문", "startMs": 960, "endMs": 2750}]
                 },
+                "forcedPauses": [
+                    {"durationMs": 2_000, "nextSpeechStartMs": 2_400}
+                ],
             },
             {
                 "chapter": "ch00",
@@ -55,6 +58,10 @@ def test_timeline_from_course_manifest_preserves_actual_timing() -> None:
     assert timeline["entries"][0]["transitionAtMs"] == 2800
     assert timeline["entries"][0]["speechStartMs"] == 960
     assert timeline["entries"][0]["alignment"]["words"][0]["text"] == "원문"
+    assert timeline["entries"][0]["forcedPauses"] == [
+        {"durationMs": 2_000, "nextSpeechStartMs": 2_400}
+    ]
+    assert timeline["entries"][1]["forcedPauses"] == []
     assert timeline["totalMs"] == 5000
 
 

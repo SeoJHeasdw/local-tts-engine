@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from local_tts_engine.course_pilot import (
     CourseChunk,
     CourseEntry,
@@ -11,12 +13,15 @@ from local_tts_engine.course_pilot import (
     course_entries,
     course_lesson_catalog,
     course_page_catalog,
+    chunk_gap_after,
     gap_after,
     group_course_entries,
     lesson_title_from_source,
     load_or_create_alignment,
+    merge_step_record_parts,
     parse_script,
     slide_ids_from_source,
+    split_forced_pause_segments,
     trim_and_fade_audio,
 )
 
@@ -49,6 +54,36 @@ def test_parse_script_matches_narration_contract(tmp_path: Path) -> None:
     }
 
 
+def test_parse_script_keeps_a_standalone_forced_pause_marker(tmp_path: Path) -> None:
+    script = tmp_path / "ch02.md"
+    script.write_text(
+        """## camera-in
+### 2
+들어갑니다.
+
+[2s]
+
+자, 이제 이 네모 안입니다.
+""",
+        encoding="utf-8",
+    )
+
+    text = parse_script(script)["camera-in"][2]
+    assert text == "들어갑니다. [2s] 자, 이제 이 네모 안입니다."
+    assert split_forced_pause_segments(text) == [
+        ("들어갑니다.", 0),
+        ("자, 이제 이 네모 안입니다.", 2_000),
+    ]
+
+
+def test_parse_script_rejects_an_inline_forced_pause_marker(tmp_path: Path) -> None:
+    script = tmp_path / "ch02.md"
+    script.write_text("## camera-in\n### 2\n들어갑니다. [2s] 이어갑니다.\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="단독 줄"):
+        parse_script(script)
+
+
 def test_apply_pronunciation_respects_ascii_boundaries() -> None:
     dictionary = [{"from": "MCP", "to": "엠씨피"}]
 
@@ -76,6 +111,57 @@ def test_group_course_entries_keeps_contiguous_steps_on_one_slide() -> None:
     chunks = group_course_entries(entries)
 
     assert chunks == [CourseChunk(tuple(entries[:2])), CourseChunk((entries[2],))]
+
+
+def test_forced_pause_splits_chunks_and_overrides_the_normal_step_gap() -> None:
+    first = CourseEntry(
+        "ch02", "camera-in", 138, 2, "들어갑니다.", "들어갑니다.",
+        part_index=0, part_count=2,
+    )
+    second = CourseEntry(
+        "ch02", "camera-in", 138, 2, "자, 이제 안입니다.", "자, 이제 안입니다.",
+        part_index=1, part_count=2, pause_before_ms=2_000,
+    )
+
+    chunks = group_course_entries([first, second])
+
+    assert [len(chunk.entries) for chunk in chunks] == [1, 1]
+    assert [chunk.key for chunk in chunks] == [
+        "ch02--camera-in--2-part-1-to-2-part-1",
+        "ch02--camera-in--2-part-2-to-2-part-2",
+    ]
+    assert chunk_gap_after(chunks[0], chunks[1]) == 2_000
+
+
+def test_forced_pause_parts_merge_back_into_one_visual_step() -> None:
+    records = [
+        {
+            "chapter": "ch02", "slide_id": "camera-in", "step": 2,
+            "key": "part-1", "source_text": "들어갑니다.", "tts_text": "들어갑니다.",
+            "part_count": 2, "pause_before_ms": 0,
+            "speechStartMs": 100, "speechEndMs": 500,
+            "alignment": {"words": [{"text": "들어갑니다", "startMs": 100, "endMs": 500}]},
+            "chunkKey": "chunk-a", "audioPath": "/tmp/a.wav", "hash": "hash-a",
+        },
+        {
+            "chapter": "ch02", "slide_id": "camera-in", "step": 2,
+            "key": "part-2", "source_text": "자, 이제 안입니다.", "tts_text": "자, 이제 안입니다.",
+            "part_count": 2, "pause_before_ms": 2_000,
+            "speechStartMs": 2_650, "speechEndMs": 3_200,
+            "alignment": {"words": [{"text": "자", "startMs": 2_650, "endMs": 2_800}]},
+            "chunkKey": "chunk-b", "audioPath": "/tmp/b.wav", "hash": "hash-b",
+        },
+    ]
+
+    merged = merge_step_record_parts(records)
+
+    assert len(merged) == 1
+    assert merged[0]["key"] == "ch02--camera-in--2"
+    assert merged[0]["source_text"] == "들어갑니다. 자, 이제 안입니다."
+    assert merged[0]["forcedPauses"] == [
+        {"durationMs": 2_000, "nextSpeechStartMs": 2_650}
+    ]
+    assert [word["startMs"] for word in merged[0]["alignment"]["words"]] == [100, 2_650]
 
 
 def test_trim_and_fade_audio_removes_only_edge_silence() -> None:
@@ -138,6 +224,36 @@ def test_course_entries_uses_canonical_order_and_dictionary(tmp_path: Path) -> N
         "ch00--slide-b--0",
     ]
     assert entries[0].tts_text == "엠씨피 시작"
+
+
+def test_course_entries_expands_a_forced_pause_inside_one_step(tmp_path: Path) -> None:
+    deck = tmp_path / "deck"
+    chapters = deck / "src/production/chapters"
+    scripts = deck / "script/course"
+    narration = deck / "narration"
+    chapters.mkdir(parents=True)
+    scripts.mkdir(parents=True)
+    narration.mkdir(parents=True)
+    (chapters / "ch02-test.ts").write_text(
+        '  id: "camera-in"\n', encoding="utf-8"
+    )
+    (scripts / "ch02.md").write_text(
+        "## camera-in\n### 2\n들어갑니다.\n\n[2s]\n\n자, 이제 안입니다.\n",
+        encoding="utf-8",
+    )
+    (narration / "pronunciation.ko.json").write_text("[]", encoding="utf-8")
+
+    entries = course_entries(tmp_path, "ch02")
+
+    assert [entry.key for entry in entries] == [
+        "ch02--camera-in--2--part-1",
+        "ch02--camera-in--2--part-2",
+    ]
+    assert [entry.source_text for entry in entries] == [
+        "들어갑니다.",
+        "자, 이제 안입니다.",
+    ]
+    assert [entry.pause_before_ms for entry in entries] == [0, 2_000]
 
 
 def test_course_entries_page_range_includes_every_step_on_end_page(tmp_path: Path) -> None:
