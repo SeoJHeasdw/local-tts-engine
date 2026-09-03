@@ -33,6 +33,14 @@ PARAMETER_SIZE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DECIMAL_NUMBER_PATTERN = re.compile(r"(?<![\d.])(\d+)\.(\d+)(?![\d.])")
+# Anything still written as digits after every other rule and the dictionary
+# have run. A number left as digits is a number the model gets to guess at, and
+# guessing is what produced "호십개" in the first place. Sino-Korean is the
+# default reading in lecture narration; the handful of counters that want a
+# native reading ("한 턴") are dictionary overrides, which run before this.
+BARE_NUMBER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?<!\d\.)(\d+(?:,\d{3})*)(?![A-Za-z0-9])(?!\.\d)"
+)
 
 _DIGITS = ("영", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구")
 _SMALL_UNITS = ("", "십", "백", "천")
@@ -108,6 +116,19 @@ def normalize_structured_tokens(text: str) -> str:
     return COUNTED_NUMBER_PATTERN.sub(counted_number, output)
 
 
+def read_remaining_numbers(text: str) -> str:
+    """Read every digit run that survived the earlier rules as Sino-Korean.
+
+    Applied last, so a dictionary entry containing digits still matches first.
+    No spacing is inserted: the digits are replaced where they stand, which
+    reads correctly whether a particle follows (50이라는 → 오십이라는) or a
+    counter does (160토큰 → 백육십토큰).
+    """
+    return BARE_NUMBER_PATTERN.sub(
+        lambda match: korean_sino_integer(match.group(1)), text
+    )
+
+
 def merge_pronunciation_dictionaries(
     *dictionaries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -140,11 +161,21 @@ def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:
     return re.compile(escaped, flags)
 
 
-def apply_pronunciation(text: str, dictionary: list[dict[str, Any]]) -> str:
-    """Apply structural normalization and token-aware pronunciation replacements."""
+def _apply_dictionary(text: str, dictionary: list[dict[str, Any]]) -> str:
+    """Structural normalization and dictionary replacement, before the fallback.
+
+    Kept separate so the preflight can see which digits the dictionary chose to
+    leave alone, which is exactly the set the fallback will read.
+    """
     output = normalize_structured_tokens(text)
     for item in merge_pronunciation_dictionaries(dictionary):
         output = _dictionary_pattern(item).sub(str(item["to"]), output)
+    return output
+
+
+def apply_pronunciation(text: str, dictionary: list[dict[str, Any]]) -> str:
+    """Apply structural normalization and token-aware pronunciation replacements."""
+    output = read_remaining_numbers(_apply_dictionary(text, dictionary))
     return re.sub(r"[ \t]+", " ", output).strip()
 
 
@@ -172,6 +203,8 @@ def pronunciation_preflight(
         required.append(normalize_structured_tokens(match.group(0)))
     for match in DECIMAL_NUMBER_PATTERN.finditer(source_text):
         required.append(normalize_structured_tokens(match.group(0)))
+    for match in BARE_NUMBER_PATTERN.finditer(_apply_dictionary(source_text, dictionary)):
+        required.append(korean_sino_integer(match.group(1)))
     return {
         "sourceText": source_text,
         "ttsText": tts_text,

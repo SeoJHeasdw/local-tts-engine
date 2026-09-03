@@ -103,3 +103,44 @@ def test_required_pronunciations_list_what_the_reader_must_be_heard_saying() -> 
     assert "런타임" in report["requiredPronunciations"]
     assert "큐웬삼점육 이십칠비" in report["requiredPronunciations"]
     assert "오십 개" in report["requiredPronunciations"]
+
+
+def test_a_number_left_as_digits_is_read_rather_than_guessed_at() -> None:
+    """Digits that survive every other rule used to reach the model unread, and
+    a model guessing at a number is what produced 호십개. Sino-Korean is the
+    default reading in lecture narration."""
+    assert apply_pronunciation("50이라는 숫자", []) == "오십이라는 숫자"
+    assert apply_pronunciation("설명서까지 160토큰이라고 했죠", []) == "설명서까지 백육십토큰이라고 했죠"
+    assert apply_pronunciation("오십 개면 8천 토큰입니다", []) == "오십 개면 팔천 토큰입니다"
+    assert apply_pronunciation("4천억 개의 숫자", []) == "사천억 개의 숫자"
+    assert apply_pronunciation("40 대 1입니다", []) == "사십 대 일입니다"
+    assert apply_pronunciation("1, 2, 3, 4.", []) == "일, 이, 삼, 사."
+
+
+def test_digits_inside_a_name_are_left_for_the_dictionary() -> None:
+    # A digit bounded by letters belongs to an identifier, not a count.
+    assert apply_pronunciation("n8n과 Zapier", []) == "n8n과 Zapier"
+    assert apply_pronunciation("GPT-4o 세대", []) == "GPT-4o 세대"
+    # And a dictionary entry containing digits still wins, because it runs first.
+    assert apply_pronunciation("GPT-4o 세대", [{"from": "GPT-4o", "to": "지피티 사오"}]) == "지피티 사오 세대"
+
+
+def test_a_decimal_is_not_split_into_two_readings() -> None:
+    assert apply_pronunciation("버전 3.6입니다", []) == "버전 삼점육입니다"
+    assert apply_pronunciation("Llama 3.1 405B", []) == "Llama 삼점일 사백오비"
+
+
+def test_a_sentence_final_period_does_not_hide_the_number() -> None:
+    assert apply_pronunciation("계단처럼 4.", []) == "계단처럼 사."
+
+
+def test_thousands_separators_are_read_as_one_number() -> None:
+    assert apply_pronunciation("157,838자", []) == "십오만칠천팔백삼십팔자"
+
+
+def test_every_number_a_reader_must_say_is_listed_for_the_reviewer() -> None:
+    report = pronunciation_preflight("설명서까지 160토큰, 50이라는 숫자", [])
+    assert report["ttsText"] == "설명서까지 백육십토큰, 오십이라는 숫자"
+    assert "백육십" in report["requiredPronunciations"]
+    assert "오십" in report["requiredPronunciations"]
+    assert report["unresolvedNumbers"] == []
