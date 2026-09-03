@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  assertPageReplaceable,
   combineLessonCatalogs,
   isInside,
   lessonCatalogFromPresets,
@@ -11,13 +12,17 @@ import {
   normalizeVoiceText,
   normalizeOptions,
   outputPathsForRoot,
+  pageRangeFromTimeline,
   pageVoicePatchPlan,
   patchedTimeline,
   parseTimecode,
   presetFromManifest,
   summarizeChecks,
   timeRangeForPages,
+  videoTimelineCandidates,
+  videoTimelineFileName,
   withOutputReview,
+  voiceFindingSeverity,
   voiceQualityFindings,
 } from "./pipeline-utils.mjs";
 
@@ -114,35 +119,105 @@ test("작업 이름과 검증 요약을 결정적으로 만든다", () => {
   ]), { ok: false, passed: 1, total: 2, failed: ["video"] });
 });
 
-test("Whisper 실패 청크를 영상 시간대와 페이지로 연결한다", () => {
-  const findings = voiceQualityFindings({
-    chunks: [
-      { key: "chunk-a", startMs: 12_300, endMs: 18_900 },
-      { key: "chunk-b", startMs: 19_100, endMs: 24_000 },
-    ],
-    quality: { chunks: [
-      { chunkKey: "chunk-b", chapter: "ch02", slideId: "toolpick-model", slideNumber: 148, selected: { passed: true } },
-      { chunkKey: "chunk-a", chapter: "ch02", slideId: "toolpick-model", slideNumber: 148, selected: {
-        passed: false,
+const REVIEW_MANIFEST = {
+  chunks: [
+    { key: "chunk-a", startMs: 12_300, endMs: 18_900 },
+    { key: "chunk-b", startMs: 19_100, endMs: 24_000 },
+    { key: "chunk-c", startMs: 24_200, endMs: 31_000 },
+  ],
+  quality: { chunks: [
+    {
+      chunkKey: "chunk-b",
+      chapter: "ch02",
+      slideId: "toolpick-model",
+      slideNumber: 149,
+      severity: "ok",
+      selected: { passed: true },
+    },
+    {
+      chunkKey: "chunk-a",
+      chapter: "ch02",
+      slideId: "toolpick-model",
+      slideNumber: 148,
+      severity: "failed",
+      candidates: [{}, {}, {}, {}],
+      selected: {
+        attempt: 4,
         failures: ["지정 발음 불일치"],
-        expectedText: "큐웬삼점육 이십칠비",
-        recognizedText: "큐웬 삼십육 마이너스 이십칠 비",
-        attempt: 3,
-      } },
-    ] },
-  });
+        warnings: [],
+        pronunciationChecks: [
+          { term: "래그", status: "failed", distance: 0.5 },
+          { term: "오십 개", status: "ok", distance: 0 },
+        ],
+        expectedText: "래그를 씁니다",
+        recognizedText: "알에이지를 씁니다",
+      },
+    },
+    {
+      chunkKey: "chunk-c",
+      chapter: "ch02",
+      slideId: "toolpick-scale",
+      slideNumber: 150,
+      severity: "warning",
+      candidates: [{}, {}],
+      selected: {
+        attempt: 2,
+        failures: [],
+        warnings: ["지정 발음 확인 필요"],
+        pronunciationChecks: [{ term: "런타임", status: "warning", distance: 0.25 }],
+        expectedText: "런타임을 봅니다",
+        recognizedText: "런팀을 봅니다",
+      },
+    },
+  ] },
+};
 
-  assert.deepEqual(findings, [{
+test("검수에 걸린 청크를 영상 시간대와 페이지로 연결한다", () => {
+  const findings = voiceQualityFindings(REVIEW_MANIFEST);
+
+  assert.equal(findings.length, 2);
+  assert.deepEqual(findings[0], {
     chapter: "ch02",
     slideId: "toolpick-model",
     slideNumber: 148,
     startMs: 12_300,
     endMs: 18_900,
+    severity: "failed",
     reasons: ["지정 발음 불일치"],
-    expectedText: "큐웬삼점육 이십칠비",
-    recognizedText: "큐웬 삼십육 마이너스 이십칠 비",
-    selectedAttempt: 3,
-  }]);
+    terms: [{ term: "래그", status: "failed" }],
+    expectedText: "래그를 씁니다",
+    recognizedText: "알에이지를 씁니다",
+    selectedAttempt: 4,
+    attempts: 4,
+  });
+  // Findings are ordered by where they occur, so the list reads like the video.
+  assert.deepEqual(findings.map((finding) => finding.startMs), [12_300, 24_200]);
+});
+
+test("통과한 청크는 확인 목록에 올리지 않는다", () => {
+  const findings = voiceQualityFindings({
+    chunks: [{ key: "chunk-a", startMs: 0, endMs: 1_000 }],
+    quality: { chunks: [{ chunkKey: "chunk-a", severity: "ok", selected: { passed: true } }] },
+  });
+  assert.deepEqual(findings, []);
+});
+
+test("재생성 권장과 확인 권장을 구분해 기록한다", () => {
+  const findings = voiceQualityFindings(REVIEW_MANIFEST);
+  assert.deepEqual(findings.map((finding) => finding.severity), ["failed", "warning"]);
+  assert.deepEqual(findings[1].reasons, ["지정 발음 확인 필요"]);
+});
+
+test("검수 기록이 없는 매니페스트는 조용히 빈 목록을 낸다", () => {
+  assert.deepEqual(voiceQualityFindings({}), []);
+  assert.deepEqual(voiceQualityFindings({ quality: { chunks: [] } }), []);
+});
+
+test("합격·불합격만 알던 예전 기록도 읽는다", () => {
+  // Older manifests had no severity, and a failure then meant "make it again".
+  assert.equal(voiceFindingSeverity({ selected: { passed: false } }), "failed");
+  assert.equal(voiceFindingSeverity({ selected: { passed: true } }), "ok");
+  assert.equal(voiceFindingSeverity({ severity: "warning", selected: { passed: false } }), "warning");
 });
 
 test("레슨 제목으로 완성 영상 이름을 만들고 기존 파일은 번호를 붙여 보존한다", () => {
@@ -247,4 +322,64 @@ test("자동 검증과 별도로 사람 청취 승인 상태를 기록한다", (
   assert.deepEqual(reviewed.review, { status: "approved", updatedAt: "2026-08-27T01:02:03.000Z" });
   assert.equal(reviewed.summary.ok, true);
   assert.throws(() => withOutputReview({}, "rejected", now));
+});
+
+
+test("완성 영상은 프로젝트 폴더로 옮겨져도 타임라인을 다시 찾는다", () => {
+  // publishVideo moves the mp4 into output/videos/<job>/ and leaves the project
+  // folder behind; without the later candidates a published video looked like a
+  // plain file and page replacement silently became whole-video replacement.
+  assert.equal(videoTimelineFileName("/out/videos/job-a/CH02 L11.mp4"), "CH02 L11.timeline.json");
+  assert.deepEqual(
+    videoTimelineCandidates("/out/videos/job-a/CH02 L11.mp4", "/out/projects"),
+    [
+      "/out/videos/job-a/CH02 L11.timeline.json",
+      "/out/videos/job-a/timeline.json",
+      "/out/projects/job-a/timeline.json",
+    ],
+  );
+  assert.deepEqual(
+    videoTimelineCandidates("/elsewhere/clip.mp4", null),
+    ["/elsewhere/clip.timeline.json", "/elsewhere/timeline.json"],
+  );
+});
+
+test("같은 폴더의 다른 회차 영상과 타임라인이 섞이지 않는다", () => {
+  // Re-running a job name adds "CH02 L11 (2).mp4" beside the first render. A
+  // single shared timeline.json would describe whichever ran last while reveal
+  // opened a different file, and the wrong span of audio would be replaced.
+  const first = videoTimelineCandidates("/out/videos/job-a/CH02 L11.mp4", null)[0];
+  const second = videoTimelineCandidates("/out/videos/job-a/CH02 L11 (2).mp4", null)[0];
+  assert.notEqual(first, second);
+});
+
+test("타임라인에서 이 영상이 담은 페이지 범위를 읽는다", () => {
+  assert.deepEqual(pageRangeFromTimeline({ entries: [
+    { slideNumber: 150 }, { slideNumber: 148 }, { slideNumber: 149 },
+  ] }), { start: 148, end: 150 });
+  assert.equal(pageRangeFromTimeline({ entries: [{}] }), null);
+  assert.equal(pageRangeFromTimeline(null), null);
+});
+
+test("페이지 타임라인이 없으면 전체 음성을 덮지 않고 이유를 밝힌다", () => {
+  const withTimeline = { timelinePath: "/t.json", pageRange: { start: 140, end: 160 } };
+  assert.equal(assertPageReplaceable(withTimeline, { startPage: 148, endPage: 148 }), true);
+  assert.equal(assertPageReplaceable(withTimeline, { startPage: 140, endPage: 160 }), true);
+
+  assert.throws(
+    () => assertPageReplaceable({}, { startPage: 148, endPage: 148 }),
+    /페이지 타임라인이 없어/,
+  );
+  assert.throws(
+    () => assertPageReplaceable(withTimeline, { startPage: 148, endPage: 200 }),
+    /140~160페이지만 담고 있습니다/,
+  );
+  assert.throws(
+    () => assertPageReplaceable(withTimeline, { startPage: 150, endPage: 149 }),
+    /시작·끝 페이지를 확인/,
+  );
+  assert.throws(
+    () => assertPageReplaceable(withTimeline, {}),
+    /시작·끝 페이지를 확인/,
+  );
 });

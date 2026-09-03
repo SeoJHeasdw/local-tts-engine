@@ -17,6 +17,7 @@ from local_tts_engine.course_pilot import (
     gap_after,
     group_course_entries,
     lesson_title_from_source,
+    AUDIO_TRIM_STAT_KEYS,
     load_or_create_alignment,
     merge_step_record_parts,
     parse_script,
@@ -220,6 +221,24 @@ def test_trim_and_fade_audio_compacts_only_long_internal_pause() -> None:
     assert info["shortenedSilenceCount"] == 1
     assert 450 <= info["shortenedSilenceMs"] <= 550
     assert 1_300 <= len(trimmed) <= 1_500
+
+
+def test_every_clip_reports_the_same_trim_statistics(tmp_path: Path) -> None:
+    """A clip too short or too quiet to trim still owes the full record.
+
+    Manifest assembly and the clip cache both read all four keys. A partial
+    result used to raise KeyError mid-run and, because the same dict was written
+    to the clip sidecar, poisoned the cache for every later run.
+    """
+    rate = 1_000
+    silent = np.zeros(800, dtype=np.float32)
+    shorter_than_one_frame = np.full(5, 0.2, dtype=np.float32)
+    ordinary = np.concatenate([np.zeros(100), np.full(400, 0.2), np.zeros(100)]).astype(np.float32)
+
+    for audio in (silent, shorter_than_one_frame, ordinary):
+        _, info = trim_and_fade_audio(audio, rate)
+        assert set(info) == set(AUDIO_TRIM_STAT_KEYS), audio.shape
+        assert all(isinstance(info[key], int) for key in AUDIO_TRIM_STAT_KEYS)
 
 
 def test_course_entries_uses_canonical_order_and_dictionary(tmp_path: Path) -> None:
@@ -530,3 +549,34 @@ def test_no_cache_cli_flag_disables_result_reuse() -> None:
     ])
 
     assert args.no_cache is True
+
+
+def test_peak_memory_is_reported_from_whichever_mlx_namespace_exists() -> None:
+    """The reviewer is resident with the generator, so the run must report a
+    process-wide peak. MLX has moved this call, and a missing diagnostic must
+    never be the reason a finished lecture fails."""
+    from local_tts_engine.course_pilot import metal_peak_memory_gb
+
+    class Current:
+        @staticmethod
+        def get_peak_memory() -> float:
+            return 13.4 * 1024**3
+
+    class Older:
+        class metal:
+            @staticmethod
+            def get_peak_memory() -> float:
+                return 11.6 * 1024**3
+
+    class Broken:
+        @staticmethod
+        def get_peak_memory() -> float:
+            raise RuntimeError("메모리 카운터 없음")
+
+    class Absent:
+        pass
+
+    assert metal_peak_memory_gb(Current) == 13.4
+    assert metal_peak_memory_gb(Older) == 11.6
+    assert metal_peak_memory_gb(Broken) == 0.0
+    assert metal_peak_memory_gb(Absent) == 0.0

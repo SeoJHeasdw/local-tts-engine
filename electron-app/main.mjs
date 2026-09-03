@@ -22,6 +22,10 @@ import {
   providerForOptions,
   summarizeChecks,
   timeRangeForPages,
+  assertPageReplaceable,
+  pageRangeFromTimeline,
+  videoTimelineCandidates,
+  videoTimelineFileName,
   voiceQualityFindings,
   withOutputReview,
 } from "./pipeline-utils.mjs";
@@ -37,6 +41,9 @@ const APP_SETTINGS_PATH = path.join(ROOT, "artifacts/app-settings.json");
 const FINETUNE_RUN_ROOT = path.join(ROOT, "artifacts/finetune-runs");
 const FINETUNE_TRAIN_JSONL = path.join(ROOT, "artifacts/finetune-datasets/jaeho-ko-v1/official/train.jsonl");
 const ADAPTER = path.join(ROOT, "artifacts/finetune-runs/2026-08-25/jaeho-ko-r16-v1/adapters");
+// How many different seeds a chunk may spend before a page is handed to a
+// person. Mirrors MAX_AUTOMATIC_ATTEMPTS in speech_quality.py.
+const DEFAULT_QUALITY_ATTEMPTS = 4;
 const DEFAULT_STUDIO_PATHS = Object.freeze(defaultStudioPaths(ROOT));
 const LEGACY_OUTPUT_PATHS = Object.freeze({
   ttsOutputRoot: path.join(ROOT, "artifacts/course-pilots"),
@@ -402,8 +409,14 @@ async function findVideo(renderDir, name) {
   const names = await fs.readdir(renderDir).catch(() => []);
   const preferred = `${name}-captioned.mp4`;
   if (names.includes(preferred)) return path.join(renderDir, preferred);
-  const mp4 = names.filter((item) => item.endsWith(".mp4")).sort().at(-1);
-  return mp4 ? path.join(renderDir, mp4) : null;
+  const mp4s = names.filter((item) => item.toLowerCase().endsWith(".mp4"));
+  if (!mp4s.length) return null;
+  const dated = await Promise.all(mp4s.map(async (item) => ({
+    item,
+    at: (await safeStat(path.join(renderDir, item)))?.mtimeMs || 0,
+  })));
+  dated.sort((left, right) => left.at - right.at || left.item.localeCompare(right.item));
+  return path.join(renderDir, dated.at(-1).item);
 }
 
 async function publishedVideoNames(root) {
@@ -420,13 +433,22 @@ async function publishedVideoNames(root) {
   return names;
 }
 
-async function publishVideo(source, studio, name, title) {
+async function publishVideo(source, studio, name, title, renderDir = null) {
   const outputDir = path.join(studio.videoOutputRoot, name);
   await fs.mkdir(outputDir, { recursive: true });
   const target = path.join(
     outputDir,
     nextDisplayVideoFileName(title, await publishedVideoNames(studio.videoOutputRoot)),
   );
+  // The published video carries its own timeline, named after itself, so it
+  // stays page-editable wherever the folder is moved and never borrows the
+  // boundaries of another run that landed in the same folder.
+  if (renderDir) {
+    await fs.copyFile(
+      path.join(renderDir, "timeline.json"),
+      path.join(outputDir, videoTimelineFileName(target)),
+    ).catch(() => {});
+  }
   if (path.resolve(source) === path.resolve(target)) return target;
   try {
     await fs.rename(source, target);
@@ -477,7 +499,7 @@ async function validateResult({ sourceDir, renderDir, options, studio }) {
 
   const summary = summarizeChecks(checks);
   if (summary.ok && videoPath) {
-    videoPath = await publishVideo(videoPath, studio, options.name, options.title);
+    videoPath = await publishVideo(videoPath, studio, options.name, options.title, renderDir);
   }
   const report = {
     schemaVersion: 1,
@@ -492,6 +514,7 @@ async function validateResult({ sourceDir, renderDir, options, studio }) {
     voiceQuality,
     voiceFindings,
     needsReview: voiceQuality?.needsReview || [],
+    listenSuggested: voiceQuality?.listenSuggested || [],
     target: options.deliverable === "audio"
       ? { root: "pilot", day: path.basename(path.dirname(sourceDir)), name: options.name }
       : { root: "render", name: options.name },
@@ -627,6 +650,15 @@ function chosenFile(token, kind) {
   return chosenRecord(token, kind).path;
 }
 
+async function findVideoTimeline(videoPath) {
+  const settings = await readAppSettings().catch(() => null);
+  const captionRoot = settings ? runtimePaths(settings.paths).captionOutputRoot : null;
+  for (const candidate of videoTimelineCandidates(videoPath, captionRoot)) {
+    if (await safeStat(candidate)) return candidate;
+  }
+  return null;
+}
+
 async function registerSelected(paths, kind, extras = []) {
   return Promise.all(paths.map(async (file, index) => {
     const token = crypto.randomUUID();
@@ -639,13 +671,15 @@ async function registerSelected(paths, kind, extras = []) {
       pageRange: null,
       ...(extras[index] || {}),
     };
-    if (kind === "video") {
-      const timelinePath = path.join(path.dirname(value.path), "timeline.json");
-      const timeline = await fs.readFile(timelinePath, "utf8").then(JSON.parse).catch(() => null);
-      const pages = timeline?.entries?.map((entry) => Number(entry.slideNumber)).filter(Number.isFinite) || [];
-      if (pages.length) {
+    if (kind === "video" && !value.timelinePath) {
+      const timelinePath = await findVideoTimeline(value.path);
+      const timeline = timelinePath
+        ? await fs.readFile(timelinePath, "utf8").then(JSON.parse).catch(() => null)
+        : null;
+      const pageRange = pageRangeFromTimeline(timeline);
+      if (pageRange) {
         value.timelinePath = timelinePath;
-        value.pageRange = { start: Math.min(...pages), end: Math.max(...pages) };
+        value.pageRange = pageRange;
       }
     }
     selectedFiles.set(token, value);
@@ -772,6 +806,7 @@ async function generateReplacementVoice(options, outputDir) {
     "--end-page", String(options.endPage),
     "--model", options.modelId || "qwen3-tts",
     "--no-cache",
+    "--quality-attempts", String(options.qualityAttempts || DEFAULT_QUALITY_ATTEMPTS),
   ];
   if (options.seed) args.push("--seed", String(options.seed));
   if (options.voiceMode !== "zero") {
@@ -784,6 +819,7 @@ async function generateReplacementVoice(options, outputDir) {
   if (!firstChunk || !lastChunk) throw new Error("생성된 목소리의 음성 구간을 찾지 못했습니다.");
   return {
     audioPath: manifest.audioPath,
+    voiceFindings: voiceQualityFindings(manifest),
     generatedVoice: {
       manifestPath: path.join(voiceDir, "manifest.json"),
       sourceStartMs: Number(firstChunk.startMs),
@@ -795,25 +831,23 @@ async function generateReplacementVoice(options, outputDir) {
 }
 
 async function runVoiceCandidates(options, outputDir) {
-  chosenRecord(options.videoToken, "video");
+  assertPageReplaceable(chosenRecord(options.videoToken, "video"), options);
   const count = Math.min(8, Math.max(2, Math.round(Number(options.candidateCount ?? 3))));
   const digest = crypto.createHash("sha256").update(options.name).digest();
   const baseSeed = digest.readUInt32BE(0);
-  let completed = 0;
-  const candidates = await mapWithConcurrency(
-    Array.from({ length: count }, (_, index) => index),
-    options.voiceParallelism || 2,
-    async (index) => {
-      const candidateName = `candidate-${String(index + 1).padStart(2, "0")}`;
-      const candidateDir = path.join(outputDir, "candidates", candidateName);
-      await fs.mkdir(candidateDir, { recursive: true });
-      const seed = (baseSeed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
-      const generated = await generateReplacementVoice({ ...options, seed }, candidateDir);
-      completed += 1;
-      emit({ type: "voice-item-complete", completed, total: count, name: `후보 ${index + 1}` });
-      return { index: index + 1, seed, ...generated };
-    },
-  );
+  const candidates = [];
+  for (let index = 0; index < count; index += 1) {
+    const candidateName = `candidate-${String(index + 1).padStart(2, "0")}`;
+    const candidateDir = path.join(outputDir, "candidates", candidateName);
+    await fs.mkdir(candidateDir, { recursive: true });
+    const seed = (baseSeed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
+    // One take per candidate: the point of candidates is a spread of readings
+    // to choose between, not one reading retried until it scores well. They run
+    // one at a time because each run holds the generator and the reader at once.
+    const generated = await generateReplacementVoice({ ...options, seed, qualityAttempts: 1 }, candidateDir);
+    candidates.push({ index: index + 1, seed, ...generated });
+    emit({ type: "voice-item-complete", completed: candidates.length, total: count, name: `후보 ${index + 1}` });
+  }
   const registered = await registerSelected(
     candidates.map((item) => item.audioPath),
     "audio",
@@ -994,7 +1028,8 @@ async function runVoiceEdit(options, outputDir) {
   const audioRecord = options.audioSource === "generate"
     ? await generateReplacementVoice(options, outputDir).then((value) => ({ path: value.audioPath, generatedVoice: value.generatedVoice }))
     : chosenRecord(options.audioToken, "audio");
-  if (videoRecord.timelinePath && audioRecord.generatedVoice) {
+  if (audioRecord.generatedVoice) {
+    assertPageReplaceable(videoRecord, audioRecord.generatedVoice);
     return runPageVoicePatch(videoRecord, audioRecord, options, outputDir);
   }
   const video = videoRecord.path;
@@ -1031,7 +1066,9 @@ async function runVoiceBatchEdit(options, outputDir) {
     ? options.videoItems
     : [{ videoToken: options.videoToken, startPage: options.startPage, endPage: options.endPage }];
   if (items.length > 20) throw new Error("목소리 교체는 한 번에 최대 20개까지 실행할 수 있습니다.");
-  const concurrency = Math.min(Number(options.voiceParallelism || 2), items.length);
+  const concurrency = options.audioSource === "generate"
+    ? 1
+    : Math.min(Number(options.voiceParallelism || 2), items.length);
   let completed = 0;
   const results = await mapWithConcurrency(items, concurrency, async (item, index) => {
       const selected = chosenRecord(item.videoToken, "video");
@@ -1136,6 +1173,25 @@ async function listDirectories(root) {
   return entries.filter((item) => item.isDirectory() && /^[a-z0-9][a-z0-9-]*$/.test(item.name));
 }
 
+async function resolveOutputFile(target) {
+  const settings = await readAppSettings();
+  const studio = runtimePaths(settings.paths);
+  const store = outputStoreForTarget(target, studio);
+  const directory = resolveOutputTarget(target, studio);
+  let file = target.root === "render"
+    ? await findVideo(path.join(store.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
+    : target.root === "edit"
+      ? path.join(directory, `${target.name}.mp4`)
+      : target.root === "voice"
+        ? path.join(directory, "selected.wav")
+        : path.join(directory, `${target.name}.m4a`);
+  if (["render", "edit", "voice"].includes(target.root)) {
+    const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
+    file = await safeStat(file) ? file : report?.videoPath || report?.audioPath || file;
+  }
+  return { directory, file: await safeStat(file) ? file : null };
+}
+
 async function listOutputs(studio, { includeLegacy = true, storeId = "current" } = {}) {
   const result = [];
   for (const entry of await listDirectories(studio.captionOutputRoot)) {
@@ -1160,6 +1216,7 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
       passed: report?.summary?.passed ?? null,
       total: report?.summary?.total ?? null,
       needsReview: report?.needsReview || [],
+      listenSuggested: report?.listenSuggested || [],
       voiceFindings: report?.voiceFindings || [],
       review: report?.review || null,
       path: videoPath || dir,
@@ -1186,6 +1243,7 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
         passed: report.summary?.passed ?? null,
         total: report.summary?.total ?? null,
         needsReview: report.needsReview || [],
+        listenSuggested: report.listenSuggested || [],
         voiceFindings: report.voiceFindings || [],
         review: report.review || null,
         path: report.audioPath || dir,
@@ -1616,45 +1674,27 @@ function registerIpc() {
 
   ipcMain.handle("studio:reveal", async (event, target) => {
     guard(event);
-    const settings = await readAppSettings();
-    const studio = runtimePaths(settings.paths);
-    const store = outputStoreForTarget(target, studio);
-    const directory = resolveOutputTarget(target, studio);
-    let file = target.root === "render"
-      ? await findVideo(path.join(store.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
-      : target.root === "edit"
-        ? path.join(directory, `${target.name}.mp4`)
-        : target.root === "voice"
-          ? path.join(directory, "selected.wav")
-          : path.join(directory, `${target.name}.m4a`);
-    if (["render", "edit", "voice"].includes(target.root)) {
-      const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
-      file = await safeStat(file) ? file : report?.videoPath || report?.audioPath || file;
-    }
-    shell.showItemInFolder(await safeStat(file) ? file : directory);
+    const { file, directory } = await resolveOutputFile(target);
+    shell.showItemInFolder(file || directory);
     return true;
   });
 
   ipcMain.handle("studio:open", async (event, target) => {
     guard(event);
-    const settings = await readAppSettings();
-    const studio = runtimePaths(settings.paths);
-    const store = outputStoreForTarget(target, studio);
-    const directory = resolveOutputTarget(target, studio);
-    let file = target.root === "render"
-      ? await findVideo(path.join(store.videoOutputRoot, target.name), target.name) || await findVideo(directory, target.name)
-      : target.root === "edit"
-        ? path.join(directory, `${target.name}.mp4`)
-        : target.root === "voice"
-          ? path.join(directory, "selected.wav")
-          : path.join(directory, `${target.name}.m4a`);
-    if (["render", "edit", "voice"].includes(target.root)) {
-      const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
-      file = await safeStat(file) ? file : report?.videoPath || report?.audioPath || file;
-    }
-    const error = await shell.openPath(await safeStat(file) ? file : directory);
+    const { file, directory } = await resolveOutputFile(target);
+    const error = await shell.openPath(file || directory);
     if (error) throw new Error(error);
     return true;
+  });
+
+  // Opening the editor from a flagged segment must not ask the user to find the
+  // video they were just looking at, so the result adopts itself as the input.
+  ipcMain.handle("studio:adopt-result-video", async (event, target) => {
+    guard(event);
+    const { file } = await resolveOutputFile(target);
+    if (!file || !/\.mp4$/i.test(file)) throw new Error("이 결과에는 편집할 영상이 없습니다.");
+    const [registered] = await registerSelected([file], "video");
+    return registered;
   });
 }
 

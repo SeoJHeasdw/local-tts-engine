@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("ttsStudio", {
     const paths = Array.from(files || []).map((file) => webUtils.getPathForFile(file)).filter(Boolean);
     return ipcRenderer.invoke("studio:register-dropped-files", paths, kind);
   },
+  adoptResultVideo: (target) => ipcRenderer.invoke("studio:adopt-result-video", target),
   startEdit: (options) => ipcRenderer.invoke("studio:start-edit", options),
   start: (options) => ipcRenderer.invoke("studio:start", options),
   cancel: () => ipcRenderer.invoke("studio:cancel"),

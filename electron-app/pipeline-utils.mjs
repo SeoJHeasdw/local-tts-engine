@@ -190,29 +190,94 @@ export function summarizeChecks(checks) {
   };
 }
 
+export function voiceFindingSeverity(chunk = {}) {
+  const recorded = String(chunk.severity || "");
+  if (recorded) return recorded;
+  // Manifests written before severity existed only knew pass and fail, and a
+  // failure then meant the page had to be made again.
+  return chunk.selected?.passed === false ? "failed" : "ok";
+}
+
 export function voiceQualityFindings(manifest = {}) {
   const timings = new Map(
     (manifest.chunks || []).map((chunk) => [String(chunk.key || ""), chunk]),
   );
   return (manifest.quality?.chunks || [])
-    .filter((chunk) => chunk.selected?.passed === false)
-    .map((chunk) => {
+    .map((chunk) => ({ chunk, severity: voiceFindingSeverity(chunk) }))
+    .filter(({ severity }) => severity === "failed" || severity === "warning")
+    .map(({ chunk, severity }) => {
       const timing = timings.get(String(chunk.chunkKey || "")) || {};
+      const selected = chunk.selected || {};
+      const reasons = [...(selected.failures || []), ...(selected.warnings || [])].map(String);
       return {
         chapter: String(chunk.chapter || ""),
         slideId: String(chunk.slideId || ""),
         slideNumber: Number(chunk.slideNumber || 0),
         startMs: Number(timing.startMs || 0),
         endMs: Number(timing.endMs || timing.startMs || 0),
-        reasons: Array.isArray(chunk.selected?.failures) && chunk.selected.failures.length
-          ? chunk.selected.failures.map(String)
-          : ["자동 음성 검수 점수 미달"],
-        expectedText: String(chunk.selected?.expectedText || ""),
-        recognizedText: String(chunk.selected?.recognizedText || ""),
-        selectedAttempt: Number(chunk.selected?.attempt || 1),
+        severity,
+        reasons: reasons.length ? reasons : ["자동 음성 검수 점수 미달"],
+        terms: (selected.pronunciationChecks || [])
+          .filter((check) => check?.status && check.status !== "ok")
+          .map((check) => ({ term: String(check.term || ""), status: String(check.status) })),
+        expectedText: String(selected.expectedText || ""),
+        recognizedText: String(selected.recognizedText || ""),
+        selectedAttempt: Number(selected.attempt || 1),
+        attempts: Array.isArray(chunk.candidates) ? chunk.candidates.length : 1,
       };
     })
     .sort((left, right) => left.startMs - right.startMs || left.slideNumber - right.slideNumber);
+}
+
+export function videoTimelineFileName(videoPath) {
+  return `${path.basename(String(videoPath || ""), path.extname(String(videoPath || "")))}.timeline.json`;
+}
+
+// A finished video is published away from the project folder that produced it,
+// and a folder can hold several runs of the same job. The timeline named after
+// this exact video wins; the shared names are fallbacks for videos published
+// before per-video timelines existed.
+export function videoTimelineCandidates(videoPath, captionOutputRoot) {
+  const directory = path.dirname(String(videoPath || ""));
+  const candidates = [
+    path.join(directory, videoTimelineFileName(videoPath)),
+    path.join(directory, "timeline.json"),
+  ];
+  if (captionOutputRoot) {
+    candidates.push(path.join(String(captionOutputRoot), path.basename(directory), "timeline.json"));
+  }
+  return [...new Set(candidates)];
+}
+
+export function pageRangeFromTimeline(timeline) {
+  const pages = (timeline?.entries || [])
+    .map((entry) => Number(entry?.slideNumber))
+    .filter(Number.isFinite);
+  if (!pages.length) return null;
+  return { start: Math.min(...pages), end: Math.max(...pages) };
+}
+
+// Replacing one page's voice needs the page boundaries. Without them the only
+// thing ffmpeg can do is overwrite the whole soundtrack, which is a far worse
+// outcome than being told why it cannot proceed.
+export function assertPageReplaceable(videoRecord = {}, range = {}) {
+  const start = Number(range.startPage);
+  const end = Number(range.endPage);
+  if (!videoRecord.timelinePath || !videoRecord.pageRange) {
+    throw new Error(
+      "이 영상에는 페이지 타임라인이 없어 일부 페이지만 교체할 수 없습니다. "
+      + "앱에서 만든 강의 영상을 선택하거나, 교체할 음성 파일을 직접 고르세요.",
+    );
+  }
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end < start) {
+    throw new Error("교체할 시작·끝 페이지를 확인해 주세요.");
+  }
+  if (start < videoRecord.pageRange.start || end > videoRecord.pageRange.end) {
+    throw new Error(
+      `이 영상은 ${videoRecord.pageRange.start}~${videoRecord.pageRange.end}페이지만 담고 있습니다.`,
+    );
+  }
+  return true;
 }
 
 export function withOutputReview(report, status, now = new Date()) {

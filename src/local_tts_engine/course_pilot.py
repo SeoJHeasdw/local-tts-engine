@@ -7,8 +7,9 @@ export_udemy.py가 덱 미디어 계약으로 변환할 manifest.json을 출력�
 처리 순서:
     1. 대본 파싱  → CourseEntry 목록 (챕터·슬라이드·스텝 단위)
     2. 청킹       → CourseChunk 목록 (한 번에 합성할 자연스러운 호흡 단위)
-    3. TTS 생성   → 위험 청크는 서로 다른 시드 후보를 최대 3개 생성
-    4. 자동 검수  → 독립 Whisper 받아쓰기와 파형 검사로 후보 자동 선택
+    3. 생성·검수  → 청크마다 한 번 생성하고 즉시 독립 Whisper로 받아쓰기.
+                   깨끗하면 거기서 끝내고, 아니면 다음 시드로 다시 시도한다.
+    4. 판정       → 통과 / 확인 권장 / 재생성 필요로 나눠 manifest에 기록
     5. 트랙 조립  → 패드·갭을 삽입해 단일 WAV로 이어붙임 + ffmpeg 정규화
     6. 강제 정렬  → Qwen3-ForcedAligner 로 단어별 시작·종료 ms 계산
     7. 타임라인   → 스텝별 startMs/endMs/transitionAtMs 산출 → manifest.json
@@ -59,7 +60,9 @@ from .speech_quality import (
     ASR_LICENSE,
     ASR_REPOSITORY,
     MAX_AUTOMATIC_ATTEMPTS,
+    better_evaluation,
     choose_best_candidate,
+    chunk_severity,
     evaluate_candidate,
     quality_summary,
 )
@@ -109,6 +112,18 @@ MIN_FORCED_PAUSE_MS = 100
 MAX_FORCED_PAUSE_MS = 10_000
 FORCED_PAUSE_LINE_PATTERN = re.compile(r"^\s*\[(\d+(?:\.\d+)?)s]\s*$", re.IGNORECASE)
 FORCED_PAUSE_TOKEN_PATTERN = re.compile(r"\[(\d+(?:\.\d+)?)s]", re.IGNORECASE)
+
+# Every clip carries the same trim statistics, including the degenerate clips
+# that are too short or too quiet to trim. Manifest assembly and the clip cache
+# both read all four keys, so a partial record is a crash and a poisoned cache
+# entry rather than a missing detail.
+AUDIO_TRIM_STAT_KEYS = (
+    "trimmedHeadMs",
+    "trimmedTailMs",
+    "shortenedSilenceCount",
+    "shortenedSilenceMs",
+)
+UNTRIMMED_AUDIO_STATS: dict[str, int] = {key: 0 for key in AUDIO_TRIM_STAT_KEYS}
 
 
 # ─── 강의 생성 전용 파라미터 오버라이드 ──────────────────────────────────────
@@ -781,7 +796,7 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
     frame = max(1, milliseconds_to_samples(20, sample_rate))
     hop = max(1, milliseconds_to_samples(10, sample_rate))
     if len(samples) < frame:
-        return samples, {"trimmedHeadMs": 0, "trimmedTailMs": 0}
+        return samples, dict(UNTRIMMED_AUDIO_STATS)
 
     starts = np.arange(0, len(samples) - frame + 1, hop)
     rms = np.sqrt(
@@ -792,7 +807,7 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
     threshold = max(5e-4, float(rms.max()) * 0.0125)
     voiced = np.flatnonzero(rms >= threshold)
     if not len(voiced):
-        return samples, {"trimmedHeadMs": 0, "trimmedTailMs": 0}
+        return samples, dict(UNTRIMMED_AUDIO_STATS)
 
     # 유성음 구간 앞뒤로 EDGE_PAD_MS 여백을 두고 트리밍
     pad = milliseconds_to_samples(EDGE_PAD_MS, sample_rate)
@@ -860,6 +875,28 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
 
 
 # ─── 강제 정렬 ────────────────────────────────────────────────────────────────
+
+def metal_peak_memory_gb(mx: Any) -> float:
+    """Report the peak Metal allocation across every model this run loaded.
+
+    The generator and the independent reader are resident together now, so the
+    per-clip figure the TTS model reports no longer describes the run. MLX has
+    moved this call between namespaces, and an unreadable number is not worth
+    failing a finished lecture over.
+    """
+    namespace = getattr(mx, "metal", None)
+    for call in (
+        getattr(mx, "get_peak_memory", None),
+        getattr(namespace, "get_peak_memory", None) if namespace is not None else None,
+    ):
+        if not callable(call):
+            continue
+        try:
+            return round(float(call()) / 1024**3, 3)
+        except Exception:  # noqa: BLE001 - a diagnostic must never end a run
+            continue
+    return 0.0
+
 
 def clean_alignment_token(token: str) -> str:
     """정렬 토큰에서 문자·숫자·아포스트로피만 남기고 구두점을 제거한다.
@@ -1013,6 +1050,74 @@ def load_or_create_alignment(
     return words
 
 
+def resolve_chunk_take(
+    chunk: CourseChunk,
+    *,
+    attempt_limit: int,
+    synthesize: Any,
+    review: Any | None,
+) -> dict[str, Any]:
+    """Generate takes of one chunk until one reads cleanly, and report the choice.
+
+    Every chunk is read back, but a chunk that reads correctly on the first seed
+    stops there.  Retries are therefore paid for only where something is
+    actually wrong, which is what makes it affordable to check the whole lecture
+    rather than only the lines with risky words in them.
+
+    ``review`` of ``None`` disables reading back entirely, leaving exactly one
+    take per chunk.
+    """
+    if attempt_limit < 1:
+        raise ValueError("최소 한 번은 생성해야 합니다.")
+    candidates: list[dict[str, Any]] = []
+    evaluations: list[dict[str, Any]] = []
+    for attempt in range(1, attempt_limit + 1):
+        candidates.append(synthesize(chunk, attempt))
+        if review is None:
+            break
+        evaluations.append(review(chunk, candidates[-1]))
+        if evaluations[-1]["passed"]:
+            break
+
+    if review is None:
+        best: dict[str, Any] = {"passed": True, "attempt": 1, "disabled": True}
+        selected = candidates[0]
+        severity = "ok"
+    else:
+        best = choose_best_candidate(evaluations)
+        selected = next(
+            candidate
+            for candidate in candidates
+            if int(candidate["attempt"]) == int(best["attempt"])
+        )
+        severity = chunk_severity(evaluations, best)
+
+    first = chunk.entries[0]
+    return {
+        "candidates": candidates,
+        "selected": selected,
+        "severity": severity,
+        "record": {
+            "chunkKey": chunk.key,
+            "chapter": first.chapter,
+            "slideId": first.slide_id,
+            "slideNumber": first.slide_number,
+            "guarded": any(
+                entry.source_text != entry.tts_text or entry.unresolved_tokens
+                for entry in chunk.entries
+            ),
+            "unresolvedTokens": list(
+                dict.fromkeys(
+                    token for entry in chunk.entries for token in entry.unresolved_tokens
+                )
+            ),
+            "candidates": evaluations,
+            "selected": best,
+            "severity": severity,
+        },
+    }
+
+
 # ─── 핵심 생성 로직 ───────────────────────────────────────────────────────────
 
 def synthesize_excerpt(
@@ -1037,17 +1142,22 @@ def synthesize_excerpt(
 
     흐름:
         1. 대본 → CourseEntry → CourseChunk 목록 생성
-        2. 위험 토큰 청크는 서로 다른 시드 후보를 생성
-        3. TTS 모델 해제 → 독립 Whisper ASR로 발음·누락 자동 검수 및 후보 선택
-        4. 목표 길이(target_seconds)에 가장 가까운 청크 수 선택
-        5. Whisper 해제 → ForcedAligner 로드 (Metal 메모리 재사용)
-        6. 청크별 단어 정렬 (캐시 히트 시 재사용)
-        7. 클립 조립 → 정규화 → 미리듣기 M4A 생성
-        8. 스텝별 절대 타이밍 계산 → manifest.json 저장
+        2. 청크마다 생성 → 즉시 받아쓰기 → 깨끗하면 중단, 아니면 다음 시드
+        3. 목표 길이(target_seconds)에 가장 가까운 청크 수 선택
+        4. TTS·Whisper 해제 → ForcedAligner 로드 (Metal 메모리 재사용)
+        5. 청크별 단어 정렬 (캐시 히트 시 재사용)
+        6. 클립 조립 → 정규화 → 미리듣기 M4A 생성
+        7. 스텝별 절대 타이밍 계산 → manifest.json 저장
 
     Metal 메모리 관리:
-        TTS 완료 후 모델을 명시적으로 del/gc.collect()/mx.clear_cache()해
-        ForcedAligner 가 사용할 Metal 메모리를 확보한다.
+        생성기와 판독기는 함께 상주한다 (대략 TTS 11.6GB + Whisper 1.6GB).
+        둘 다 끝난 뒤 del/gc.collect()/mx.clear_cache()로 해제해
+        ForcedAligner 가 쓸 Metal 메모리를 확보한다.
+
+    조기 종료:
+        모든 청크를 검수하되 재시도는 실제로 문제가 있을 때만 한다. 첫 시드가
+        깨끗하면 그 청크의 생성은 한 번으로 끝나므로, 검수를 켜도 정상적인
+        레슨은 이전의 3배 생성보다 빨라진다.
     """
     import mlx.core as mx
     from mlx_audio.tts.utils import load_model as load_tts_model
@@ -1100,6 +1210,27 @@ def synthesize_excerpt(
     alignments_dir = output_dir / "clips/alignment"  # 단어 정렬 JSON 캐시
     clips_dir.mkdir(parents=True, exist_ok=True)
     alignments_dir.mkdir(parents=True, exist_ok=True)
+
+    # The independent reader is loaded before the generator and stays resident.
+    # A take can then be judged the moment it exists, so a chunk that reads
+    # correctly on the first seed costs one generation instead of three.
+    quality_model = None
+    quality_model_path: Path | None = None
+    quality_revision: str | None = None
+    quality_load_ms = 0
+    quality_evaluation_ms = 0
+    if automatic_quality:
+        from mlx_audio.stt.utils import load_model as load_stt_model
+
+        quality_model_path = (
+            LOCAL_QUALITY_ASR_PATH
+            if (LOCAL_QUALITY_ASR_PATH / "config.json").is_file()
+            else resolve_model_path(ASR_REPOSITORY, get_model_path)
+        )
+        quality_revision = snapshot_revision(quality_model_path)
+        started = time.perf_counter()
+        quality_model = load_stt_model(quality_model_path)
+        quality_load_ms = round((time.perf_counter() - started) * 1000)
 
     model_path = resolve_model_path(spec.repository, get_model_path)
     revision = snapshot_revision(model_path)
@@ -1182,16 +1313,14 @@ def synthesize_excerpt(
             info = sf.info(clip_path)
             rate = int(info.samplerate)
             frames = int(info.frames)
-            trim_info = (
-                json.loads(clip_meta_path.read_text(encoding="utf-8"))
-                if clip_meta_path.is_file()
-                else {
-                    "trimmedHeadMs": 0,
-                    "trimmedTailMs": 0,
-                    "shortenedSilenceCount": 0,
-                    "shortenedSilenceMs": 0,
-                }
-            )
+            trim_info = {
+                **UNTRIMMED_AUDIO_STATS,
+                **(
+                    json.loads(clip_meta_path.read_text(encoding="utf-8"))
+                    if clip_meta_path.is_file()
+                    else {}
+                ),
+            }
             cache_hits += 1
         else:
             mx.random.seed(candidate_seed)
@@ -1232,14 +1361,69 @@ def synthesize_excerpt(
             **trim_info,
         }
 
-    for index, chunk in enumerate(chunks):
-        guarded = any(
-            entry.source_text != entry.tts_text or entry.unresolved_tokens
-            for entry in chunk.entries
+    quality_records: list[dict[str, Any]] = []
+
+    def transcribe(audio_path: str, temperature: float) -> str:
+        """Read one clip back with the independent ASR."""
+        nonlocal quality_evaluation_ms
+        started = time.perf_counter()
+        result = quality_model.generate(
+            audio_path,
+            language="ko",
+            task="transcribe",
+            temperature=temperature,
+            return_timestamps=False,
+            condition_on_previous_text=False,
+            max_tokens=768,
         )
-        attempt_count = quality_attempts if automatic_quality and guarded else 1
-        candidates = [synthesize_candidate(chunk, attempt) for attempt in range(1, attempt_count + 1)]
-        selected = candidates[0]
+        quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
+        return result.text
+
+    def evaluate(chunk: CourseChunk, candidate: dict[str, Any]) -> dict[str, Any]:
+        """Judge one take, ruling out decoder noise before blaming the take.
+
+        A first reading that finds nothing wrong is trusted. A reading that does
+        find something gets a second, differently decoded opinion, and the clip
+        keeps whichever reading is kinder — evidence only stands when it
+        survives every attempt to read the audio.
+        """
+        def read(temperature: float) -> dict[str, Any]:
+            return evaluate_candidate(
+                expected_text=chunk.tts_text,
+                recognized_text=transcribe(candidate["audioPath"], temperature),
+                audio_path=Path(candidate["audioPath"]),
+                dictionary=pronunciation,
+                required_pronunciations=chunk.required_pronunciations,
+                attempt=int(candidate["attempt"]),
+                seed=int(candidate["seed"]),
+            )
+
+        evaluation = read(0.0)
+        if not evaluation["passed"]:
+            evaluation = better_evaluation(evaluation, read(0.2))
+        evaluation["hash"] = candidate["hash"]
+        return evaluation
+
+    for index, chunk in enumerate(chunks):
+        take = resolve_chunk_take(
+            chunk,
+            attempt_limit=quality_attempts if automatic_quality else 1,
+            synthesize=synthesize_candidate,
+            review=evaluate if automatic_quality else None,
+        )
+        candidates = take["candidates"]
+        selected = take["selected"]
+        severity = take["severity"]
+        guarded = take["record"]["guarded"]
+        quality_records.append(take["record"])
+        if automatic_quality:
+            status = {"ok": "통과", "warning": "확인 권장", "failed": "재생성 필요"}[severity]
+            print(
+                f"[자동 음성 검수 {index + 1}/{len(chunks)}] "
+                f"{chunk.key}: 후보 {take['record']['selected']['attempt']}"
+                f"/{len(candidates)} {status}"
+            )
+
         rate = int(selected["sampleRate"])
         frames = int(selected["frames"])
 
@@ -1261,6 +1445,7 @@ def synthesize_excerpt(
                 "key": chunk.key,
                 "candidateOptions": candidates,
                 "guarded": guarded,
+                "severity": severity,
                 "hash": selected["hash"],
                 "seed": selected["seed"],
                 "audioPath": selected["audioPath"],
@@ -1316,127 +1501,31 @@ def synthesize_excerpt(
                     selected_chunks.pop()
             break
         # 다음 청크 시작 위치: 현재 끝 + 적절한 갭
+        if index + 1 >= len(chunks):
+            # Running out of lecture before reaching the target length deserves
+            # this sentence, not an IndexError one line short of it. The loop
+            # otherwise always leaves through a break, so this is the only way
+            # the target can go unmet.
+            raise RuntimeError("강의 끝까지 생성해도 목표 길이에 도달하지 못했습니다.")
         following = chunks[index + 1]
         cursor_samples = end_sample + milliseconds_to_samples(
             chunk_gap_after(chunk, following), rate
         )
-    else:
-        raise RuntimeError("강의 끝까지 생성해도 목표 길이에 도달하지 못했습니다.")
 
-    # Keep TTS, independent ASR review, and forced alignment in separate Metal phases.
-    # TTS 모델을 명시적으로 해제해 Whisper와 ForcedAligner가 메모리를 재사용하게 한다.
+    # Generation and review are finished together, so both models can go before
+    # forced alignment claims the Metal memory they were using.
     del model
     if training_wrapper is not None:
         del training_wrapper
+    if quality_model is not None:
+        del quality_model
     gc.collect()
     mx.clear_cache()
 
-    quality_records: list[dict[str, Any]] = []
-    quality_model_path: Path | None = None
-    quality_revision: str | None = None
-    quality_load_ms = 0
-    quality_evaluation_ms = 0
-    if automatic_quality:
-        from mlx_audio.stt.utils import load_model as load_stt_model
-
-        quality_model_path = (
-            LOCAL_QUALITY_ASR_PATH
-            if (LOCAL_QUALITY_ASR_PATH / "config.json").is_file()
-            else resolve_model_path(ASR_REPOSITORY, get_model_path)
-        )
-        quality_revision = snapshot_revision(quality_model_path)
-        started = time.perf_counter()
-        quality_model = load_stt_model(quality_model_path)
-        quality_load_ms = round((time.perf_counter() - started) * 1000)
-        for item_index, item in enumerate(selected_chunks, start=1):
-            chunk: CourseChunk = item["chunk"]
-            evaluations: list[dict[str, Any]] = []
-            for candidate in item["candidateOptions"]:
-                started = time.perf_counter()
-                result = quality_model.generate(
-                    candidate["audioPath"],
-                    language="ko",
-                    task="transcribe",
-                    temperature=0.0,
-                    return_timestamps=False,
-                    condition_on_previous_text=False,
-                    max_tokens=768,
-                )
-                quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
-                evaluation = evaluate_candidate(
-                    expected_text=chunk.tts_text,
-                    recognized_text=result.text,
-                    audio_path=Path(candidate["audioPath"]),
-                    dictionary=pronunciation,
-                    required_pronunciations=chunk.required_pronunciations,
-                    attempt=int(candidate["attempt"]),
-                    seed=int(candidate["seed"]),
-                )
-                evaluation["hash"] = candidate["hash"]
-                evaluations.append(evaluation)
-            best = choose_best_candidate(evaluations)
-            selected = next(
-                candidate
-                for candidate in item["candidateOptions"]
-                if int(candidate["attempt"]) == int(best["attempt"])
-            )
-            for key in (
-                "hash",
-                "seed",
-                "audioPath",
-                "frames",
-                "sampleRate",
-                "durationMs",
-                "trimmedHeadMs",
-                "trimmedTailMs",
-                "shortenedSilenceCount",
-                "shortenedSilenceMs",
-            ):
-                item[key] = selected[key]
-            first = chunk.entries[0]
-            quality_records.append(
-                {
-                    "chunkKey": chunk.key,
-                    "chapter": first.chapter,
-                    "slideId": first.slide_id,
-                    "slideNumber": first.slide_number,
-                    "guarded": bool(item["guarded"]),
-                    "unresolvedTokens": list(
-                        dict.fromkeys(
-                            token
-                            for entry in chunk.entries
-                            for token in entry.unresolved_tokens
-                        )
-                    ),
-                    "candidates": evaluations,
-                    "selected": best,
-                }
-            )
-            status = "통과" if best["passed"] else "확인 필요"
-            print(
-                f"[자동 음성 검수 {item_index}/{len(selected_chunks)}] "
-                f"{chunk.key}: 후보 {best['attempt']} {status}"
-            )
-        del quality_model
-        gc.collect()
-        mx.clear_cache()
-    else:
-        for item in selected_chunks:
-            chunk = item["chunk"]
-            first = chunk.entries[0]
-            quality_records.append(
-                {
-                    "chunkKey": chunk.key,
-                    "chapter": first.chapter,
-                    "slideId": first.slide_id,
-                    "slideNumber": first.slide_number,
-                    "guarded": False,
-                    "unresolvedTokens": [],
-                    "candidates": [],
-                    "selected": {"passed": True, "attempt": 1, "disabled": True},
-                }
-            )
-
+    kept_chunk_keys = {item["key"] for item in selected_chunks}
+    quality_records = [
+        record for record in quality_records if record["chunkKey"] in kept_chunk_keys
+    ]
     quality_result = quality_summary(quality_records)
 
     # Candidate selection can change duration. Rebuild every absolute clip position
@@ -1601,12 +1690,13 @@ def synthesize_excerpt(
             "shortenedSilenceMs": item["shortenedSilenceMs"],
             "selectedAttempt": quality_by_chunk[item["key"]]["selected"].get("attempt", 1),
             "qualityPassed": quality_by_chunk[item["key"]]["selected"].get("passed", True),
+            "qualitySeverity": quality_by_chunk[item["key"]].get("severity", "ok"),
         }
         for item in selected_chunks
     ]
 
     metadata = {
-        "schemaVersion": 6,
+        "schemaVersion": 7,
         "cachePolicy": "enabled" if use_cache else "disabled",
         "title": (
             f"강의 {start_page}~{end_page}페이지 {model_key} 묶음"
@@ -1642,7 +1732,8 @@ def synthesize_excerpt(
             "model": ASR_REPOSITORY if automatic_quality else None,
             "revision": quality_revision,
             "license": ASR_LICENSE if automatic_quality else None,
-            "attemptsForRiskyChunks": quality_attempts if automatic_quality else 1,
+            "maxAttempts": quality_attempts if automatic_quality else 1,
+            "secondOpinion": automatic_quality,
             "summary": quality_result,
             "chunks": quality_records,
         },
@@ -1699,6 +1790,8 @@ def synthesize_excerpt(
             "alignmentLoadMs": alignment_load_ms,
             "alignmentMs": alignment_ms,
             "peakMetalMemoryGb": round(peak_memory_gb, 3),
+            "peakProcessMetalMemoryGb": metal_peak_memory_gb(mx),
+            "residentReviewer": automatic_quality,
         },
         "normalization": normalization,
         "audioPath": str(final_track.resolve()),
@@ -1713,6 +1806,18 @@ def synthesize_excerpt(
         },
     }
     write_json(output_dir / "manifest.json", metadata)
+    if automatic_quality:
+        review_pages = ", ".join(
+            f"{page['slideNumber']}페이지" for page in quality_result["needsReview"]
+        )
+        listen_pages = ", ".join(
+            f"{page['slideNumber']}페이지" for page in quality_result["listenSuggested"]
+        )
+        print(
+            f"[자동 음성 검수] {quality_result['passedChunks']}/{quality_result['totalChunks']} 통과"
+            + (f" · 재생성 권장 {review_pages}" if review_pages else "")
+            + (f" · 확인 권장 {listen_pages}" if listen_pages else "")
+        )
     # 터미널에는 핵심 통계만 출력한다 (전체 manifest는 파일 참조)
     print(
         json.dumps(
@@ -1774,9 +1879,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-cache", action="store_true",
                         help="기존 TTS 클립과 정렬 결과를 읽지 않고 모두 새로 생성")
     parser.add_argument("--no-auto-quality", action="store_true",
-                        help="독립 Whisper 받아쓰기와 위험 청크 다중 후보 선택을 끔")
+                        help="독립 Whisper 받아쓰기와 재시도를 끄고 시드 하나로만 생성")
     parser.add_argument("--quality-attempts", type=int, default=MAX_AUTOMATIC_ATTEMPTS,
-                        help=f"위험 청크의 자동 후보 수 (1~5, 기본 {MAX_AUTOMATIC_ATTEMPTS})")
+                        help=f"검수를 통과하지 못한 청크의 최대 시도 수 (1~5, 기본 {MAX_AUTOMATIC_ATTEMPTS})")
     return parser
 
 

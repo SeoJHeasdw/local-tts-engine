@@ -4,6 +4,10 @@ import {
   outputKind,
   shouldOpenMenuUpward,
   summarizePageRange,
+  summarizeVoiceFindings,
+  voiceFindingLabel,
+  voiceFindingReason,
+  voiceFindingSummaryLine,
 } from "./view-utils.mjs";
 
 const api = window.ttsStudio;
@@ -319,6 +323,64 @@ function formatDuration(ms) {
   return `${minutes}:${seconds}`;
 }
 
+function renderCompleteVoiceFindings(findings = [], target = null) {
+  const panel = $("#voice-quality-panel");
+  const list = $("#voice-quality-list");
+  const summary = summarizeVoiceFindings(findings);
+  panel.classList.toggle("hidden", summary.total === 0);
+  panel.dataset.tone = summary.tone;
+  panel.dataset.repairable = target ? "yes" : "no";
+  $("#voice-quality-title").textContent = summary.title;
+  list.replaceChildren(...findings.map((finding) => renderVoiceFindingRow(finding, target)));
+}
+
+function renderVoiceFindingRow(finding, target) {
+  const item = document.createElement("li");
+  item.dataset.severity = finding.severity === "warning" ? "warning" : "failed";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "voice-finding";
+  const time = document.createElement("span");
+  time.textContent = voiceFindingLabel(finding);
+  const copy = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = `${finding.slideNumber}페이지 · ${finding.slideId}`;
+  const reason = document.createElement("small");
+  reason.textContent = voiceFindingReason(finding);
+  copy.append(title, reason);
+  button.append(time, copy);
+  button.title = finding.expectedText && finding.recognizedText
+    ? `대본 발음: ${finding.expectedText}\n받아쓰기: ${finding.recognizedText}`
+    : reason.textContent;
+  if (target) {
+    button.addEventListener("click", () => openVoiceRepair(target, finding));
+  } else {
+    button.disabled = true;
+  }
+  item.append(button);
+  return item;
+}
+
+// Reviewing a segment and fixing it are one motion: the editor opens already
+// pointed at the video and the page that was flagged.
+async function openVoiceRepair(target, finding) {
+  try {
+    const video = await api.adoptResultVideo(target);
+    voiceVideo = video;
+    $("#voice-video-name").textContent = video.name;
+    $("[data-view='edit']").click();
+    setEditOperation("voice");
+    setVoiceSource("generate");
+    $("#voice-start-page").value = String(finding.slideNumber);
+    $("#voice-end-page").value = String(finding.slideNumber);
+    updateVoicePageMeta();
+    $("#edit-name").value = suggestedEditName();
+    showToast(`${finding.slideNumber}페이지 목소리를 다시 만들 준비가 됐습니다.`);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
 function formatDate(value) {
   if (!value) return "";
   return new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
@@ -490,7 +552,20 @@ function renderVoiceCandidates(candidates) {
     const title = document.createElement("strong");
     title.textContent = candidate.name;
     const meta = document.createElement("small");
-    meta.textContent = candidate.durationMs ? `${formatDuration(candidate.durationMs)} 길이` : "새로 만든 발화";
+    // Every take is read back by the independent reviewer, so the listener is
+    // told what the machine heard before deciding what their own ear prefers.
+    const findings = candidate.voiceFindings || [];
+    const verdict = candidate.voiceFindings === undefined
+      ? ""
+      : findings.length
+        ? ` · ${summarizeVoiceFindings(findings).title}`
+        : " · 자동 검수 통과";
+    meta.textContent =
+      `${candidate.durationMs ? `${formatDuration(candidate.durationMs)} 길이` : "새로 만든 발화"}${verdict}`;
+    if (findings.length) {
+      card.dataset.verdict = summarizeVoiceFindings(findings).tone;
+      meta.title = findings.map((finding) => `${finding.slideNumber}페이지 · ${voiceFindingReason(finding)}`).join("\n");
+    }
     const audio = document.createElement("audio");
     audio.controls = true;
     audio.preload = "metadata";
@@ -667,12 +742,23 @@ function renderOutputs() {
         </details>
       </div>`;
     row.querySelector("strong").textContent = item.displayName || item.name;
-    const reviewPages = (item.needsReview || []).map((value) => `${value.slideNumber}페이지`).join(", ");
-    row.querySelector("small").textContent = `${outputLabel(item)} · ${formatDuration(item.durationMs)} · ${formatDate(item.updatedAt)}${reviewPages ? ` · ${reviewPages} 재생성 필요` : ""}`;
+    const findings = item.voiceFindings || [];
+    const voiceSummary = summarizeVoiceFindings(findings);
+    row.querySelector("small").textContent = [
+      outputLabel(item),
+      formatDuration(item.durationMs),
+      formatDate(item.updatedAt),
+      voiceSummary.total ? `목소리 ${voiceSummary.title}` : "",
+    ].filter(Boolean).join(" · ");
     const automaticStatus = row.querySelector(".output-status .status-symbol");
-    const automaticLabel = item.ok
-      ? "파일과 음성 자동 검수 완료"
-      : reviewPages ? `음성 확인 필요: ${reviewPages}` : "자동 검증 실패 또는 기록 없음";
+    const automaticLabel = !item.ok
+      ? "자동 검증 실패 또는 기록 없음"
+      : voiceSummary.total
+        ? `${voiceSummary.title} · ${voiceFindingSummaryLine(findings)}`
+        : "파일과 음성 자동 검수 완료";
+    automaticStatus.classList.toggle("verified", Boolean(item.ok) && !voiceSummary.total);
+    automaticStatus.classList.toggle("advisory", Boolean(item.ok) && voiceSummary.total > 0);
+    automaticStatus.textContent = item.ok ? (voiceSummary.total ? "!" : "✓") : "!";
     automaticStatus.dataset.tooltip = automaticLabel;
     automaticStatus.setAttribute("aria-label", automaticLabel);
     const target = { root: item.root, name: item.name, day: item.day, store: item.store };
@@ -700,6 +786,12 @@ function renderOutputs() {
         showToast(error.message, "error");
       }
     });
+    if (voiceSummary.total && item.video) {
+      const findingsPanel = document.createElement("ul");
+      findingsPanel.className = "output-findings";
+      findingsPanel.replaceChildren(...findings.map((finding) => renderVoiceFindingRow(finding, target)));
+      row.append(findingsPanel);
+    }
     row.querySelector(".open-button").addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
     row.querySelector(".reveal-button").addEventListener("click", () => {
       resultMenu.removeAttribute("open");
@@ -837,6 +929,7 @@ function handleJobEvent(event) {
   if (event.type === "started") {
     latestTarget = { root: "render", name: event.options.name };
     $("#job-log").textContent = "";
+    renderCompleteVoiceFindings([]);
     showJobView("active");
     setBusy(true);
     setJobState("실행 중", "running");
@@ -867,7 +960,13 @@ function handleJobEvent(event) {
     updateStages("verify", true);
     const report = event.report;
     latestTarget = report.target;
-    $("#complete-summary").textContent = `${formatDuration(report.durationMs)} · ${report.summary.passed}개 항목 모두 통과`;
+    const findings = report.voiceFindings || [];
+    const voiceLine = findings.length
+      ? ` · 목소리 확인 ${findings.length}곳`
+      : report.voiceQuality ? " · 목소리 검수 통과" : "";
+    $("#complete-summary").textContent =
+      `${formatDuration(report.durationMs)} · ${report.summary.passed}개 항목 모두 통과${voiceLine}`;
+    renderCompleteVoiceFindings(findings, report.videoPath ? report.target : null);
     loadOutputs();
     $("#job-name").value = suggestedName();
     updateProductionBrief();

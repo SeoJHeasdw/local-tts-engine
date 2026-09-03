@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -197,6 +198,17 @@ def normalize_audio(source: Path, destination: Path) -> dict[str, Any]:
         ]
     )
     measured = parse_loudnorm_json(first_pass.stderr)
+    # A track with no audible signal measures as -inf, and feeding that back to
+    # loudnorm makes ffmpeg fail with a filter error that says nothing about the
+    # cause. The generation went wrong long before this point; say so here.
+    if any(
+        not math.isfinite(float(measured[key]))
+        for key in ("input_i", "input_tp", "target_offset")
+    ):
+        raise RuntimeError(
+            f"{source.name}에 정규화할 음성 신호가 없습니다. "
+            "생성된 클립이 전부 무음인지 확인해 주세요."
+        )
 
     # 2패스: 1패스 측정값을 이용해 정규화 적용
     normalize_filter = (

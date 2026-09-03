@@ -59,3 +59,50 @@ export function filterOutputItems(items = [], query = "", filter = "all") {
 export function shouldOpenMenuUpward(availableBelow, popoverHeight, margin = 10) {
   return Number(availableBelow) < Number(popoverHeight) + Number(margin);
 }
+
+export function formatVoiceTimestamp(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}`
+    : `${minutes}:${seconds}`;
+}
+
+export function voiceFindingLabel(finding = {}) {
+  return `${formatVoiceTimestamp(finding.startMs)}–${formatVoiceTimestamp(finding.endMs)}`;
+}
+
+export function voiceFindingReason(finding = {}) {
+  const terms = (finding.terms || []).map((item) => item.term).filter(Boolean);
+  const reasons = (finding.reasons || []).filter(Boolean);
+  const base = reasons.join(", ") || "자동 음성 검수 점수 미달";
+  return terms.length ? `${base} · ${terms.join(", ")}` : base;
+}
+
+// A page that never read correctly across every seed is work for a person; a
+// page read imperfectly once is a suggestion to listen. Saying which is which
+// is the difference between a queue of chores and a glance.
+export function summarizeVoiceFindings(findings = []) {
+  const failed = findings.filter((finding) => finding.severity !== "warning");
+  const warned = findings.filter((finding) => finding.severity === "warning");
+  if (!findings.length) return { total: 0, failed: 0, warned: 0, title: "", tone: "ok" };
+  const parts = [];
+  if (failed.length) parts.push(`재생성 권장 ${failed.length}곳`);
+  if (warned.length) parts.push(`확인 권장 ${warned.length}곳`);
+  return {
+    total: findings.length,
+    failed: failed.length,
+    warned: warned.length,
+    title: parts.join(" · "),
+    tone: failed.length ? "failed" : "warning",
+  };
+}
+
+export function voiceFindingSummaryLine(findings = []) {
+  const summary = summarizeVoiceFindings(findings);
+  if (!summary.total) return "";
+  const first = findings[0];
+  return `${voiceFindingLabel(first)} · ${first.slideNumber}페이지${summary.total > 1 ? ` 외 ${summary.total - 1}곳` : ""}`;
+}

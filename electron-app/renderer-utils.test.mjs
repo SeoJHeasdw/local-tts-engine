@@ -5,8 +5,13 @@ import {
   buildChapterRanges,
   filterOutputItems,
   outputKind,
+  formatVoiceTimestamp,
   shouldOpenMenuUpward,
   summarizePageRange,
+  summarizeVoiceFindings,
+  voiceFindingLabel,
+  voiceFindingReason,
+  voiceFindingSummaryLine,
 } from "./renderer/view-utils.mjs";
 
 const pages = [
@@ -51,4 +56,58 @@ test("최근 결과는 내부 작업명뿐 아니라 레슨 제목으로도 검�
 test("화면 아래 공간이 부족하면 결과 메뉴를 위로 연다", () => {
   assert.equal(shouldOpenMenuUpward(80, 120), true);
   assert.equal(shouldOpenMenuUpward(140, 120), false);
+});
+
+
+const FINDINGS = [
+  {
+    slideNumber: 148,
+    startMs: 134_000,
+    endMs: 141_000,
+    severity: "failed",
+    reasons: ["지정 발음 불일치"],
+    terms: [{ term: "래그", status: "failed" }],
+  },
+  {
+    slideNumber: 150,
+    startMs: 3_701_000,
+    endMs: 3_705_500,
+    severity: "warning",
+    reasons: ["지정 발음 확인 필요"],
+    terms: [{ term: "런타임", status: "warning" }],
+  },
+];
+
+test("확인 구간을 영상에서 찾아갈 수 있는 시간으로 적는다", () => {
+  assert.equal(formatVoiceTimestamp(0), "0:00");
+  assert.equal(formatVoiceTimestamp(134_000), "2:14");
+  assert.equal(formatVoiceTimestamp(-5), "0:00");
+  // Past an hour the label grows a field rather than counting to 61 minutes.
+  assert.equal(formatVoiceTimestamp(3_701_000), "1:01:41");
+  assert.equal(voiceFindingLabel(FINDINGS[0]), "2:14–2:21");
+});
+
+test("확인 사유에 실제로 걸린 용어를 함께 적는다", () => {
+  assert.equal(voiceFindingReason(FINDINGS[0]), "지정 발음 불일치 · 래그");
+  assert.equal(voiceFindingReason({}), "자동 음성 검수 점수 미달");
+  assert.equal(voiceFindingReason({ reasons: ["과도한 무음"] }), "과도한 무음");
+});
+
+test("재생성 권장과 확인 권장을 나눠 세고 더 급한 쪽 색을 쓴다", () => {
+  assert.deepEqual(summarizeVoiceFindings(FINDINGS), {
+    total: 2,
+    failed: 1,
+    warned: 1,
+    title: "재생성 권장 1곳 · 확인 권장 1곳",
+    tone: "failed",
+  });
+  assert.equal(summarizeVoiceFindings([FINDINGS[1]]).tone, "warning");
+  assert.equal(summarizeVoiceFindings([FINDINGS[1]]).title, "확인 권장 1곳");
+  assert.equal(summarizeVoiceFindings([]).total, 0);
+});
+
+test("최근 결과 한 줄에는 첫 구간과 나머지 개수만 적는다", () => {
+  assert.equal(voiceFindingSummaryLine(FINDINGS), "2:14–2:21 · 148페이지 외 1곳");
+  assert.equal(voiceFindingSummaryLine([FINDINGS[0]]), "2:14–2:21 · 148페이지");
+  assert.equal(voiceFindingSummaryLine([]), "");
 });
