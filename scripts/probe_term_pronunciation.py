@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tempfile
 import time
@@ -63,6 +64,29 @@ def verdict(distance: float) -> str:
     return "일치"
 
 
+def expand_trials(case: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a case into ``trials`` of {label, text}.
+
+    Two questions need the same machinery.  *Which spelling gets read right?*
+    varies the term inside one carrier.  *Does chunk length break the reading?*
+    keeps the term fixed and varies the passage around it.  A case may give
+    ``spellings`` with a ``carrier``, or ``passages`` of its own.
+    """
+    if "trials" in case:
+        return case
+    trials: list[dict[str, str]] = []
+    if "spellings" in case:
+        carrier = str(case["carrier"])
+        for spelling in case["spellings"]:
+            trials.append({"label": spelling, "text": carrier.replace("{}", spelling)})
+    for passage in case.get("passages", []):
+        text = str(passage["text"])
+        trials.append({"label": f"{passage['label']} ({len(text)}자)", "text": text})
+    if not trials:
+        raise ValueError(f"{case['name']}: 시험할 후보가 없습니다.")
+    return {**case, "trials": trials}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, required=True, help="시험할 후보 JSON")
@@ -75,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20260904)
     args = parser.parse_args(argv)
 
-    cases = json.loads(args.cases.read_text(encoding="utf-8"))
+    cases = [expand_trials(case) for case in json.loads(args.cases.read_text(encoding="utf-8"))]
     reference_text = args.reference_text.read_text(encoding="utf-8").strip()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -130,10 +154,10 @@ def main(argv: list[str] | None = None) -> int:
     started = time.perf_counter()
     for case in cases:
         target = str(case["target"])
-        carrier = str(case["carrier"])
-        print(f"\n═══ {case['name']}  목표 소리: {target}")
-        for spelling in case["spellings"]:
-            sentence = carrier.replace("{}", spelling)
+        print(f"\n═══ {case['name']}  목표 소리: {target}", flush=True)
+        for trial in case["trials"]:
+            spelling = str(trial["label"])
+            sentence = str(trial["text"])
             heard: list[str] = []
             distances: list[float] = []
             for index in range(args.seeds):
@@ -150,16 +174,17 @@ def main(argv: list[str] | None = None) -> int:
                 if not pieces:
                     raise RuntimeError(f"{spelling}: 오디오가 생성되지 않았습니다.")
                 audio = np.concatenate(pieces)
-                clip = args.output_dir / f"{case['name']}--{spelling.replace(' ', '_')}--{index}.wav"
+                safe = re.sub(r"[^0-9A-Za-z가-힣]+", "_", spelling).strip("_")
+                clip = args.output_dir / f"{case['name']}--{safe}--{index}.wav"
                 sf.write(clip, audio, 24_000)
                 text = transcribe(str(clip)).strip()
                 heard.append(text)
                 distances.append(term_distance(target, text))
             worst = max(distances)
             best = min(distances)
-            print(f"  {spelling!r:22} 거리 최선 {best:.3f} / 최악 {worst:.3f}  [{verdict(worst)}]")
+            print(f"  {spelling:26} 거리 최선 {best:.3f} / 최악 {worst:.3f}  [{verdict(worst)}]", flush=True)
             for text in heard:
-                print(f"       들림: {text}")
+                print(f"       들림: {text}", flush=True)
             results.append({
                 "name": case["name"], "target": target, "spelling": spelling,
                 "sentence": sentence, "heard": heard,
@@ -176,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         rows = [row for row in results if row["name"] == case["name"]]
         rows.sort(key=lambda row: (row["worst"], row["best"]))
         top = rows[0]
-        print(f"  {case['name']:22} → {top['spelling']!r}  최악거리 {top['worst']:.3f} [{top['verdict']}]")
+        print(f"  {case['name']:22} → {top['spelling']}  최악거리 {top['worst']:.3f} [{top['verdict']}]")
     return 0
 
 
