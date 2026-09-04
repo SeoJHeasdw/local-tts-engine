@@ -31,6 +31,7 @@ import platform
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 from dataclasses import asdict, dataclass
@@ -63,6 +64,7 @@ from .speech_quality import (
     LEXICAL_WARNING_DISTANCE,
     MAX_AUTOMATIC_ATTEMPTS,
     MIN_LEXICAL_KEY_LENGTH,
+    asr_reading_windows,
     better_evaluation,
     choose_best_candidate,
     chunk_severity,
@@ -684,6 +686,48 @@ def course_entries(
 
 # ─── 청킹 ────────────────────────────────────────────────────────────────────
 
+def report_unresolved_terms(entries: list[CourseEntry]) -> list[dict[str, Any]]:
+    """Announce every term still spelled in Latin letters before generating.
+
+    A term the dictionary never answered is read however the model feels that
+    seed. That is what produced 런팀 and 과드레일, and it is invisible in the
+    finished audio until someone listens to all seven hours. The reading is a
+    decision, so it belongs in config/production-pronunciation.ko.json — printed
+    here, and recorded in the manifest's pronunciation.unresolved, so it can be
+    answered instead of discovered.
+
+    Deliberately English spans are marked ``"literal": true`` in the dictionary
+    and never reach this list.  This warns rather than stops: an unread term is
+    a term read badly, while a mixed identifier (A-2041 → 에이 이천사십일) is a
+    term read as something else entirely, which is why only that one raises.
+    """
+    unresolved = [
+        {
+            "chapter": entry.chapter,
+            "slideNumber": entry.slide_number,
+            "step": entry.step,
+            "tokens": list(entry.unresolved_tokens),
+        }
+        for entry in entries
+        if entry.unresolved_tokens
+    ]
+    if not unresolved:
+        return unresolved
+    tokens = sorted(
+        {token for item in unresolved for token in item["tokens"]}, key=str.casefold
+    )
+    pages = sorted({int(item["slideNumber"]) for item in unresolved})
+    print(
+        f"[발음 미지정] {len(tokens)}종이 영문·숫자 그대로 합성됩니다. "
+        f"읽는 법을 config/production-pronunciation.ko.json 에 지정하세요."
+    )
+    print(f"[발음 미지정] 용어: {', '.join(tokens[:24])}"
+          + (f" 외 {len(tokens) - 24}종" if len(tokens) > 24 else ""))
+    print(f"[발음 미지정] 페이지: {', '.join(str(page) for page in pages[:24])}"
+          + (f" 외 {len(pages) - 24}장" if len(pages) > 24 else ""))
+    return unresolved
+
+
 def group_course_entries(entries: list[CourseEntry]) -> list[CourseChunk]:
     """Join nearby visual steps into one natural TTS breath.
 
@@ -1232,6 +1276,7 @@ def synthesize_excerpt(
         if remaining > 0:
             details += f"; 외 {remaining}건"
         raise ValueError(f"한국어 자연스러움 사전검사 실패: {details}")
+    report_unresolved_terms(entries)
     chunks = group_course_entries(entries)
     pronunciation = course_pronunciation_dictionary(source_project)
     reference_text = reference_text_path.read_text(encoding="utf-8").strip()
@@ -1398,10 +1443,8 @@ def synthesize_excerpt(
 
     quality_records: list[dict[str, Any]] = []
 
-    def transcribe(audio_path: str, temperature: float) -> str:
-        """Read one clip back with the independent ASR."""
-        nonlocal quality_evaluation_ms
-        started = time.perf_counter()
+    def read_once(audio_path: str, temperature: float) -> str:
+        """Run the independent ASR over one file that fits in a single window."""
         result = quality_model.generate(
             audio_path,
             language="ko",
@@ -1411,8 +1454,34 @@ def synthesize_excerpt(
             condition_on_previous_text=False,
             max_tokens=768,
         )
-        quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
         return result.text
+
+    def transcribe(audio_path: str, temperature: float) -> str:
+        """Read one clip back, never handing the ASR more than one window.
+
+        A clip longer than the ASR window is read in pieces cut at interior
+        silence and the readings are joined.  See ASR_WINDOW_SECONDS for the
+        measurements behind this: reading a 31-second clip whole dropped a
+        clause on every seed, which the severity rules then reported as a page
+        the model consistently misreads.
+        """
+        nonlocal quality_evaluation_ms
+        started = time.perf_counter()
+        samples, rate = sf.read(audio_path, dtype="float32", always_2d=True)
+        mono = np.mean(samples, axis=1, dtype=np.float32)
+        windows = asr_reading_windows(mono, rate)
+        if len(windows) == 1:
+            text = read_once(audio_path, temperature)
+        else:
+            readings: list[str] = []
+            with tempfile.TemporaryDirectory(prefix="tts-asr-window-") as scratch:
+                for index, (begin, end) in enumerate(windows):
+                    window_path = Path(scratch) / f"window-{index}.wav"
+                    sf.write(window_path, mono[begin:end], rate)
+                    readings.append(read_once(str(window_path), temperature).strip())
+            text = " ".join(reading for reading in readings if reading)
+        quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
+        return text
 
     def evaluate(chunk: CourseChunk, candidate: dict[str, Any]) -> dict[str, Any]:
         """Judge one take, ruling out decoder noise before blaming the take.

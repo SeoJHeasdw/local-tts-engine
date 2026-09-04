@@ -223,3 +223,84 @@ def test_ch02_risky_number_and_identifier_corpus_has_explicit_readings() -> None
     )
     assert report["naturalnessWarnings"] == []
     assert report["unresolvedNumbers"] == []
+
+
+# ─── quoted English the lecture reads aloud on purpose ───────────────────────
+# Page 186 quotes a product FAQ in English and the model reads it correctly
+# (0.019 phonetic distance measured on the produced clip). The term dictionary
+# must not reach inside those sentences: "Do my 봇츠 share one computer?" is
+# neither language, and no reader or ASR can make sense of it.
+
+LITERAL_DICTIONARY = [
+    {"from": "Bot", "to": "봇"},
+    {"from": "Bots", "to": "봇츠"},
+    {"from": "Account", "to": "어카운트"},
+    {
+        "from": "Do my Bots share one computer?",
+        "to": "Do my Bots share one computer?",
+        "literal": True,
+    },
+]
+
+
+def test_a_quoted_english_sentence_is_left_exactly_as_written() -> None:
+    spoken = apply_pronunciation(
+        '질문이 "Do my Bots share one computer?" 봇들이 컴퓨터를 공유하냐는 겁니다.',
+        LITERAL_DICTIONARY,
+    )
+    assert '"Do my Bots share one computer?"' in spoken
+
+
+def test_terms_outside_the_quote_are_still_read_in_korean() -> None:
+    spoken = apply_pronunciation(
+        'Bot 하나가 "Do my Bots share one computer?"를 묻습니다. Account도 봅니다.',
+        LITERAL_DICTIONARY,
+    )
+    assert spoken.startswith("봇 하나가")
+    assert "어카운트도" in spoken
+    assert "Do my Bots share one computer?" in spoken
+
+
+def test_a_number_inside_a_protected_span_is_not_read_as_korean() -> None:
+    dictionary = [
+        {"from": "Start with 3 bots.", "to": "Start with 3 bots.", "literal": True},
+    ]
+    assert apply_pronunciation("화면에는 Start with 3 bots. 라고 적혀 있습니다.", dictionary) == (
+        "화면에는 Start with 3 bots. 라고 적혀 있습니다."
+    )
+
+
+def test_a_protected_span_is_reported_as_a_deliberate_reading() -> None:
+    report = pronunciation_preflight(
+        '"Do my Bots share one computer?" 라고 적혀 있습니다.',
+        LITERAL_DICTIONARY,
+    )
+    assert {"from": "Do my Bots share one computer?", "to": "Do my Bots share one computer?"} in [
+        {"from": match["from"], "to": match["to"]} for match in report["dictionaryMatches"]
+    ]
+
+
+def test_several_protected_spans_come_back_in_the_right_places() -> None:
+    dictionary = [
+        {"from": "first one", "to": "first one", "literal": True},
+        {"from": "second one", "to": "second one", "literal": True},
+        {"from": "one", "to": "원"},
+    ]
+    assert apply_pronunciation("앞은 first one, 뒤는 second one, 그리고 one.", dictionary) == (
+        "앞은 first one, 뒤는 second one, 그리고 원."
+    )
+
+
+def test_a_deliberately_english_span_is_not_an_unresolved_term() -> None:
+    # The gate that refuses to start a course reads unresolvedAscii. A sentence
+    # the course decided to read in English is a decision already made.
+    report = pronunciation_preflight(
+        '질문이 "Do my Bots share one computer?" 봇들이 묻는 겁니다.',
+        LITERAL_DICTIONARY,
+    )
+    assert report["unresolvedAscii"] == []
+
+
+def test_a_term_nobody_decided_how_to_read_is_still_reported() -> None:
+    report = pronunciation_preflight("Guardrail이 무엇인지 보겠습니다.", LITERAL_DICTIONARY)
+    assert report["unresolvedAscii"] == ["Guardrail"]

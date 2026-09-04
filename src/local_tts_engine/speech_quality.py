@@ -51,6 +51,36 @@ MAX_SPEAKING_CHARACTERS_PER_SECOND = 11.0
 MAX_SILENCE_RATIO = 0.62
 MAX_CLIPPING_RATIO = 0.001
 
+# Whisper reads a fixed 30-second window.  Handed a longer clip it still returns
+# a transcript, but material near the window boundary can silently vanish: the
+# 31-second take of page 304 lost "에이전트 수가 아니라 평가로 확인된" on all four
+# seeds, while the same audio read in two pieces contained it every time.  Four
+# identical drops look exactly like a model that consistently misreads, so the
+# severity promotion in :func:`chunk_severity` turned an ASR artefact into a
+# failed page.  Every reading therefore stays inside one window.
+#
+# Measured on the CH03 L02 clips, whole-clip versus windowed phonetic distance:
+#
+#     304p (false alarm)    0.090–0.119  →  0.005   every take
+#     307p (silent miss)    0.069        →  0.009
+#     306p (real defect)    0.127–0.138  →  0.127–0.141
+#     310p (real defect)    0.107–0.224  →  0.098–0.117
+#
+# The artefact disappears and the real defects are untouched.  Splitting the
+# reading — not the generated audio — keeps clip hashes, pacing and breath
+# unchanged, which is why MAX_CHUNK_CHARS is deliberately left alone.
+ASR_WINDOW_SECONDS = 30.0
+# Leave headroom below the window: a cut lands on the quietest frame in range,
+# not exactly where asked, and the encoder pads what it receives.
+MAX_ASR_READING_SECONDS = 24.0
+# Below this a clip is read whole. Between it and MAX_ASR_READING_SECONDS the
+# split would buy nothing, and an extra seam costs an extra chance to drop a
+# word at a boundary.
+MIN_ASR_SPLIT_SECONDS = 26.0
+# A cut may be pulled back this far to reach a silence; beyond that the search
+# gives up and cuts on the limit, which is still inside the window.
+ASR_CUT_SEARCH_RATIO = 0.4
+
 # Below this, two transcripts describe the same sound and any remaining
 # difference is spelling.  Above the warning bound, the reader said something
 # else entirely.  Between them the evidence is genuinely ambiguous, which is
@@ -285,6 +315,79 @@ def waveform_metrics(audio_path: Path) -> dict[str, float | int]:
         "silenceRatio": round(float(np.mean(frame_rms < silence_threshold)), 6),
         "clippingRatio": round(float(np.mean(np.abs(samples) >= 0.999)), 8),
     }
+
+
+def _frame_energy(samples: "np.ndarray", sample_rate: int, frame: int) -> "np.ndarray":
+    """Return per-frame RMS for the leading whole frames of ``samples``."""
+    usable = len(samples) - (len(samples) % frame)
+    if not usable:
+        return np.zeros(0, dtype=np.float32)
+    framed = samples[:usable].reshape(-1, frame)
+    return np.sqrt(np.mean(framed**2, axis=1) + 1e-12)
+
+
+def asr_reading_windows(
+    samples: "np.ndarray",
+    sample_rate: int,
+    max_seconds: float = MAX_ASR_READING_SECONDS,
+    min_split_seconds: float = MIN_ASR_SPLIT_SECONDS,
+) -> list[tuple[int, int]]:
+    """Split a clip into sample ranges that each fit inside one ASR window.
+
+    Cuts land on the longest silent stretch inside the last part of each
+    window, so a seam falls between sentences rather than inside a word.  A
+    clip with no usable silence is cut on the limit: a seam mid-word costs one
+    word, while overrunning the window can cost a whole clause.
+
+    Returns one whole-clip range when the audio is short enough, so the common
+    case reads exactly as it did before.
+    """
+    total = len(samples)
+    if not total or not sample_rate:
+        return [(0, total)]
+    if total / sample_rate <= min_split_seconds:
+        return [(0, total)]
+
+    frame = max(1, round(sample_rate * 0.02))
+    energy = _frame_energy(samples, sample_rate, frame)
+    if not len(energy):
+        return [(0, total)]
+    quiet = energy < max(5e-4, float(energy.max()) * 0.0125)
+
+    limit = max(frame, int(max_seconds * sample_rate))
+    windows: list[tuple[int, int]] = []
+    start = 0
+    while total - start > limit:
+        earliest = start + int(limit * (1.0 - ASR_CUT_SEARCH_RATIO))
+        cut = _quietest_cut(quiet, frame, earliest, start + limit)
+        # A silence at the very start of the search range would make no
+        # progress; falling back to the limit always advances.
+        windows.append((start, cut if cut > start else start + limit))
+        start = windows[-1][1]
+    windows.append((start, total))
+    return windows
+
+
+def _quietest_cut(quiet: "np.ndarray", frame: int, earliest: int, latest: int) -> int:
+    """Return the sample index at the middle of the longest silent run in range."""
+    low = max(0, earliest // frame)
+    high = min(len(quiet), latest // frame)
+    best: tuple[int, int] | None = None
+    run_start: int | None = None
+    for index in range(low, high):
+        if quiet[index]:
+            if run_start is None:
+                run_start = index
+            continue
+        if run_start is not None:
+            if best is None or index - run_start > best[1] - best[0]:
+                best = (run_start, index)
+            run_start = None
+    if run_start is not None and (best is None or high - run_start > best[1] - best[0]):
+        best = (run_start, high)
+    if best is None:
+        return latest
+    return ((best[0] + best[1]) // 2) * frame
 
 
 def evaluate_candidate(

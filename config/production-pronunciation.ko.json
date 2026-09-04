@@ -98,5 +98,706 @@
   {
     "from": "3장 주는",
     "to": "세 장 주는"
+  },
+  {
+    "from": "Agents-as-Tools",
+    "to": "에이전츠 애즈 툴즈"
+  },
+  {
+    "from": "Human-in-the-Loop",
+    "to": "휴먼 인 더 루프"
+  },
+  {
+    "from": "Scoped Sub-Agent",
+    "to": "스코프드 서브 에이전트"
+  },
+  {
+    "from": "Sub-Agent",
+    "to": "서브 에이전트"
+  },
+  {
+    "from": "Multi-Agent",
+    "to": "멀티 에이전트"
+  },
+  {
+    "from": "Single Agent",
+    "to": "싱글 에이전트"
+  },
+  {
+    "from": "Agent Loop",
+    "to": "에이전트 루프"
+  },
+  {
+    "from": "Agent Network",
+    "to": "에이전트 네트워크"
+  },
+  {
+    "from": "Agent Runtime",
+    "to": "에이전트 런타임"
+  },
+  {
+    "from": "Agent Skills",
+    "to": "에이전트 스킬스"
+  },
+  {
+    "from": "Main Agent",
+    "to": "메인 에이전트"
+  },
+  {
+    "from": "Lead Agent",
+    "to": "리드 에이전트"
+  },
+  {
+    "from": "Tool Calling",
+    "to": "툴 콜링"
+  },
+  {
+    "from": "Tool Registry",
+    "to": "툴 레지스트리"
+  },
+  {
+    "from": "Tool Call",
+    "to": "툴 콜"
+  },
+  {
+    "from": "Action Boundary",
+    "to": "액션 바운더리"
+  },
+  {
+    "from": "Context Window",
+    "to": "컨텍스트 윈도우"
+  },
+  {
+    "from": "Context Snapshot",
+    "to": "컨텍스트 스냅샷"
+  },
+  {
+    "from": "Context Engineering",
+    "to": "컨텍스트 엔지니어링"
+  },
+  {
+    "from": "Attention Budget",
+    "to": "어텐션 버짓"
+  },
+  {
+    "from": "Intelligence Index",
+    "to": "인텔리전스 인덱스"
+  },
+  {
+    "from": "Artificial Analysis",
+    "to": "아티피셜 애널리시스"
+  },
+  {
+    "from": "Large Language Model",
+    "to": "라지 랭귀지 모델"
+  },
+  {
+    "from": "Augmented LLM",
+    "to": "오그멘티드 엘엘엠"
+  },
+  {
+    "from": "Agentic RAG",
+    "to": "에이전틱 래그"
+  },
+  {
+    "from": "Prompt Injection",
+    "to": "프롬프트 인젝션"
+  },
+  {
+    "from": "Orchestrator–Workers",
+    "to": "오케스트레이터 워커스"
+  },
+  {
+    "from": "Evaluator–Optimizer",
+    "to": "이밸류에이터 옵티마이저"
+  },
+  {
+    "from": "Linux Foundation",
+    "to": "리눅스 파운데이션"
+  },
+  {
+    "from": "Claude Code",
+    "to": "클로드 코드"
+  },
+  {
+    "from": "Claude Opus 5",
+    "to": "클로드 오퍼스 파이브"
+  },
+  {
+    "from": "Opus 5",
+    "to": "오퍼스 파이브"
+  },
+  {
+    "from": "Opus 4",
+    "to": "오퍼스 포"
+  },
+  {
+    "from": "Sonnet 4",
+    "to": "소네트 포"
+  },
+  {
+    "from": "Grok Bot",
+    "to": "그록 봇"
+  },
+  {
+    "from": "Boris Cherny",
+    "to": "보리스 체르니"
+  },
+  {
+    "from": "knowledge cutoff",
+    "to": "널리지 컷오프"
+  },
+  {
+    "from": "pre-training",
+    "to": "프리 트레이닝"
+  },
+  {
+    "from": "Guardrails",
+    "to": "가드레일즈"
+  },
+  {
+    "from": "Guardrail",
+    "to": "가드레일"
+  },
+  {
+    "from": "Instructions",
+    "to": "인스트럭션스"
+  },
+  {
+    "from": "Handoff",
+    "to": "핸드오프"
+  },
+  {
+    "from": "Orchestrator",
+    "to": "오케스트레이터"
+  },
+  {
+    "from": "Checkpoint",
+    "to": "체크포인트"
+  },
+  {
+    "from": "Compaction",
+    "to": "컴팩션"
+  },
+  {
+    "from": "Evaluator",
+    "to": "이밸류에이터"
+  },
+  {
+    "from": "Optimizer",
+    "to": "옵티마이저"
+  },
+  {
+    "from": "Escalate",
+    "to": "에스컬레이트"
+  },
+  {
+    "from": "Registry",
+    "to": "레지스트리"
+  },
+  {
+    "from": "Snapshot",
+    "to": "스냅샷"
+  },
+  {
+    "from": "Hierarchy",
+    "to": "하이어라키"
+  },
+  {
+    "from": "Attention",
+    "to": "어텐션"
+  },
+  {
+    "from": "Boundary",
+    "to": "바운더리"
+  },
+  {
+    "from": "Parallel",
+    "to": "패러렐"
+  },
+  {
+    "from": "Chaining",
+    "to": "체이닝"
+  },
+  {
+    "from": "Routing",
+    "to": "라우팅"
+  },
+  {
+    "from": "Harness",
+    "to": "하니스"
+  },
+  {
+    "from": "Manager",
+    "to": "매니저"
+  },
+  {
+    "from": "Grader",
+    "to": "그레이더"
+  },
+  {
+    "from": "Calling",
+    "to": "콜링"
+  },
+  {
+    "from": "Workers",
+    "to": "워커스"
+  },
+  {
+    "from": "Worker",
+    "to": "워커"
+  },
+  {
+    "from": "Parent",
+    "to": "페어런트"
+  },
+  {
+    "from": "Budget",
+    "to": "버짓"
+  },
+  {
+    "from": "Router",
+    "to": "라우터"
+  },
+  {
+    "from": "Schema",
+    "to": "스키마"
+  },
+  {
+    "from": "Single",
+    "to": "싱글"
+  },
+  {
+    "from": "Memory",
+    "to": "메모리"
+  },
+  {
+    "from": "Action",
+    "to": "액션"
+  },
+  {
+    "from": "Retry",
+    "to": "리트라이"
+  },
+  {
+    "from": "Trace",
+    "to": "트레이스"
+  },
+  {
+    "from": "State",
+    "to": "스테이트"
+  },
+  {
+    "from": "Model",
+    "to": "모델"
+  },
+  {
+    "from": "Multi",
+    "to": "멀티"
+  },
+  {
+    "from": "Skill",
+    "to": "스킬"
+  },
+  {
+    "from": "Goal",
+    "to": "골"
+  },
+  {
+    "from": "Loop",
+    "to": "루프"
+  },
+  {
+    "from": "Tool",
+    "to": "툴"
+  },
+  {
+    "from": "Span",
+    "to": "스팬"
+  },
+  {
+    "from": "Main",
+    "to": "메인"
+  },
+  {
+    "from": "Lead",
+    "to": "리드"
+  },
+  {
+    "from": "Call",
+    "to": "콜"
+  },
+  {
+    "from": "Code",
+    "to": "코드"
+  },
+  {
+    "from": "Bots",
+    "to": "봇츠"
+  },
+  {
+    "from": "Bot",
+    "to": "봇"
+  },
+  {
+    "from": "Run",
+    "to": "런"
+  },
+  {
+    "from": "Eval",
+    "to": "이밸"
+  },
+  {
+    "from": "eval",
+    "to": "이밸"
+  },
+  {
+    "from": "Scoped",
+    "to": "스코프드"
+  },
+  {
+    "from": "Augmented",
+    "to": "오그멘티드"
+  },
+  {
+    "from": "Agentic",
+    "to": "에이전틱"
+  },
+  {
+    "from": "Retrieval",
+    "to": "리트리벌"
+  },
+  {
+    "from": "Generation",
+    "to": "제너레이션"
+  },
+  {
+    "from": "Language",
+    "to": "랭귀지"
+  },
+  {
+    "from": "Large",
+    "to": "라지"
+  },
+  {
+    "from": "Index",
+    "to": "인덱스"
+  },
+  {
+    "from": "Window",
+    "to": "윈도우"
+  },
+  {
+    "from": "Intelligence",
+    "to": "인텔리전스"
+  },
+  {
+    "from": "Artificial",
+    "to": "아티피셜"
+  },
+  {
+    "from": "Analysis",
+    "to": "애널리시스"
+  },
+  {
+    "from": "Authentication",
+    "to": "어센티케이션"
+  },
+  {
+    "from": "Authorization",
+    "to": "어서라이제이션"
+  },
+  {
+    "from": "Engineering",
+    "to": "엔지니어링"
+  },
+  {
+    "from": "Injection",
+    "to": "인젝션"
+  },
+  {
+    "from": "Observation",
+    "to": "옵저베이션"
+  },
+  {
+    "from": "Permission",
+    "to": "퍼미션"
+  },
+  {
+    "from": "Foundation",
+    "to": "파운데이션"
+  },
+  {
+    "from": "Research",
+    "to": "리서치"
+  },
+  {
+    "from": "Network",
+    "to": "네트워크"
+  },
+  {
+    "from": "Copilot",
+    "to": "코파일럿"
+  },
+  {
+    "from": "Zapier",
+    "to": "재피어"
+  },
+  {
+    "from": "Linux",
+    "to": "리눅스"
+  },
+  {
+    "from": "Llama",
+    "to": "라마"
+  },
+  {
+    "from": "Sonnet",
+    "to": "소네트"
+  },
+  {
+    "from": "ChatGPT",
+    "to": "챗지피티"
+  },
+  {
+    "from": "Claude",
+    "to": "클로드"
+  },
+  {
+    "from": "Grok",
+    "to": "그록"
+  },
+  {
+    "from": "Opus",
+    "to": "오퍼스"
+  },
+  {
+    "from": "iOS",
+    "to": "아이오에스"
+  },
+  {
+    "from": "Make",
+    "to": "메이크"
+  },
+  {
+    "from": "Inbox",
+    "to": "인박스"
+  },
+  {
+    "from": "Outbound",
+    "to": "아웃바운드"
+  },
+  {
+    "from": "Account",
+    "to": "어카운트"
+  },
+  {
+    "from": "Expense",
+    "to": "익스펜스"
+  },
+  {
+    "from": "Talent",
+    "to": "탤런트"
+  },
+  {
+    "from": "Scout",
+    "to": "스카우트"
+  },
+  {
+    "from": "Sales",
+    "to": "세일즈"
+  },
+  {
+    "from": "Chief",
+    "to": "치프"
+  },
+  {
+    "from": "refundorder",
+    "to": "리펀드 오더"
+  },
+  {
+    "from": "customerlookup",
+    "to": "커스터머 룩업"
+  },
+  {
+    "from": "permissiondenied",
+    "to": "퍼미션 디나이드"
+  },
+  {
+    "from": "gmailsend",
+    "to": "지메일 센드"
+  },
+  {
+    "from": "TOOLSPEC",
+    "to": "툴 스펙"
+  },
+  {
+    "from": "TAILCHECK",
+    "to": "테일 체크"
+  },
+  {
+    "from": "PAUSE",
+    "to": "포즈"
+  },
+  {
+    "from": "WAIT",
+    "to": "웨이트"
+  },
+  {
+    "from": "RUN",
+    "to": "런"
+  },
+  {
+    "from": "Pause",
+    "to": "포즈"
+  },
+  {
+    "from": "false",
+    "to": "폴스"
+  },
+  {
+    "from": "temperature",
+    "to": "템퍼러처"
+  },
+  {
+    "from": "cat",
+    "to": "캣"
+  },
+  {
+    "from": "VIP",
+    "to": "브이아이피"
+  },
+  {
+    "from": "DB",
+    "to": "디비"
+  },
+  {
+    "from": "ACP",
+    "to": "에이씨피"
+  },
+  {
+    "from": "ARS",
+    "to": "에이알에스"
+  },
+  {
+    "from": "RICE",
+    "to": "라이스"
+  },
+  {
+    "from": "YC",
+    "to": "와이씨"
+  },
+  {
+    "from": "N개",
+    "to": "엔 개"
+  },
+  {
+    "from": "A사",
+    "to": "에이사"
+  },
+  {
+    "from": "B사",
+    "to": "비사"
+  },
+  {
+    "from": "C사",
+    "to": "씨사"
+  },
+  {
+    "from": "A 모델",
+    "to": "에이 모델"
+  },
+  {
+    "from": "B 모델",
+    "to": "비 모델"
+  },
+  {
+    "from": "A, B, C, D",
+    "to": "에이, 비, 씨, 디"
+  },
+  {
+    "from": "A 다음에는 B",
+    "to": "에이 다음에는 비"
+  },
+  {
+    "from": "Human-in-the-Loop은",
+    "to": "휴먼 인 더 루프는"
+  },
+  {
+    "from": "Tools",
+    "to": "툴즈"
+  },
+  {
+    "from": "ERROR",
+    "to": "에러"
+  },
+  {
+    "from": "N명",
+    "to": "엔 명"
+  },
+  {
+    "from": "A 플랫폼",
+    "to": "에이 플랫폼"
+  },
+  {
+    "from": "B 프레임워크",
+    "to": "비 프레임워크"
+  },
+  {
+    "from": "해결책 A",
+    "to": "해결책 에이"
+  },
+  {
+    "from": "다른 하나는 B를",
+    "to": "다른 하나는 비를"
+  },
+  {
+    "from": "Do my Bots share one computer?",
+    "to": "Do my Bots share one computer?",
+    "literal": true
+  },
+  {
+    "from": "Every Bot on your account uses one persistent cloud computer.",
+    "to": "Every Bot on your account uses one persistent cloud computer.",
+    "literal": true
+  },
+  {
+    "from": "They share its files, browser sessions, and logins so they can hand work off.",
+    "to": "They share its files, browser sessions, and logins so they can hand work off.",
+    "literal": true
+  },
+  {
+    "from": "The computer is assigned per user, not per Bot.",
+    "to": "The computer is assigned per user, not per Bot.",
+    "literal": true
+  },
+  {
+    "from": "Do not use separate Bots as a security boundary.",
+    "to": "Do not use separate Bots as a security boundary.",
+    "literal": true
+  },
+  {
+    "from": "Start with the smallest useful roster.",
+    "to": "Start with the smallest useful roster.",
+    "literal": true
+  },
+  {
+    "from": "Don't build agents. Build skills instead.",
+    "to": "Don't build agents. Build skills instead.",
+    "literal": true
+  },
+  {
+    "from": "eat, eats, ate, eaten, eating",
+    "to": "eat, eats, ate, eaten, eating",
+    "literal": true
+  },
+  {
+    "from": "AI Engineer Code Summit",
+    "to": "에이아이 엔지니어 코드 서밋"
+  },
+  {
+    "from": "Yes.",
+    "to": "Yes.",
+    "literal": true
   }
 ]

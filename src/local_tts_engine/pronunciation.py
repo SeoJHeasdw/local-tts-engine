@@ -4,6 +4,12 @@ The course keeps ``source_text`` unchanged for captions.  This module produces a
 separate pronunciation-only string and a small preflight report.  Rules here are
 deliberately deterministic: generation retries can improve delivery, but they
 must never be responsible for deciding how a technical term or number is read.
+
+A dictionary entry marked ``"literal": true`` protects the span it matches from
+every later rule.  The lecture quotes English documentation aloud, and those
+sentences are read correctly as English — measured at a 0.019 phonetic distance
+on page 186.  Without protection the term dictionary reaches inside them and
+produces "Do my 봇츠 share one computer?", which is neither language.
 """
 
 from __future__ import annotations
@@ -185,24 +191,67 @@ def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:
     return re.compile(escaped, flags)
 
 
-def _apply_dictionary(text: str, dictionary: list[dict[str, Any]]) -> str:
+# Private-use code points stand in for protected spans while the rest of the
+# rules run.  They are category ``Co``: no pattern in this module matches them,
+# so a protected span cannot be split, read as a number, or partially replaced.
+PROTECTED_PLACEHOLDER_START = 0xE000
+
+
+def _protect_literal_spans(
+    text: str,
+    dictionary: list[dict[str, Any]],
+) -> tuple[str, list[str]]:
+    """Swap every ``literal`` entry's match for a placeholder the rules ignore."""
+    kept: list[str] = []
+
+    def swap(match: re.Match[str]) -> str:
+        kept.append(replacement)
+        return chr(PROTECTED_PLACEHOLDER_START + len(kept) - 1)
+
+    output = text
+    for item in dictionary:
+        if not item.get("literal"):
+            continue
+        replacement = str(item["to"])
+        output = _dictionary_pattern(item).sub(swap, output)
+    return output, kept
+
+
+def _restore_literal_spans(text: str, kept: list[str]) -> str:
+    """Put the protected spans back once every other rule has run."""
+    for index, span in enumerate(kept):
+        text = text.replace(chr(PROTECTED_PLACEHOLDER_START + index), span)
+    return text
+
+
+def _apply_dictionary(
+    text: str,
+    dictionary: list[dict[str, Any]],
+) -> tuple[str, list[str]]:
     """Dictionary, naturalness, and structural normalization before fallback.
 
     Source-specific dictionary decisions run first.  That lets an explicit
     course rule override a general counter-reading policy.  The naturalness
     layer then chooses high-confidence Korean readings before the remaining
     numeric structures fall back to deterministic Sino-Korean.
+
+    Returns the rewritten text and the protected spans still standing in as
+    placeholders, which the caller restores after the numeric fallback.
     """
-    output = text
-    for item in merge_pronunciation_dictionaries(dictionary):
+    merged = merge_pronunciation_dictionaries(dictionary)
+    output, protected = _protect_literal_spans(text, merged)
+    for item in merged:
+        if item.get("literal"):
+            continue
         output = _dictionary_pattern(item).sub(str(item["to"]), output)
     output = str(korean_naturalness_preflight(output)["text"])
-    return normalize_structured_tokens(output)
+    return normalize_structured_tokens(output), protected
 
 
 def apply_pronunciation(text: str, dictionary: list[dict[str, Any]]) -> str:
     """Apply structural normalization and token-aware pronunciation replacements."""
-    output = read_remaining_numbers(_apply_dictionary(text, dictionary))
+    output, protected = _apply_dictionary(text, dictionary)
+    output = _restore_literal_spans(read_remaining_numbers(output), protected)
     return re.sub(r"[ \t]+", " ", output).strip()
 
 
@@ -211,15 +260,18 @@ def pronunciation_preflight(
     dictionary: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Return synthesis text and unresolved risky tokens for manifests and UI."""
-    dictionary_text = source_text
-    for item in merge_pronunciation_dictionaries(dictionary):
+    merged = merge_pronunciation_dictionaries(dictionary)
+    dictionary_text, protected_spans = _protect_literal_spans(source_text, merged)
+    for item in merged:
+        if item.get("literal"):
+            continue
         dictionary_text = _dictionary_pattern(item).sub(str(item["to"]), dictionary_text)
     naturalness = korean_naturalness_preflight(dictionary_text)
     tts_text = apply_pronunciation(source_text, dictionary)
     matched: list[dict[str, str]] = []
     dictionary_spans: list[tuple[int, int]] = []
     required: list[str] = []
-    for item in merge_pronunciation_dictionaries(dictionary):
+    for item in merged:
         item_matches = list(_dictionary_pattern(item).finditer(source_text))
         if item_matches:
             matched.append({"from": str(item["from"]), "to": str(item["to"])})
@@ -246,8 +298,12 @@ def pronunciation_preflight(
         required.append(apply_pronunciation(match.group(0), dictionary))
     for match in DECIMAL_NUMBER_PATTERN.finditer(source_text):
         required.append(apply_pronunciation(match.group(0), dictionary))
-    for match in BARE_NUMBER_PATTERN.finditer(_apply_dictionary(source_text, dictionary)):
+    for match in BARE_NUMBER_PATTERN.finditer(_apply_dictionary(source_text, dictionary)[0]):
         required.append(korean_sino_integer(match.group(1)))
+    # A deliberately English span is an answered question, not a term nobody
+    # decided how to read, so the unresolved lists are measured with those
+    # spans still standing in as placeholders.
+    unresolved_text, _ = _protect_literal_spans(tts_text, merged)
     return {
         "sourceText": source_text,
         "ttsText": tts_text,
@@ -257,6 +313,8 @@ def pronunciation_preflight(
         "naturalnessWarnings": naturalness["warnings"],
         "normalizedNumbers": counted,
         "requiredPronunciations": list(dict.fromkeys(required)),
-        "unresolvedAscii": sorted(set(ASCII_TOKEN_PATTERN.findall(tts_text)), key=str.casefold),
-        "unresolvedNumbers": sorted(set(NUMBER_TOKEN_PATTERN.findall(tts_text))),
+        "unresolvedAscii": sorted(
+            set(ASCII_TOKEN_PATTERN.findall(unresolved_text)), key=str.casefold
+        ),
+        "unresolvedNumbers": sorted(set(NUMBER_TOKEN_PATTERN.findall(unresolved_text))),
     }

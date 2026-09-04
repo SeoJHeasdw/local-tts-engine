@@ -21,6 +21,7 @@ from local_tts_engine.course_pilot import (
     load_or_create_alignment,
     merge_step_record_parts,
     parse_script,
+    report_unresolved_terms,
     slide_ids_from_source,
     split_forced_pause_segments,
     trim_and_fade_audio,
@@ -585,3 +586,44 @@ def test_peak_memory_is_reported_from_whichever_mlx_namespace_exists() -> None:
     assert metal_peak_memory_gb(Older) == 11.6
     assert metal_peak_memory_gb(Broken) == 0.0
     assert metal_peak_memory_gb(Absent) == 0.0
+
+
+# ─── unresolved terms are announced before a single clip is generated ────────
+# 436 English terms reached the synthesizer unanswered across CH01~CH03 and
+# were only found by listening. The reading of a term is a decision, so an
+# unanswered one has to be visible before the run, not after.
+
+
+def entry_with_tokens(slide_number: int, tokens: tuple[str, ...]) -> CourseEntry:
+    return CourseEntry(
+        chapter="ch03",
+        slide_id="openai-eval",
+        slide_number=slide_number,
+        step=0,
+        source_text="Guardrail을 봅니다.",
+        tts_text="Guardrail을 봅니다.",
+        unresolved_tokens=tokens,
+    )
+
+
+def test_unresolved_terms_are_listed_with_their_pages(capsys) -> None:
+    unresolved = report_unresolved_terms([
+        entry_with_tokens(310, ("Guardrail", "Handoff")),
+        entry_with_tokens(312, ("Guardrail",)),
+    ])
+    printed = capsys.readouterr().out
+    assert [item["slideNumber"] for item in unresolved] == [310, 312]
+    assert "Guardrail" in printed and "Handoff" in printed
+    assert "310" in printed and "312" in printed
+
+
+def test_a_clean_range_says_nothing(capsys) -> None:
+    assert report_unresolved_terms([entry_with_tokens(310, ())]) == []
+    assert capsys.readouterr().out == ""
+
+
+def test_an_unresolved_term_warns_but_does_not_stop_the_run() -> None:
+    # A mixed identifier raises; an unread term only warns. Reading "Guardrail"
+    # badly is worse audio, while reading A-2041 as 에이 이천사십일 is a
+    # different fact, which is the distinction the two gates keep.
+    assert report_unresolved_terms([entry_with_tokens(310, ("Guardrail",))])

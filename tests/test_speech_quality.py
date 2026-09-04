@@ -12,8 +12,10 @@ import pytest
 import soundfile as sf
 
 from local_tts_engine.speech_quality import (
+    ASR_WINDOW_SECONDS,
     MAX_AUTOMATIC_ATTEMPTS,
     MAX_PHONETIC_ERROR_RATE,
+    asr_reading_windows,
     better_evaluation,
     character_error_rate,
     check_pronunciation,
@@ -394,3 +396,83 @@ def test_summary_reads_older_records_that_only_knew_pass_and_fail() -> None:
 def test_the_attempt_budget_is_shared_with_the_app() -> None:
     # electron-app/main.mjs mirrors this value; a change here needs a change there.
     assert MAX_AUTOMATIC_ATTEMPTS == 4
+
+
+# ─── the 304페이지 regression: one ASR window per reading ────────────────────
+# A 31-second take of page 304 lost "에이전트 수가 아니라 평가로 확인된" on all
+# four seeds. Read in two pieces the same audio contained it every time, so the
+# clip was correct and the reading was not. Because every seed dropped the same
+# clause, chunk_severity promoted the warning to a failed page — the exact
+# shape of a real misreading. Keeping each reading inside one window is what
+# separates the two.
+
+
+def speech_with_gaps(
+    pattern: list[tuple[float, bool]],
+    sample_rate: int = 24_000,
+) -> np.ndarray:
+    """Build audio from (seconds, is_speech) pairs so cut points are known."""
+    pieces = []
+    for seconds, speaking in pattern:
+        length = round(seconds * sample_rate)
+        if speaking:
+            at = np.arange(length, dtype=np.float32) / sample_rate
+            pieces.append(np.sin(2 * np.pi * 220 * at).astype(np.float32) * 0.2)
+        else:
+            pieces.append(np.zeros(length, dtype=np.float32))
+    return np.concatenate(pieces)
+
+
+def test_a_clip_that_fits_the_window_is_still_read_in_one_piece() -> None:
+    audio = speech_with_gaps([(20.0, True)])
+    assert asr_reading_windows(audio, 24_000) == [(0, len(audio))]
+
+
+def test_a_clip_just_over_the_window_is_split() -> None:
+    audio = speech_with_gaps([(14.0, True), (0.6, False), (14.0, True)])
+    windows = asr_reading_windows(audio, 24_000)
+    assert len(windows) == 2
+
+
+def test_no_window_is_ever_longer_than_the_asr_can_read() -> None:
+    audio = speech_with_gaps([(20.0, True), (0.5, False)] * 5)
+    for begin, end in asr_reading_windows(audio, 24_000):
+        assert (end - begin) / 24_000 <= ASR_WINDOW_SECONDS
+
+
+def test_windows_cover_the_clip_exactly_once() -> None:
+    audio = speech_with_gaps([(15.0, True), (0.4, False)] * 4)
+    windows = asr_reading_windows(audio, 24_000)
+    assert windows[0][0] == 0
+    assert windows[-1][1] == len(audio)
+    assert all(left[1] == right[0] for left, right in zip(windows, windows[1:]))
+
+
+def test_a_cut_lands_in_the_silence_between_sentences() -> None:
+    # Speech, a clear pause at 18s, then more speech. The cut belongs in the
+    # pause, not mid-word at the 24-second limit.
+    audio = speech_with_gaps([(18.0, True), (1.0, False), (14.0, True)])
+    windows = asr_reading_windows(audio, 24_000)
+    cut_seconds = windows[0][1] / 24_000
+    assert 18.0 <= cut_seconds <= 19.0
+
+
+def test_unbroken_speech_is_still_cut_before_the_window_closes() -> None:
+    # No silence to aim for. A seam mid-word costs one word; overrunning the
+    # window can cost a whole clause, so the cut still happens.
+    audio = speech_with_gaps([(40.0, True)])
+    windows = asr_reading_windows(audio, 24_000)
+    assert len(windows) > 1
+    for begin, end in windows:
+        assert (end - begin) / 24_000 <= ASR_WINDOW_SECONDS
+
+
+def test_splitting_never_loops_on_silence_at_the_start_of_the_search() -> None:
+    audio = speech_with_gaps([(15.0, True), (10.0, False), (15.0, True), (10.0, False)])
+    windows = asr_reading_windows(audio, 24_000)
+    assert all(end > begin for begin, end in windows)
+    assert windows[-1][1] == len(audio)
+
+
+def test_an_empty_clip_asks_for_one_reading() -> None:
+    assert asr_reading_windows(np.zeros(0, dtype=np.float32), 24_000) == [(0, 0)]
