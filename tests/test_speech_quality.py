@@ -476,3 +476,41 @@ def test_splitting_never_loops_on_silence_at_the_start_of_the_search() -> None:
 
 def test_an_empty_clip_asks_for_one_reading() -> None:
     assert asr_reading_windows(np.zeros(0, dtype=np.float32), 24_000) == [(0, 0)]
+
+
+# ─── a long required pronunciation must not blind the lexical gate ───────────
+# Adding compound terms to the dictionary (에이전트 런타임, 컨텍스트 윈도우)
+# made those readings long enough to absorb a lost syllable under the match
+# gate, while simultaneously excluding their component words from the lexical
+# gate that could still see it. The entry meant to protect a term was removing
+# its only remaining check.
+
+COMPOUND_DICTIONARY = [
+    {"from": "Agent Runtime", "to": "에이전트 런타임"},
+    {"from": "Guardrail", "to": "가드레일"},
+]
+
+
+def test_a_syllable_lost_inside_a_compound_term_is_still_reported() -> None:
+    expected = "범용 에이전트 런타임에 필요한 능력을 붙입니다. 그 위에 지시를 얹습니다."
+    recognized = "범용 에이전트 런임에 필요한 능력을 붙입니다. 그 위에 지시를 얹습니다."
+    # The compound itself is too long to notice: 17 jamo losing one syllable.
+    assert check_pronunciation(
+        "에이전트 런타임", expected, recognized, COMPOUND_DICTIONARY
+    )["status"] == "ok"
+    # The lexical gate reads the component word and does notice.
+    reported = lexical_pronunciation_checks(
+        expected, recognized, COMPOUND_DICTIONARY, ("에이전트 런타임",)
+    )
+    assert any(check["term"].startswith("런타임") for check in reported)
+
+
+def test_a_single_word_term_still_suppresses_its_duplicate_lexical_check() -> None:
+    # 가드레일 is one word, so both checks would look at exactly the same thing
+    # and report it twice. That exclusion is the one worth keeping.
+    expected = "그래서 대화도 가드레일도 최종 답변도 중앙에 남습니다."
+    recognized = "그래서 대화도 과드레일도 최종 답변도 중앙에 남습니다."
+    reported = lexical_pronunciation_checks(
+        expected, recognized, COMPOUND_DICTIONARY, ("가드레일",)
+    )
+    assert not any(check["term"].startswith("가드레일") for check in reported)

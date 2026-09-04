@@ -807,5 +807,177 @@
   {
     "from": "GPT4",
     "to": "지피티 포"
+  },
+  {
+    "from": "Model Context Protocol",
+    "to": "모델 컨텍스트 프로토콜"
+  },
+  {
+    "from": "Candidate Filtering",
+    "to": "캔디데이트 필터링"
+  },
+  {
+    "from": "Trajectory Eval",
+    "to": "트래젝토리 이밸"
+  },
+  {
+    "from": "Agent to Agent",
+    "to": "에이전트 투 에이전트"
+  },
+  {
+    "from": "Tool Selection",
+    "to": "툴 셀렉션"
+  },
+  {
+    "from": "Worker Brief",
+    "to": "워커 브리프"
+  },
+  {
+    "from": "MCP Server",
+    "to": "엠씨피 서버"
+  },
+  {
+    "from": "Agent Card",
+    "to": "에이전트 카드"
+  },
+  {
+    "from": "CEO Agent",
+    "to": "씨이오 에이전트"
+  },
+  {
+    "from": "Worker B",
+    "to": "워커 비"
+  },
+  {
+    "from": "Connector",
+    "to": "커넥터"
+  },
+  {
+    "from": "Transport",
+    "to": "트랜스포트"
+  },
+  {
+    "from": "Trajectory",
+    "to": "트래젝토리"
+  },
+  {
+    "from": "Candidate",
+    "to": "캔디데이트"
+  },
+  {
+    "from": "Filtering",
+    "to": "필터링"
+  },
+  {
+    "from": "Selection",
+    "to": "셀렉션"
+  },
+  {
+    "from": "Baseline",
+    "to": "베이스라인"
+  },
+  {
+    "from": "Protocol",
+    "to": "프로토콜"
+  },
+  {
+    "from": "Approval",
+    "to": "어프루벌"
+  },
+  {
+    "from": "Resource",
+    "to": "리소스"
+  },
+  {
+    "from": "Artifact",
+    "to": "아티팩트"
+  },
+  {
+    "from": "Client",
+    "to": "클라이언트"
+  },
+  {
+    "from": "Message",
+    "to": "메시지"
+  },
+  {
+    "from": "Plugin",
+    "to": "플러그인"
+  },
+  {
+    "from": "Server",
+    "to": "서버"
+  },
+  {
+    "from": "Prompt",
+    "to": "프롬프트"
+  },
+  {
+    "from": "Audit",
+    "to": "오디트"
+  },
+  {
+    "from": "Brief",
+    "to": "브리프"
+  },
+  {
+    "from": "Host",
+    "to": "호스트"
+  },
+  {
+    "from": "Task",
+    "to": "태스크"
+  },
+  {
+    "from": "Card",
+    "to": "카드"
+  },
+  {
+    "from": "SaaS",
+    "to": "사스"
+  },
+  {
+    "from": "USB",
+    "to": "유에스비"
+  },
+  {
+    "from": "CRM",
+    "to": "씨알엠"
+  },
+  {
+    "from": "ERP",
+    "to": "이알피"
+  },
+  {
+    "from": "CEO",
+    "to": "씨이오"
+  },
+  {
+    "from": "QA",
+    "to": "큐에이"
+  },
+  {
+    "from": "CS",
+    "to": "씨에스"
+  },
+  {
+    "from": "PC",
+    "to": "피씨"
+  },
+  {
+    "from": "A",
+    "to": "에이"
+  },
+  {
+    "from": "B",
+    "to": "비"
+  },
+  {
+    "from": "O",
+    "to": "오"
+  },
+  {
+    "from": "X",
+    "to": "엑스"
   }
 ]

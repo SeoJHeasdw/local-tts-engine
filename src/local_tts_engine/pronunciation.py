@@ -51,8 +51,15 @@ FRACTION_NUMBER_PATTERN = re.compile(
 # guessing is what produced "호십개" in the first place. Sino-Korean is the
 # default reading in lecture narration; the handful of counters that want a
 # native reading ("한 턴") are dictionary overrides, which run before this.
+# A digit run hyphenated to a letter belongs to an identifier (B-3099), and the
+# dictionary already refuses to touch those. Reading the number half anyway
+# produced "B-삼천구십구". A hyphen between two digit runs is still read, so a
+# plain range keeps its Sino-Korean reading rather than being left for the model
+# to guess at.
 BARE_NUMBER_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])(?<!\d\.)(\d+(?:,\d{3})*)(?![A-Za-z0-9])(?!\.\d)"
+    r"(?<![A-Za-z0-9])(?<!\d\.)(?<![A-Za-z]-)"
+    r"(\d+(?:,\d{3})*)"
+    r"(?![A-Za-z0-9])(?!\.\d)(?!-[A-Za-z])"
 )
 
 _DIGITS = ("영", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구")
@@ -180,13 +187,25 @@ def merge_pronunciation_dictionaries(
 
 
 def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:
+    """Match a term only where it stands on its own.
+
+    A hyphen joining two alphanumerics is part of one token, not a boundary.
+    Without that rule ``B`` is plucked out of the order number ``B-3099``,
+    which both mispronounces it and disarms the identifier guard that exists to
+    stop ``A-2041`` from being read as 에이 이천사십일. The same rule keeps
+    ``Agent`` out of ``Multi-Agent``, so an unmapped compound stays visible as
+    an unresolved term instead of becoming ``Multi-에이전트``.
+
+    Sentence punctuation is not a joiner: ``Agent.`` still matches, because the
+    guard only rejects a hyphen with an alphanumeric on its far side.
+    """
     source = str(item["from"])
     escaped = re.escape(source)
     if re.search(r"[A-Za-z0-9]", source):
         if source[0].isalnum():
-            escaped = rf"(?<![A-Za-z0-9]){escaped}"
+            escaped = rf"(?<![A-Za-z0-9])(?<![A-Za-z0-9]-){escaped}"
         if source[-1].isalnum():
-            escaped = rf"{escaped}(?![A-Za-z0-9])"
+            escaped = rf"{escaped}(?![A-Za-z0-9])(?!-[A-Za-z0-9])"
     flags = 0 if item.get("caseSensitive") else re.IGNORECASE
     return re.compile(escaped, flags)
 

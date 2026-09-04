@@ -232,13 +232,19 @@ def lexical_pronunciation_checks(
     recognized_value = apply_pronunciation(recognized_text, dictionary or [])
     expected_keys = phonetic_variants(expected_value)
     recognized_keys = phonetic_variants(recognized_value) or ("",)
-    excluded = {
-        word
-        for pronunciation in excluded_pronunciations
-        for word in HANGUL_WORD_PATTERN.findall(
+    # Only a single-word required pronunciation suppresses the lexical check,
+    # because only then do the two checks look at the same thing. A multi-word
+    # reading is long enough to absorb a lost syllable inside the match gate
+    # (에이전트 런타임 → 에이전트 런임 is 0.118, passing), while the lexical
+    # check on 런타임 alone reads 0.200 and warns. Excluding the parts of a
+    # compound therefore removed the only check that could see the error.
+    excluded: set[str] = set()
+    for pronunciation in excluded_pronunciations:
+        words = HANGUL_WORD_PATTERN.findall(
             apply_pronunciation(pronunciation, dictionary or [])
         )
-    }
+        if len(words) == 1:
+            excluded.add(words[0])
     checks: list[dict[str, Any]] = []
     seen: set[str] = set()
     for term in HANGUL_WORD_PATTERN.findall(expected_value):

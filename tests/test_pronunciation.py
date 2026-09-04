@@ -310,3 +310,53 @@ def test_a_deliberately_english_span_is_not_an_unresolved_term() -> None:
 def test_a_term_nobody_decided_how_to_read_is_still_reported() -> None:
     report = pronunciation_preflight("Guardrail이 무엇인지 보겠습니다.", LITERAL_DICTIONARY)
     assert report["unresolvedAscii"] == ["Guardrail"]
+
+
+# ─── a hyphen joining alphanumerics is inside a token, not a boundary ────────
+# "B" was plucked out of the order number B-3099, which both mispronounced it
+# and disarmed the guard that stops A-2041 from being read 에이 이천사십일.
+
+
+def test_a_letter_is_not_taken_out_of_an_identifier() -> None:
+    dictionary = [{"from": "B", "to": "비"}]
+    assert apply_pronunciation("주문 B-3099를 조회합니다.", dictionary) == (
+        "주문 B-3099를 조회합니다."
+    )
+
+
+def test_a_standalone_letter_is_still_read() -> None:
+    dictionary = [{"from": "B", "to": "비"}]
+    assert apply_pronunciation("워커 B는 환불 불가라고 합니다.", dictionary) == (
+        "워커 비는 환불 불가라고 합니다."
+    )
+
+
+def test_a_term_is_not_taken_out_of_a_hyphenated_compound() -> None:
+    # Leaving Sub-Agent whole keeps it visible as an unresolved term instead of
+    # silently becoming "Sub-에이전트", which is neither language.
+    dictionary = [{"from": "Agent", "to": "에이전트"}]
+    assert apply_pronunciation("Sub-Agent를 봅니다.", dictionary) == "Sub-Agent를 봅니다."
+
+
+def test_sentence_punctuation_is_not_a_joiner() -> None:
+    dictionary = [{"from": "Agent", "to": "에이전트"}]
+    assert apply_pronunciation("이것이 Agent. 다음으로.", dictionary) == "이것이 에이전트. 다음으로."
+
+
+def test_an_entry_that_contains_a_hyphen_still_matches() -> None:
+    dictionary = [{"from": "GPT-4", "to": "지피티 포"}]
+    assert apply_pronunciation("GPT-4랑 비교합니다.", dictionary) == "지피티 포랑 비교합니다."
+
+
+def test_a_number_hyphenated_to_a_letter_is_left_for_the_identifier_guard() -> None:
+    # Reading only the number half turned B-3099 into "B-삼천구십구". The guard
+    # in korean_naturalness stops the run on such a token; the pronunciation
+    # layer must not quietly half-answer it first.
+    assert apply_pronunciation("주문 B-3099를 조회합니다.", []) == "주문 B-3099를 조회합니다."
+
+
+def test_a_plain_number_range_is_still_read() -> None:
+    # Only a letter on the far side of the hyphen means "identifier". A range of
+    # digits is a number, and §21 is explicit that a number left as digits is a
+    # number the model gets to guess at.
+    assert apply_pronunciation("2020-2024년 사이입니다.", []) == "이천이십-이천이십사 년 사이입니다."
