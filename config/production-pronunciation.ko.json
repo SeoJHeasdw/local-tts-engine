@@ -799,5 +799,13 @@
     "from": "Yes.",
     "to": "Yes.",
     "literal": true
+  },
+  {
+    "from": "GPT4o",
+    "to": "지피티 포오"
+  },
+  {
+    "from": "GPT4",
+    "to": "지피티 포"
   }
 ]
