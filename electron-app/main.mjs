@@ -511,6 +511,7 @@ async function validateResult({ sourceDir, renderDir, options, studio }) {
     audioPath: manifest.audioPath,
     videoPath,
     durationMs: Number(manifest.durationMs),
+    naturalness: manifest.naturalness || null,
     voiceQuality,
     voiceFindings,
     needsReview: voiceQuality?.needsReview || [],

@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .korean_naturalness import korean_naturalness_preflight
+
 
 ASCII_TOKEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])"
@@ -23,8 +25,10 @@ QWEN_MODEL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 COUNTED_NUMBER_PATTERN = re.compile(
-    r"(?<![\d.])(\d+)\s*"
-    r"(개|명|번|가지|장|페이지|초|분|시간|일|주|개월|년|원|달러|퍼센트|%|KB|MB|GB|TB)"
+    r"(?<![\d.])(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(킬로바이트|메가바이트|기가바이트|테라바이트|개월|페이지|퍼센트|달러|"
+    r"시간|회차|단계|토큰|가지|개|건|명|번|장|살|턴|초|분(?!의)|일|주|년|"
+    r"원|점|회|배|시|%|KB|MB|GB|TB)"
     r"(?![A-Za-z])",
     re.IGNORECASE,
 )
@@ -33,6 +37,9 @@ PARAMETER_SIZE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DECIMAL_NUMBER_PATTERN = re.compile(r"(?<![\d.])(\d+)\.(\d+)(?![\d.])")
+FRACTION_NUMBER_PATTERN = re.compile(
+    r"(?<![\d.])(\d+(?:,\d{3})*)\s*분의\s*(\d+(?:,\d{3})*)(?![\d.])"
+)
 # Anything still written as digits after every other rule and the dictionary
 # have run. A number left as digits is a number the model gets to guess at, and
 # guessing is what produced "호십개" in the first place. Sino-Korean is the
@@ -89,6 +96,15 @@ def korean_decimal_part(value: str) -> str:
     return "".join(_DIGITS[int(digit)] for digit in value)
 
 
+def korean_spoken_number(value: str) -> str:
+    """Render an integer or decimal in the deterministic lecture style."""
+    normalized = value.replace(",", "")
+    if "." not in normalized:
+        return korean_sino_integer(normalized)
+    integer, decimal = normalized.split(".", 1)
+    return f"{korean_sino_integer(integer)}점{korean_decimal_part(decimal)}"
+
+
 def normalize_structured_tokens(text: str) -> str:
     """Normalize model versions and number+unit forms before dictionary rules."""
 
@@ -102,18 +118,26 @@ def normalize_structured_tokens(text: str) -> str:
     def counted_number(match: re.Match[str]) -> str:
         value, unit = match.groups()
         spoken_unit = _SPOKEN_UNITS.get(unit.casefold(), unit)
-        return f"{korean_sino_integer(value)} {spoken_unit}"
+        return f"{korean_spoken_number(value)} {spoken_unit}"
 
     output = QWEN_MODEL_PATTERN.sub(qwen_name, text)
     output = PARAMETER_SIZE_PATTERN.sub(
         lambda match: f"{korean_sino_integer(match.group(1))}비",
         output,
     )
+    output = FRACTION_NUMBER_PATTERN.sub(
+        lambda match: (
+            f"{korean_sino_integer(match.group(1))}분의 "
+            f"{korean_sino_integer(match.group(2))}"
+        ),
+        output,
+    )
+    output = COUNTED_NUMBER_PATTERN.sub(counted_number, output)
     output = DECIMAL_NUMBER_PATTERN.sub(
         lambda match: f"{korean_sino_integer(match.group(1))}점{korean_decimal_part(match.group(2))}",
         output,
     )
-    return COUNTED_NUMBER_PATTERN.sub(counted_number, output)
+    return output
 
 
 def read_remaining_numbers(text: str) -> str:
@@ -162,15 +186,18 @@ def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:
 
 
 def _apply_dictionary(text: str, dictionary: list[dict[str, Any]]) -> str:
-    """Structural normalization and dictionary replacement, before the fallback.
+    """Dictionary, naturalness, and structural normalization before fallback.
 
-    Kept separate so the preflight can see which digits the dictionary chose to
-    leave alone, which is exactly the set the fallback will read.
+    Source-specific dictionary decisions run first.  That lets an explicit
+    course rule override a general counter-reading policy.  The naturalness
+    layer then chooses high-confidence Korean readings before the remaining
+    numeric structures fall back to deterministic Sino-Korean.
     """
-    output = normalize_structured_tokens(text)
+    output = text
     for item in merge_pronunciation_dictionaries(dictionary):
         output = _dictionary_pattern(item).sub(str(item["to"]), output)
-    return output
+    output = str(korean_naturalness_preflight(output)["text"])
+    return normalize_structured_tokens(output)
 
 
 def apply_pronunciation(text: str, dictionary: list[dict[str, Any]]) -> str:
@@ -184,25 +211,41 @@ def pronunciation_preflight(
     dictionary: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Return synthesis text and unresolved risky tokens for manifests and UI."""
+    dictionary_text = source_text
+    for item in merge_pronunciation_dictionaries(dictionary):
+        dictionary_text = _dictionary_pattern(item).sub(str(item["to"]), dictionary_text)
+    naturalness = korean_naturalness_preflight(dictionary_text)
     tts_text = apply_pronunciation(source_text, dictionary)
     matched: list[dict[str, str]] = []
+    dictionary_spans: list[tuple[int, int]] = []
     required: list[str] = []
     for item in merge_pronunciation_dictionaries(dictionary):
-        if _dictionary_pattern(item).search(source_text):
+        item_matches = list(_dictionary_pattern(item).finditer(source_text))
+        if item_matches:
             matched.append({"from": str(item["from"]), "to": str(item["to"])})
             required.append(str(item["to"]))
+            dictionary_spans.extend(match.span() for match in item_matches)
+
+    def covered_by_dictionary(match: re.Match[str]) -> bool:
+        start, end = match.span()
+        return any(start >= item_start and end <= item_end for item_start, item_end in dictionary_spans)
+
     if QWEN_MODEL_PATTERN.search(source_text):
         matched.append({"from": "Qwen<version>-<size>B", "to": "큐웬<버전> <크기>비"})
     counted_matches = list(COUNTED_NUMBER_PATTERN.finditer(source_text))
     counted = [match.group(0) for match in counted_matches]
     for match in QWEN_MODEL_PATTERN.finditer(source_text):
-        required.append(normalize_structured_tokens(match.group(0)))
+        required.append(apply_pronunciation(match.group(0), dictionary))
+    for match in FRACTION_NUMBER_PATTERN.finditer(source_text):
+        if not covered_by_dictionary(match):
+            required.append(apply_pronunciation(match.group(0), dictionary))
     for match in counted_matches:
-        required.append(normalize_structured_tokens(match.group(0)))
+        if not covered_by_dictionary(match):
+            required.append(apply_pronunciation(match.group(0), dictionary))
     for match in PARAMETER_SIZE_PATTERN.finditer(source_text):
-        required.append(normalize_structured_tokens(match.group(0)))
+        required.append(apply_pronunciation(match.group(0), dictionary))
     for match in DECIMAL_NUMBER_PATTERN.finditer(source_text):
-        required.append(normalize_structured_tokens(match.group(0)))
+        required.append(apply_pronunciation(match.group(0), dictionary))
     for match in BARE_NUMBER_PATTERN.finditer(_apply_dictionary(source_text, dictionary)):
         required.append(korean_sino_integer(match.group(1)))
     return {
@@ -210,6 +253,8 @@ def pronunciation_preflight(
         "ttsText": tts_text,
         "changed": source_text != tts_text,
         "dictionaryMatches": matched,
+        "naturalnessChecks": naturalness["checks"],
+        "naturalnessWarnings": naturalness["warnings"],
         "normalizedNumbers": counted,
         "requiredPronunciations": list(dict.fromkeys(required)),
         "unresolvedAscii": sorted(set(ASCII_TOKEN_PATTERN.findall(tts_text)), key=str.casefold),

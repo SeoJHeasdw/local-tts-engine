@@ -40,6 +40,12 @@ def test_later_dictionary_really_overrides_and_longer_term_wins() -> None:
     assert apply_pronunciation("RAG와 Multi-Agent", merged) == "래그와 멀티 에이전트"
 
 
+def test_a_specific_dictionary_entry_overrides_the_naturalness_policy() -> None:
+    dictionary = [{"from": "10개", "to": "십 개"}]
+
+    assert apply_pronunciation("10개를 읽습니다", dictionary) == "십 개를 읽습니다"
+
+
 def test_korean_sino_integer_handles_course_scale_values() -> None:
     assert korean_sino_integer(0) == "영"
     assert korean_sino_integer(50) == "오십"
@@ -76,6 +82,14 @@ def test_production_dictionary_covers_every_term_the_user_reported() -> None:
     assert rules["RAG"] == "래그"
     assert rules["IBM"] == "아이비엠"
     assert rules["Meta"] == "메타"
+    assert rules["A-2041"] == "에이 이공사일"
+    assert rules["K-2314"] == "케이 이삼일사"
+    assert rules["GPT-4"] == "지피티 포"
+    assert rules["n8n"] == "엔에잇엔"
+    assert rules["4o"] == "포오"
+    assert rules["L01"] == "엘 공일"
+    assert rules["HTTP"] == "에이치티티피"
+    assert rules["API"] == "에이피아이"
 
     reading = apply_pronunciation("IBM과 Meta는 Qwen3.6-27B를 씁니다.", dictionary)
     assert reading == "아이비엠과 메타는 큐웬삼점육 이십칠비를 씁니다."
@@ -90,9 +104,32 @@ def test_model_name_joins_the_version_and_keeps_one_space_before_the_size() -> N
 
 def test_counted_units_are_separated_from_their_number() -> None:
     assert apply_pronunciation("같은 50개라도", []) == "같은 오십 개라도"
-    assert apply_pronunciation("3가지 방법", []) == "삼 가지 방법"
+    assert apply_pronunciation("3가지 방법", []) == "세 가지 방법"
     assert apply_pronunciation("12페이지", []) == "십이 페이지"
+    assert apply_pronunciation("6개월", []) == "육 개월"
     assert apply_pronunciation("8GB 메모리", []) == "팔 기가바이트 메모리"
+    assert apply_pronunciation("4토큰, 5점, 4회차", []) == "사 토큰, 오 점, 사 회차"
+    assert apply_pronunciation("5.62초, 1.3배", []) == "오점육이 초, 일점삼 배"
+
+
+def test_page_148_uses_a_natural_counter_reading_before_asr_review() -> None:
+    source = "방금 본 10개, 100개, 1000개 그래프도 모델 하나를 고정해 놓고 그린 거예요."
+
+    report = pronunciation_preflight(source, [])
+
+    assert report["ttsText"] == (
+        "방금 본 열 개, 백 개, 천 개 그래프도 모델 하나를 고정해 놓고 그린 거예요."
+    )
+    assert report["requiredPronunciations"] == ["열 개", "백 개", "천 개"]
+    assert report["naturalnessChecks"] == [
+        {
+            "source": "10개",
+            "reading": "열 개",
+            "number": 10,
+            "counter": "개",
+            "rule": "native-counter-under-100",
+        }
+    ]
 
 
 def test_required_pronunciations_list_what_the_reader_must_be_heard_saying() -> None:
@@ -110,7 +147,7 @@ def test_a_number_left_as_digits_is_read_rather_than_guessed_at() -> None:
     a model guessing at a number is what produced 호십개. Sino-Korean is the
     default reading in lecture narration."""
     assert apply_pronunciation("50이라는 숫자", []) == "오십이라는 숫자"
-    assert apply_pronunciation("설명서까지 160토큰이라고 했죠", []) == "설명서까지 백육십토큰이라고 했죠"
+    assert apply_pronunciation("설명서까지 160토큰이라고 했죠", []) == "설명서까지 백육십 토큰이라고 했죠"
     assert apply_pronunciation("오십 개면 8천 토큰입니다", []) == "오십 개면 팔천 토큰입니다"
     assert apply_pronunciation("4천억 개의 숫자", []) == "사천억 개의 숫자"
     assert apply_pronunciation("40 대 1입니다", []) == "사십 대 일입니다"
@@ -140,7 +177,49 @@ def test_thousands_separators_are_read_as_one_number() -> None:
 
 def test_every_number_a_reader_must_say_is_listed_for_the_reviewer() -> None:
     report = pronunciation_preflight("설명서까지 160토큰, 50이라는 숫자", [])
-    assert report["ttsText"] == "설명서까지 백육십토큰, 오십이라는 숫자"
-    assert "백육십" in report["requiredPronunciations"]
+    assert report["ttsText"] == "설명서까지 백육십 토큰, 오십이라는 숫자"
+    assert "백육십 토큰" in report["requiredPronunciations"]
     assert "오십" in report["requiredPronunciations"]
+    assert report["unresolvedNumbers"] == []
+
+
+def test_fractions_are_not_misread_as_minutes() -> None:
+    report = pronunciation_preflight("Context가 3분의 1, 즉 5분의 1보다 큽니다", [])
+
+    assert report["ttsText"] == "Context가 삼분의 일, 즉 오분의 일보다 큽니다"
+    assert report["requiredPronunciations"] == ["삼분의 일", "오분의 일"]
+
+
+def test_a_contextual_dictionary_rule_owns_the_number_inside_it() -> None:
+    report = pronunciation_preflight(
+        "서류를 100장 주면 3장 주는 것보다 어렵습니다",
+        [{"from": "3장 주는", "to": "세 장 주는"}],
+    )
+
+    assert report["ttsText"] == "서류를 백 장 주면 세 장 주는 것보다 어렵습니다"
+    assert report["requiredPronunciations"] == ["세 장 주는", "백 장"]
+
+
+def test_ch02_risky_number_and_identifier_corpus_has_explicit_readings() -> None:
+    import json
+    from pathlib import Path
+
+    from local_tts_engine.course_pilot import LOCAL_PRONUNCIATION_PATH
+
+    dictionary = json.loads(Path(LOCAL_PRONUNCIATION_PATH).read_text(encoding="utf-8"))
+    source = (
+        "Context는 3분의 1이고, 3살짜리와 상담 40건을 봅니다. "
+        "1턴, 2턴, 3턴째에 4토큰과 5.62초를 기록합니다. "
+        "주문 A-2041, HTTP 200, API, GPT-4와 GPT-4o도 확인합니다."
+    )
+
+    report = pronunciation_preflight(source, dictionary)
+
+    assert report["ttsText"] == (
+        "컨텍스트는 삼분의 일이고, 세 살짜리와 상담 마흔 건을 봅니다. "
+        "한 턴, 두 턴, 세 턴째에 사 토큰과 오점육이 초를 기록합니다. "
+        "주문 에이 이공사일, 에이치티티피 이백, 에이피아이, "
+        "지피티 포와 지피티 포오도 확인합니다."
+    )
+    assert report["naturalnessWarnings"] == []
     assert report["unresolvedNumbers"] == []

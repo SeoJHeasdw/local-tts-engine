@@ -21,6 +21,7 @@ from local_tts_engine.speech_quality import (
     chunk_severity,
     comparison_text,
     evaluate_candidate,
+    lexical_pronunciation_checks,
     phonetic_error_rate,
     quality_summary,
 )
@@ -135,6 +136,53 @@ def test_a_dropped_sentence_is_still_a_failure(clip_for) -> None:
         dictionary=DICTIONARY,
     )
     assert "받아쓰기 불일치" in evaluation["failures"]
+
+
+def test_a_single_wrong_word_cannot_hide_inside_a_long_chunk(clip_for) -> None:
+    expected = (
+        "사용자와 자원과 위험 수준에 따라 행동의 바깥선을 그려야 합니다. "
+        "그래야 자율성을 안전하게 운영할 수 있습니다. 이 문장은 통째로 한 레슨이 됩니다."
+    )
+    recognized = expected.replace("운영할", "운전할")
+
+    evaluation = evaluate_candidate(
+        expected_text=expected,
+        recognized_text=recognized,
+        audio_path=clip_for(expected),
+    )
+
+    assert evaluation["phoneticErrorRate"] < MAX_PHONETIC_ERROR_RATE
+    assert "단어 발음 확인 필요" in evaluation["warnings"]
+    assert evaluation["lexicalChecks"] == [
+        {
+            "term": "운영할",
+            "distance": pytest.approx(1 / 3),
+            "expectedCount": 1,
+            "heardCount": 0,
+            "status": "warning",
+            "reason": "단어 발음 확인 필요",
+            "kind": "lexical",
+        }
+    ]
+
+
+def test_spacing_only_asr_variation_does_not_create_a_local_warning() -> None:
+    assert lexical_pronunciation_checks(
+        "여기서는 실행하면 안 됩니다",
+        "여기서는 실행하면 안됩니다",
+    ) == []
+
+
+def test_a_locally_missing_word_is_named_even_when_the_sentence_is_long() -> None:
+    expected = (
+        "승인 패킷에는 행동과 대상 주문과 금액 그리고 예상 영향이 함께 들어갑니다. "
+        "이 정보가 있어야 사람이 안전하게 판단할 수 있습니다."
+    )
+    recognized = expected.replace("예상 영향이 ", "")
+
+    checks = lexical_pronunciation_checks(expected, recognized)
+
+    assert any(check["term"] == "영향이" and check["status"] == "failed" for check in checks)
 
 
 def test_an_empty_transcript_is_a_failure(clip_for) -> None:

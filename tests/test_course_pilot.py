@@ -164,6 +164,8 @@ def test_forced_pause_parts_merge_back_into_one_visual_step() -> None:
             "chapter": "ch02", "slide_id": "camera-in", "step": 2,
             "key": "part-1", "source_text": "들어갑니다.", "tts_text": "들어갑니다.",
             "part_count": 2, "pause_before_ms": 0,
+            "naturalness_checks": ("10개 → 열 개",),
+            "naturalness_warnings": (),
             "speechStartMs": 100, "speechEndMs": 500,
             "alignment": {"words": [{"text": "들어갑니다", "startMs": 100, "endMs": 500}]},
             "chunkKey": "chunk-a", "audioPath": "/tmp/a.wav", "hash": "hash-a",
@@ -172,6 +174,8 @@ def test_forced_pause_parts_merge_back_into_one_visual_step() -> None:
             "chapter": "ch02", "slide_id": "camera-in", "step": 2,
             "key": "part-2", "source_text": "자, 이제 안입니다.", "tts_text": "자, 이제 안입니다.",
             "part_count": 2, "pause_before_ms": 2_000,
+            "naturalness_checks": ("4명 → 네 명",),
+            "naturalness_warnings": (),
             "speechStartMs": 2_650, "speechEndMs": 3_200,
             "alignment": {"words": [{"text": "자", "startMs": 2_650, "endMs": 2_800}]},
             "chunkKey": "chunk-b", "audioPath": "/tmp/b.wav", "hash": "hash-b",
@@ -186,6 +190,7 @@ def test_forced_pause_parts_merge_back_into_one_visual_step() -> None:
     assert merged[0]["forcedPauses"] == [
         {"durationMs": 2_000, "nextSpeechStartMs": 2_650}
     ]
+    assert merged[0]["naturalness_checks"] == ("10개 → 열 개", "4명 → 네 명")
     assert [word["startMs"] for word in merged[0]["alignment"]["words"]] == [100, 2_650]
 
 

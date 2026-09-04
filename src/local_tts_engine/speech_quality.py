@@ -21,6 +21,7 @@ of being told the production failed.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,16 @@ MAX_CLIPPING_RATIO = 0.001
 # what a human ear is for.
 PRONUNCIATION_MATCH_DISTANCE = 0.15
 PRONUNCIATION_WARNING_DISTANCE = 0.34
+
+# Whole-utterance PER is intentionally tolerant of ASR spelling differences,
+# but that means one wrong word can disappear inside a 300-character chunk.
+# A second local gate checks sufficiently long Hangul words as substrings. It is
+# looser than an explicitly required pronunciation, because inflection and ASR
+# normalization can legitimately vary at word boundaries.
+MIN_LEXICAL_KEY_LENGTH = 6
+LEXICAL_WARNING_DISTANCE = 0.24
+LEXICAL_FAILURE_DISTANCE = 0.55
+HANGUL_WORD_PATTERN = re.compile(r"[가-힣]+")
 
 FAILURE_PENALTY = 25.0
 WARNING_PENALTY = 6.0
@@ -175,6 +186,78 @@ def check_pronunciation(
     return record
 
 
+def lexical_pronunciation_checks(
+    expected_text: str,
+    recognized_text: str,
+    dictionary: list[dict[str, Any]] | None = None,
+    excluded_pronunciations: tuple[str, ...] | list[str] = (),
+) -> list[dict[str, Any]]:
+    """Find a local word omission or substitution hidden by whole-text PER.
+
+    Explicit dictionary and numeric pronunciations keep their stricter checks;
+    their component words are excluded here to avoid duplicate verdicts.
+    Only non-OK records are returned so manifests stay compact.
+    """
+    expected_value = apply_pronunciation(expected_text, dictionary or [])
+    recognized_value = apply_pronunciation(recognized_text, dictionary or [])
+    expected_keys = phonetic_variants(expected_value)
+    recognized_keys = phonetic_variants(recognized_value) or ("",)
+    excluded = {
+        word
+        for pronunciation in excluded_pronunciations
+        for word in HANGUL_WORD_PATTERN.findall(
+            apply_pronunciation(pronunciation, dictionary or [])
+        )
+    }
+    checks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for term in HANGUL_WORD_PATTERN.findall(expected_value):
+        if term in seen or any(
+            term.startswith(excluded_term) or excluded_term.startswith(term)
+            for excluded_term in excluded
+        ):
+            continue
+        seen.add(term)
+        term_keys = tuple(key for key in phonetic_variants(term) if key)
+        if not term_keys or max(map(len, term_keys)) < MIN_LEXICAL_KEY_LENGTH:
+            continue
+        distance = min(
+            pronunciation_distance(term_key, recognized_key)
+            for term_key in term_keys
+            for recognized_key in recognized_keys
+        )
+        expected_count = max(
+            count_pronunciation_matches(term_key, expected_key, PRONUNCIATION_MATCH_DISTANCE)
+            for term_key in term_keys
+            for expected_key in expected_keys or ("",)
+        )
+        heard_count = max(
+            count_pronunciation_matches(term_key, recognized_key, PRONUNCIATION_MATCH_DISTANCE)
+            for term_key in term_keys
+            for recognized_key in recognized_keys
+        )
+        if distance > LEXICAL_FAILURE_DISTANCE:
+            status, reason = "failed", "단어 누락 또는 오독"
+        elif distance > LEXICAL_WARNING_DISTANCE:
+            status, reason = "warning", "단어 발음 확인 필요"
+        elif heard_count < expected_count:
+            status, reason = "warning", "단어 일부 누락"
+        else:
+            continue
+        checks.append(
+            {
+                "term": term,
+                "distance": round(distance, 6),
+                "expectedCount": expected_count,
+                "heardCount": heard_count,
+                "status": status,
+                "reason": reason,
+                "kind": "lexical",
+            }
+        )
+    return checks
+
+
 def waveform_metrics(audio_path: Path) -> dict[str, float | int]:
     """Measure inexpensive acoustic failure signals from a mono mixdown."""
     audio, sample_rate = sf.read(audio_path, dtype="float32", always_2d=True)
@@ -222,10 +305,17 @@ def evaluate_candidate(
     waveform = waveform_metrics(audio_path)
     duration_seconds = float(waveform["durationMs"]) / 1000
     pace = len(expected) / duration_seconds if duration_seconds else float("inf")
-    checks = [
+    required_checks = [
         check_pronunciation(term, expected_text, recognized_text, dictionary)
         for term in required_pronunciations
     ]
+    lexical_checks = lexical_pronunciation_checks(
+        expected_text,
+        recognized_text,
+        dictionary,
+        required_pronunciations,
+    )
+    checks = [*required_checks, *lexical_checks]
     failures: list[str] = []
     warnings: list[str] = []
     if not expected:
@@ -266,6 +356,7 @@ def evaluate_candidate(
         "recognizedText": recognized_text.strip(),
         "requiredPronunciations": list(required_pronunciations),
         "pronunciationChecks": checks,
+        "lexicalChecks": lexical_checks,
         "missingPronunciations": unheard,
         "characterErrorRate": round(cer, 6),
         "phoneticErrorRate": round(per, 6),

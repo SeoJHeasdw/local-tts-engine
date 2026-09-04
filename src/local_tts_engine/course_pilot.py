@@ -59,7 +59,10 @@ from .pronunciation import (
 from .speech_quality import (
     ASR_LICENSE,
     ASR_REPOSITORY,
+    LEXICAL_FAILURE_DISTANCE,
+    LEXICAL_WARNING_DISTANCE,
     MAX_AUTOMATIC_ATTEMPTS,
+    MIN_LEXICAL_KEY_LENGTH,
     better_evaluation,
     choose_best_candidate,
     chunk_severity,
@@ -142,6 +145,7 @@ class CourseEntry:
 
     source_text: 자막용 원문 (발음 치환 전)
     tts_text:    TTS 입력용 텍스트 (발음 치환 후)
+    naturalness_checks: 생성 전에 고유어/한자어 읽기를 결정한 기록
     """
 
     chapter: str        # 예: "ch00"
@@ -154,6 +158,8 @@ class CourseEntry:
     part_count: int = 1       # 같은 스텝 안의 전체 음성 조각 수
     pause_before_ms: int = 0  # 이 조각 직전에 삽입할 강제 무음
     pronunciation_matches: tuple[str, ...] = ()
+    naturalness_checks: tuple[str, ...] = ()
+    naturalness_warnings: tuple[str, ...] = ()
     required_pronunciations: tuple[str, ...] = ()
     unresolved_tokens: tuple[str, ...] = ()
 
@@ -656,6 +662,11 @@ def course_entries(
                             f"{item['from']} → {item['to']}"
                             for item in preflight["dictionaryMatches"]
                         ),
+                        naturalness_checks=tuple(
+                            f"{item['source']} → {item['reading']}"
+                            for item in preflight["naturalnessChecks"]
+                        ),
+                        naturalness_warnings=tuple(preflight["naturalnessWarnings"]),
                         required_pronunciations=tuple(preflight["requiredPronunciations"]),
                         unresolved_tokens=tuple(
                             [*preflight["unresolvedAscii"], *preflight["unresolvedNumbers"]]
@@ -974,6 +985,16 @@ def merge_step_record_parts(records: list[dict[str, Any]]) -> list[dict[str, Any
             raise RuntimeError(f"{record['key']}의 분할 음성에 강제 무음이 없습니다.")
         previous["source_text"] = f"{previous['source_text']} {record['source_text']}"
         previous["tts_text"] = f"{previous['tts_text']} {record['tts_text']}"
+        for field in (
+            "pronunciation_matches",
+            "naturalness_checks",
+            "naturalness_warnings",
+            "required_pronunciations",
+            "unresolved_tokens",
+        ):
+            previous[field] = tuple(
+                dict.fromkeys([*previous.get(field, ()), *record.get(field, ())])
+            )
         previous["speechEndMs"] = int(record["speechEndMs"])
         previous["alignment"]["words"].extend(record["alignment"]["words"])
         previous["chunkKeys"].append(record["chunkKey"])
@@ -1197,6 +1218,20 @@ def synthesize_excerpt(
         start_slide,
         end_slide_number=end_page,
     )
+    naturalness_issues = [
+        (entry, warning)
+        for entry in entries
+        for warning in entry.naturalness_warnings
+    ]
+    if naturalness_issues:
+        details = "; ".join(
+            f"{entry.slide_number}페이지 {warning}"
+            for entry, warning in naturalness_issues[:8]
+        )
+        remaining = len(naturalness_issues) - 8
+        if remaining > 0:
+            details += f"; 외 {remaining}건"
+        raise ValueError(f"한국어 자연스러움 사전검사 실패: {details}")
     chunks = group_course_entries(entries)
     pronunciation = course_pronunciation_dictionary(source_project)
     reference_text = reference_text_path.read_text(encoding="utf-8").strip()
@@ -1289,7 +1324,7 @@ def synthesize_excerpt(
         ) & 0xFFFFFFFF
         cache_hash = stable_digest(
             {
-                "schemaVersion": 7,
+                "schemaVersion": 9,
                 "model": spec.repository,
                 "modelRevision": revision,
                 "settings": {"language": spec.language, **settings},
@@ -1696,7 +1731,7 @@ def synthesize_excerpt(
     ]
 
     metadata = {
-        "schemaVersion": 7,
+        "schemaVersion": 9,
         "cachePolicy": "enabled" if use_cache else "disabled",
         "title": (
             f"강의 {start_page}~{end_page}페이지 {model_key} 묶음"
@@ -1727,6 +1762,32 @@ def synthesize_excerpt(
                 if item.unresolved_tokens
             ],
         },
+        "naturalness": {
+            "policy": "ko-counter-v1",
+            "changedEntries": sum(bool(item.naturalness_checks) for item in selected_entries),
+            "checks": [
+                {
+                    "chapter": item.chapter,
+                    "slideId": item.slide_id,
+                    "slideNumber": item.slide_number,
+                    "step": item.step,
+                    "changes": list(item.naturalness_checks),
+                }
+                for item in selected_entries
+                if item.naturalness_checks
+            ],
+            "warnings": [
+                {
+                    "chapter": item.chapter,
+                    "slideId": item.slide_id,
+                    "slideNumber": item.slide_number,
+                    "step": item.step,
+                    "messages": list(item.naturalness_warnings),
+                }
+                for item in selected_entries
+                if item.naturalness_warnings
+            ],
+        },
         "quality": {
             "enabled": automatic_quality,
             "model": ASR_REPOSITORY if automatic_quality else None,
@@ -1734,6 +1795,12 @@ def synthesize_excerpt(
             "license": ASR_LICENSE if automatic_quality else None,
             "maxAttempts": quality_attempts if automatic_quality else 1,
             "secondOpinion": automatic_quality,
+            "lexicalGate": {
+                "enabled": automatic_quality,
+                "minimumKeyLength": MIN_LEXICAL_KEY_LENGTH,
+                "warningDistance": LEXICAL_WARNING_DISTANCE,
+                "failureDistance": LEXICAL_FAILURE_DISTANCE,
+            },
             "summary": quality_result,
             "chunks": quality_records,
         },

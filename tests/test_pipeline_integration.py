@@ -174,6 +174,12 @@ def test_the_manifest_records_which_reader_judged_the_run(studio) -> None:
     assert quality["license"] == "MIT"
     assert quality["secondOpinion"] is True
     assert quality["maxAttempts"] == 4
+    assert quality["lexicalGate"] == {
+        "enabled": True,
+        "minimumKeyLength": 6,
+        "warningDistance": 0.24,
+        "failureDistance": 0.55,
+    }
     # The reviewer is resident with the generator, so the run reports a
     # process-wide peak rather than the generator's own figure.
     assert manifest["performance"]["residentReviewer"] is True
@@ -214,6 +220,55 @@ def test_a_transcript_spelling_a_term_its_own_way_is_not_a_mispronunciation(stud
     assert len(lecture.tts.calls) == 1, "정확히 읽은 청크를 다시 만들면 안 된다"
     assert manifest["quality"]["summary"]["clean"] is True
     assert manifest["quality"]["chunks"][0]["severity"] == "ok"
+
+
+def test_natural_counter_reading_reaches_tts_manifest_and_asr_gate(studio) -> None:
+    source = "방금 본 10개, 100개, 1000개 그래프입니다."
+    spoken = "방금 본 열 개, 백 개, 천 개 그래프입니다."
+    lecture = studio(
+        slides={"ch00": ["scale"]},
+        scripts={"ch00": f"## scale\n### 1\n{source}\n"},
+        readings={spoken: "방금 본 10개, 100개, 1000개 그래프입니다."},
+    )
+
+    manifest = lecture.run(start_page=1, end_page=1)
+
+    assert lecture.tts.calls[0]["text"] == spoken
+    assert manifest["entries"][0]["source_text"] == source
+    assert manifest["entries"][0]["tts_text"] == spoken
+    assert manifest["naturalness"]["checks"][0]["changes"] == ["10개 → 열 개"]
+    assert manifest["quality"]["summary"]["clean"] is True
+
+
+def test_an_unmapped_letter_number_identifier_stops_before_generation(studio) -> None:
+    lecture = studio(
+        slides={"ch00": ["identifier"]},
+        scripts={"ch00": "## identifier\n### 1\n주문 B-3099를 조회합니다.\n"},
+    )
+
+    with pytest.raises(ValueError, match="영문·숫자 식별자"):
+        lecture.run(start_page=1, end_page=1)
+
+    assert lecture.tts.calls == []
+
+
+def test_one_wrong_word_in_a_long_chunk_gets_another_take(studio) -> None:
+    expected = (
+        "사용자와 자원과 위험 수준에 따라 행동의 바깥선을 그려야 합니다. "
+        "그래야 자율성을 안전하게 운영할 수 있습니다. 이 문장은 통째로 한 레슨이 됩니다."
+    )
+    misread = expected.replace("운영할", "운전할")
+    lecture = studio(
+        slides={"ch00": ["local-word"]},
+        scripts={"ch00": f"## local-word\n### 1\n{expected}\n"},
+        readings={expected: [misread, expected]},
+    )
+
+    manifest = lecture.run(start_page=1, end_page=1)
+
+    assert len(lecture.tts.calls) == 2
+    assert manifest["chunks"][0]["selectedAttempt"] == 2
+    assert manifest["quality"]["summary"]["clean"] is True
 
 
 def test_a_forced_pause_splits_the_audio_and_rejoins_the_visual_step(studio) -> None:
