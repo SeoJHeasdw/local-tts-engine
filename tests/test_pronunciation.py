@@ -85,7 +85,10 @@ def test_production_dictionary_covers_every_term_the_user_reported() -> None:
     assert rules["A-2041"] == "에이 이공사일"
     assert rules["K-2314"] == "케이 이삼일사"
     assert rules["GPT-4"] == "지피티 포"
-    assert rules["n8n"] == "엔에잇엔"
+    # 2026-09-04 청취 승인: 한국 시청자 기준 엔-팔-엔으로 읽는다. 붙여 쓴
+    # "엔팔엔"은 첫소리가 M으로 들리고, "엔에잇엔"은 na세네·N.A.S.N으로 무너진다.
+    # 띄어 쓴 표기만 세 시드 모두에서 N8N으로 또렷하게 들렸다.
+    assert rules["n8n"] == "엔 팔 엔"
     assert rules["4o"] == "포오"
     assert rules["L01"] == "엘 공일"
     assert rules["HTTP"] == "에이치티티피"
