@@ -818,3 +818,37 @@ ASR 표기차(그다음/그 다음, 한 번/한번, 십 년/10년, 케이 이삼
 Python 180개, 앱 55개. 새로 덮은 영역: 판독 창 분할(짧은 클립은 통으로,
 무음에서 자르기, 무음이 없을 때, 빈 클립), 보호 구간(따옴표 영문 보존, 바깥
 용어는 계속 치환, 보호 구간 안 숫자, 여러 구간의 복원 위치), 미지정 용어 경고.
+
+## 24. 산출물 전체 삭제와 CH01 재촬영 (2026-09-04)
+
+사용자가 지금까지의 생성물을 전부 지우고 CH01부터 다시 만들기로 했다.
+`output/` 6.4GB(edits·projects·tts·videos·voices)를 삭제했다. 전부
+`.gitignore` 대상이고 git이 추적하지 않던 생성물이다.
+
+**지우지 않은 것**은 다시 만들 수 없거나 정본인 것들이다.
+
+| 경로 | 크기 | 이유 |
+| --- | --- | --- |
+| `data/private/voice/` | 688M | 불변 정본 (AGENTS.md) |
+| `artifacts/models/whisper-large-v3-turbo-asr-fp16` | 1.5G | 재다운로드 비용 |
+| `artifacts/finetune-runs/2026-08-25/jaeho-ko-r16-v1/adapters` | 67M | 현재 제작 어댑터 |
+| `artifacts/benchmarks/2026-08-23/reference.{wav,txt}` | 1.5M | 모든 생성의 참조 음성 |
+| `artifacts/reviews/2026-09-04/existing-clips.json` | 184K | 삭제된 음성의 유일한 판독 기록 |
+
+`artifacts/`도 `.gitignore` 대상이므로 판독 보고서는 git에 없다. 거기서 뽑은
+결론은 §23에 적혀 있다.
+
+### 인터프리터가 둘이다
+
+`mlx_tune`은 `.venv`가 아니라 `.venv-train`에만 있다(DECISIONS.md 131행에서
+추론 환경과 분리하기로 한 결정). 따라서 **LoRA 어댑터를 쓰는 실행은
+`.venv-train/bin/python`이어야 한다.** 앱은 이미
+`TTS_STUDIO_BASE_PYTHON`/`TTS_STUDIO_TRAIN_PYTHON`으로 나눠 쓰고 있다
+(`electron-app/runtime-config.mjs`). 어댑터 없는 판독·테스트는 `.venv`로 된다.
+
+### 다시 찍기 전에 풀어야 할 것
+
+§23이 밝힌 대로 `래그`와 `런타임`은 사전에 한글로 적혀 있는데도 틀리게 읽힌다.
+그대로 다시 찍으면 같은 소리가 난다. `scripts/probe_term_pronunciation.py`가
+한 용어의 여러 표기를 실제 문장 안에서 생성하고 되읽어 어느 표기가 목표 소리로
+읽히는지 측정한다. 제작에는 아무것도 바꾸지 않고 후보 클립과 보고서만 남긴다.
