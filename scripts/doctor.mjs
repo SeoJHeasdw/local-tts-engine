@@ -80,6 +80,9 @@ async function buildReport() {
     courseScripts: await exists(path.join(deckRoot, "script/course")),
     captionRunner: await exists(path.join(deckRoot, "tools/captions.mjs")),
     captureRunner: await exists(path.join(deckRoot, "tools/capture.mjs")),
+    productionRunner: await exists(path.join(deckRoot, "tools/production.mjs"))
+      && await exists(path.join(deckRoot, "tools/preflight.mjs")),
+    sourceCompiler: await exists(path.join(deckRoot, "node_modules/typescript/package.json")),
   };
   const capabilities = {
     textVoice: checks.appleSilicon && checks.trainPython && checks.ffprobe
@@ -88,7 +91,8 @@ async function buildReport() {
     courseVideo: checks.appleSilicon && checks.basePython && checks.trainPython
       && checks.node && checks.ffmpeg && checks.ffprobe && checks.referenceAudio
       && checks.referenceText && checks.adapter && checks.courseConfig
-      && checks.qualityModel && checks.courseScripts && checks.captionRunner && checks.captureRunner,
+      && checks.qualityModel && checks.courseScripts && checks.captionRunner && checks.captureRunner
+      && checks.productionRunner && checks.sourceCompiler,
   };
   const basePythonOutput = executableOutput(tools.basePython);
   const trainPythonOutput = executableOutput(tools.trainPython);
@@ -135,6 +139,8 @@ function printReport(report) {
     courseScripts: "강의 대본",
     captionRunner: "자막 자동화 도구",
     captureRunner: "영상 촬영 도구",
+    productionRunner: "강의 입력 고정·검사 도구",
+    sourceCompiler: "강의 소스 분석 도구",
   };
   console.log("Voice Studio 환경 진단");
   console.log(`기기: ${report.machine}`);

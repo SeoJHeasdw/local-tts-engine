@@ -26,21 +26,40 @@ import {
   voiceQualityFindings,
 } from "./pipeline-utils.mjs";
 
-test("기본 작업은 제작 LoRA v1 0.6과 30초 미리보기다", () => {
+test("기본 작업은 제작 LoRA v1 0.6과 레슨 전체 제작이다", () => {
   const options = normalizeOptions({ name: "lecture-a" });
   assert.equal(options.voiceMode, "finetuned");
   assert.equal(options.adapterScale, 0.6);
-  assert.equal(options.mode, "preview");
-  assert.equal(options.targetSeconds, 30);
+  assert.equal(options.mode, "lesson");
+  assert.equal(options.targetSeconds, 0);
   assert.equal(options.startPage, 1);
+  assert.equal(options.endPage, 1);
+  assert.equal(options.chapterMode, "single");
   assert.equal(options.deliverable, "video");
 });
 
-test("페이지 묶음은 시작과 끝 범위를 보존한다", () => {
-  const options = normalizeOptions({ name: "bundle-a", mode: "bundle", startPage: 25, endPage: 81 });
+test("페이지 직접 선택은 시작과 끝 범위를 보존한다", () => {
+  const options = normalizeOptions({ name: "bundle-a", mode: "page", startPage: 25, endPage: 81 });
+  assert.equal(options.mode, "page");
   assert.equal(options.startPage, 25);
   assert.equal(options.endPage, 81);
-  assert.throws(() => normalizeOptions({ name: "bad", mode: "bundle", startPage: 81, endPage: 25 }));
+  assert.throws(() => normalizeOptions({ name: "bad", mode: "page", startPage: 81, endPage: 25 }));
+});
+
+test("챕터 전체는 한 영상 또는 레슨 단위 제작을 구분한다", () => {
+  const options = normalizeOptions({
+    name: "chapter-a",
+    mode: "chapter",
+    chapter: "ch01",
+    chapterMode: "lesson",
+    startPage: 12,
+    endPage: 128,
+  });
+  assert.equal(options.mode, "chapter");
+  assert.equal(options.chapter, "ch01");
+  assert.equal(options.chapterMode, "lesson");
+  assert.equal(options.startPage, 12);
+  assert.equal(options.endPage, 128);
 });
 
 test("manifest의 실제 마지막 스텝으로 preset 범위를 만든다", () => {
@@ -211,6 +230,23 @@ test("재생성 권장과 확인 권장을 구분해 기록한다", () => {
 test("검수 기록이 없는 매니페스트는 조용히 빈 목록을 낸다", () => {
   assert.deepEqual(voiceQualityFindings({}), []);
   assert.deepEqual(voiceQualityFindings({ quality: { chunks: [] } }), []);
+});
+
+test("끊어읽기만 남으면 청크 대신 해당 단어의 영상 시각을 표시한다", () => {
+  const manifest = {
+    chunks: [{ key: "a", startMs: 12_300, endMs: 25_000 }],
+    quality: { chunks: [{ chunkKey: "a", slideNumber: 148, severity: "warning", selected: {
+      passed: false, failures: [], warnings: ["단어 내부 끊김 확인 필요"],
+      prosody: { checks: [{ term: "똑똑한", status: "warning", startMs: 2000, endMs: 3500 }] },
+    } }] },
+  };
+  const [finding] = voiceQualityFindings(manifest);
+  assert.equal(finding.startMs, 14_300);
+  assert.equal(finding.endMs, 15_800);
+  assert.deepEqual(finding.terms, [{ term: "똑똑한", status: "warning" }]);
+  // A pronunciation failure elsewhere in the chunk still needs the whole clip.
+  manifest.quality.chunks[0].selected.failures.push("받아쓰기 불일치");
+  assert.equal(voiceQualityFindings(manifest)[0].startMs, 12_300);
 });
 
 test("합격·불합격만 알던 예전 기록도 읽는다", () => {

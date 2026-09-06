@@ -236,6 +236,11 @@ async function assertRuntime(options, studio = runtimePaths(options.paths), requ
     );
   }
   if (requirements.node) required.push(["Node.js", runtimeTools.node]);
+  if (requirements.productionInput) required.push(
+    ["강의 입력 고정 도구", path.join(studio.deckRoot, "tools/production.mjs")],
+    ["강의 제작 전 검사", path.join(studio.deckRoot, "tools/preflight.mjs")],
+    ["강의 TypeScript 도구", path.join(studio.deckRoot, "node_modules/typescript/package.json")],
+  );
   if (requirements.ffmpeg) required.push(["FFmpeg", runtimeTools.ffmpeg]);
   if (requirements.ffprobe !== false) required.push(["FFprobe", runtimeTools.ffprobe]);
   if (options.voiceMode === "finetuned") {
@@ -506,6 +511,10 @@ async function validateResult({ sourceDir, renderDir, options, studio }) {
     generatedAt: new Date().toISOString(),
     name: options.name,
     displayName: options.title,
+    sourceContract: manifest.sourceContract || null,
+    lessonReview: options.deliverable === "video"
+      ? await fs.readFile(path.join(renderDir, "lesson-review.json"), "utf8").then(JSON.parse)
+      : null,
     sourceDir,
     renderDir: options.deliverable === "audio" ? null : renderDir,
     audioPath: manifest.audioPath,
@@ -528,14 +537,10 @@ async function validateResult({ sourceDir, renderDir, options, studio }) {
   return report;
 }
 
-async function runPipeline(options) {
+async function runPipelineUnit(options, studio, captureSiteDir) {
   const job = activeJob;
-  const studio = runtimePaths(options.paths);
   const sourceDir = path.join(studio.ttsOutputRoot, dateFolder(), options.name);
   const renderDir = path.join(studio.captionOutputRoot, options.name);
-  const captureSiteDir = options.deliverable === "video"
-    ? path.join(renderDir, ".capture-site")
-    : null;
   const providerName = `${options.name}-provider`;
   const ttsArgs = [
     "-m", "local_tts_engine.course_pilot",
@@ -548,26 +553,9 @@ async function runPipeline(options) {
     "--model", options.modelId || "qwen3-tts",
     "--no-cache",
   ];
-  if (options.mode === "bundle") ttsArgs.push("--end-page", String(options.endPage));
+  if (options.endPage !== null) ttsArgs.push("--end-page", String(options.endPage));
   if (options.voiceMode === "finetuned") {
     ttsArgs.push("--adapter", options.adapterPath || ADAPTER, "--adapter-scale", String(options.adapterScale));
-  }
-
-  if (captureSiteDir) {
-    await fs.mkdir(renderDir, { recursive: true });
-    job.captureSiteDir = captureSiteDir;
-    await runProcess("snapshot", requireRuntimeTool("node", "Node.js"), [
-      path.join(studio.deckRoot, "node_modules/vite/bin/vite.js"),
-      "build",
-      "--mode", "capture",
-      "--outDir", captureSiteDir,
-      "--emptyOutDir",
-    ], { cwd: studio.deckRoot });
-    emit({
-      type: "log",
-      stream: "stdout",
-      text: "촬영 화면을 고정했습니다. 이제 강의 소스를 수정해도 이번 영상에는 반영되지 않습니다.\n",
-    });
   }
 
   await runProcess("voice", requireRuntimeTool("trainPython", "음성 생성 Python"), ttsArgs);
@@ -619,16 +607,114 @@ async function runPipeline(options) {
   const report = await validateResult({ sourceDir, renderDir, options, studio });
   if (activeJob !== job) return;
   if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
+  return report;
+}
+
+function chapterUnitName(base, suffix) {
+  const tail = `-${suffix}`;
+  const maxBaseLength = Math.max(1, 64 - tail.length);
+  return `${base.slice(0, maxBaseLength)}${tail}`;
+}
+
+function chapterUnits(options, catalog) {
+  if (options.mode !== "chapter" || options.chapterMode !== "lesson") return [options];
+  const lessons = (catalog.lessons || [])
+    .filter((lesson) => lesson.chapter === options.startChapter || lesson.chapter === options.chapter)
+    .sort((left, right) => Number(left.startPage) - Number(right.startPage));
+  if (!lessons.length) return [options];
+  return lessons.map((lesson) => ({
+    ...options,
+    name: chapterUnitName(options.name, lesson.id),
+    title: lesson.title,
+    mode: "lesson",
+    chapterMode: "single",
+    startPage: Number(lesson.startPage),
+    endPage: Number(lesson.endPage),
+  }));
+}
+
+function combineChapterReports(options, reports) {
+  const checks = reports.flatMap((report) => report.checks || []);
+  const summary = summarizeChecks(checks);
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    name: options.name,
+    displayName: options.title,
+    mode: options.mode,
+    chapterMode: options.chapterMode,
+    durationMs: reports.reduce((total, report) => total + Number(report.durationMs || 0), 0),
+    videoPath: reports.length === 1 ? reports[0].videoPath : null,
+    audioPath: reports.length === 1 ? reports[0].audioPath : null,
+    target: reports[0]?.target || null,
+    voiceQuality: reports.length === 1 ? reports[0].voiceQuality : null,
+    voiceFindings: reports.length === 1 ? reports[0].voiceFindings || [] : [],
+    checks,
+    summary,
+    units: reports.map((report) => ({
+      name: report.name,
+      displayName: report.displayName,
+      durationMs: report.durationMs,
+      videoPath: report.videoPath || null,
+      audioPath: report.audioPath || null,
+      target: report.target,
+      summary: report.summary,
+      voiceFindings: report.voiceFindings || [],
+    })),
+  };
+}
+
+async function runPipeline(options) {
+  const job = activeJob;
+  const originalStudio = runtimePaths(options.paths);
+  // 한 챕터를 여러 편으로 만들 때도 모든 편이 같은 입력을 사용한다.
+  // 작업 트리의 대본·장표와 narration.config를 제작 중 다시 읽거나 고치지 않는다.
+  const { createProductionInput } = await import(pathToFileURL(path.join(originalStudio.deckRoot, "tools/production.mjs")).href);
+  const input = await createProductionInput({ root: originalStudio.deckRoot,
+    destination: path.join(originalStudio.captionOutputRoot, options.name, ".production-input"),
+    from: options.startPage, to: options.endPage,
+    expectedStartId: options.inputStartId, expectedEndId: options.inputEndId,
+    build: options.deliverable === "video",
+    run: (stage, ...args) => runProcess(stage === "preflight" ? "snapshot" : stage, ...args),
+    node: requireRuntimeTool("node", "Node.js") });
+  job.productionInputDir = input.project;
+  const studio = { ...originalStudio, sourceProjectRoot: input.project, deckRoot: input.deck,
+    configPath: path.join(input.deck, "narration.config.json") };
+  emit({ type: "log", stream: "stdout",
+    text: "화면·대본·장표 순서를 함께 고정하고 제작 전 검사를 마쳤습니다. 이번 제작은 이 입력을 사용합니다.\n" });
+  const catalog = options.mode === "chapter" && options.chapterMode === "lesson"
+    ? await loadCatalog(studio)
+    : null;
+  const units = chapterUnits(options, catalog);
+  const reports = [];
+  for (const [index, unit] of units.entries()) {
+    if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
+    if (units.length > 1) {
+      emit({
+        type: "log",
+        stream: "stdout",
+        text: `챕터 레슨 단위 ${index + 1}/${units.length}: ${unit.title}를 제작합니다.\n`,
+      });
+    }
+    const report = await runPipelineUnit(unit, studio, input.site);
+    if (!report) return;
+    reports.push(report);
+  }
+  if (activeJob !== job) return;
+  if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
+  const report = units.length > 1 ? combineChapterReports(options, reports) : reports[0];
   job.state = "done";
   job.stage = "done";
   emit({ type: "complete", report });
 }
 
 async function cleanupCaptureSite(job) {
-  if (!job?.captureSiteDir) return;
-  const directory = job.captureSiteDir;
-  job.captureSiteDir = null;
-  await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
+  for (const key of ["captureSiteDir", "productionInputDir"]) {
+    const directory = job?.[key];
+    if (!directory) continue;
+    job[key] = null;
+    await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function inspectMedia(file) {
@@ -1398,7 +1484,7 @@ function registerIpc() {
       capabilities,
       setupIssues,
       catalog,
-      defaults: { adapterScale: 0.6, mode: "preview", targetSeconds: 30 },
+      defaults: { adapterScale: 0.6, mode: "lesson", targetSeconds: 0 },
     };
   });
 
@@ -1631,13 +1717,18 @@ function registerIpc() {
     const options = applyVoiceSettings(normalizeOptions(rawOptions), settings);
     const studio = runtimePaths(settings.paths);
     await assertRuntime(options, studio, {
-      node: options.deliverable !== "audio",
+      node: true,
+      productionInput: true,
       ffmpeg: options.deliverable === "video",
     });
     const catalog = await loadCatalog(studio);
     if (options.startPage > catalog.totalPages || (options.endPage && options.endPage > catalog.totalPages)) {
       throw new Error(`페이지는 1~${catalog.totalPages} 사이에서 선택해 주세요.`);
     }
+    // UI가 본 카탈로그의 ID를 보존한다. 스냅샷 때 번호가 다른 ID를 가리키면
+    // 엉뚱한 레슨을 만드는 대신 목록 새로고침을 요청한다.
+    options.inputStartId = catalog.pages.find((p) => p.page === options.startPage)?.slideId;
+    options.inputEndId = catalog.pages.find((p) => p.page === options.endPage)?.slideId;
     activeJob = {
       id: crypto.randomUUID(),
       kind: "create",

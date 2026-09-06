@@ -25,6 +25,7 @@ const stageNames = {
 };
 const orderedStages = ["voice", "captions", "capture", "verify"];
 let productionMode = "lesson";
+let chapterMode = "single";
 let catalogPages = [];
 let catalogLessons = [];
 let totalPages = 715;
@@ -75,11 +76,14 @@ function dateStamp(date = new Date()) {
 function suggestedName() {
   const start = Number($("#start-page")?.value || 1);
   const lesson = selectedLesson();
+  const chapter = selectedChapter();
   const suffix = productionMode === "lesson" && lesson
     ? lesson.id
-    : productionMode === "bundle"
+    : productionMode === "chapter" && chapter
+    ? `${chapter.id}-${chapterMode === "lesson" ? "lessons" : "full"}`
+    : productionMode === "page"
     ? `p${start}-p${Number($("#end-page")?.value || start)}`
-    : `preview-p${start}`;
+    : "course";
   return `studio-${dateStamp()}-${suffix}`;
 }
 
@@ -97,6 +101,10 @@ function selectedLesson() {
   return catalogLessons.find((lesson) => lesson.id === $("#lesson-select")?.value) || catalogLessons[0] || null;
 }
 
+function selectedChapter() {
+  return catalogChapters.find((chapter) => chapter.id === $("#chapter-select")?.value) || catalogChapters[0] || null;
+}
+
 function populateLessons() {
   const select = $("#lesson-select");
   select.replaceChildren(...catalogLessons.map((lesson) => {
@@ -107,7 +115,7 @@ function populateLessons() {
   }));
   if (catalogLessons.length) select.value = catalogLessons[0].id;
   if (catalogLessons.length) applySelectedLesson();
-  else setProductionMode("preview");
+  else setProductionMode("page");
 }
 
 function applySelectedLesson() {
@@ -124,19 +132,43 @@ function applySelectedLesson() {
   updatePageScope();
 }
 
-function chapterForPage(pageNumber) {
-  return catalogChapters.find((chapter) => pageNumber >= chapter.start && pageNumber <= chapter.end) || null;
-}
-
-function populateChapterJump() {
+function populateChapters() {
   catalogChapters = buildChapterRanges(catalogPages);
-  const select = $("#chapter-jump");
+  const select = $("#chapter-select");
   select.replaceChildren(...catalogChapters.map((chapter) => {
     const option = document.createElement("option");
     option.value = chapter.id;
     option.textContent = `${chapter.id.toUpperCase()} · ${chapter.start}–${chapter.end}페이지 · ${chapter.stepCount}스텝`;
     return option;
   }));
+  if (catalogChapters.length) {
+    select.value = catalogChapters[0].id;
+    applySelectedChapter();
+  }
+}
+
+function chapterLessons(chapter) {
+  return catalogLessons.filter((lesson) => lesson.chapter === chapter?.id);
+}
+
+function applySelectedChapter() {
+  const chapter = selectedChapter();
+  if (!chapter) {
+    $("#chapter-title").textContent = "등록된 챕터가 없습니다.";
+    $("#chapter-meta").textContent = "페이지 직접 선택을 사용해 주세요.";
+    return;
+  }
+  const lessons = chapterLessons(chapter);
+  $("#start-page").value = String(chapter.start);
+  $("#end-page").value = String(chapter.end);
+  $("#chapter-title").textContent = `${chapter.id.toUpperCase()} 전체`;
+  $("#chapter-meta").textContent = `${chapter.pageCount}페이지 · ${chapter.stepCount}스텝`;
+  $("#chapter-mode-meta").textContent = chapterMode === "lesson"
+    ? lessons.length > 1
+      ? `${lessons.length}개 레슨 영상으로 나눠 만듭니다.`
+      : "레슨 경계가 없어 챕터 전체를 한 단위로 만듭니다."
+    : "챕터 전체를 하나의 영상으로 만듭니다.";
+  updatePageScope();
 }
 
 function moveToPage(pageNumber) {
@@ -147,14 +179,12 @@ function moveToPage(pageNumber) {
 }
 
 function updateCourseNavigator(start, end) {
-  const chapter = chapterForPage(start);
-  if (chapter) $("#chapter-jump").value = chapter.id;
   $("#previous-page").disabled = start <= 1;
   $("#next-page").disabled = start >= totalPages;
-  const summary = summarizePageRange(catalogPages, start, productionMode === "bundle" ? end : start);
+  const summary = summarizePageRange(catalogPages, start, end);
   $("#scope-chapter-stat").textContent = summary.chapterLabel;
-  $("#scope-page-stat").textContent = productionMode === "bundle" ? `${summary.pageCount}페이지` : `${start}페이지 시작`;
-  $("#scope-step-stat").textContent = productionMode === "bundle" ? `${summary.stepCount}스텝` : `${summary.stepCount}스텝부터`;
+  $("#scope-page-stat").textContent = `${summary.pageCount}페이지`;
+  $("#scope-step-stat").textContent = `${summary.stepCount}스텝`;
 }
 
 function fileName(value) {
@@ -213,13 +243,17 @@ function updatePageScope() {
   $("#start-page-meta").textContent = pageMeta(start);
   $("#end-page-meta").textContent = `${pageMeta(end)} · 마지막 스텝까지`;
   const lesson = selectedLesson();
+  const chapter = selectedChapter();
+  const lessons = chapterLessons(chapter);
   $("#scope-explanation").textContent = productionMode === "lesson" && lesson
     ? `${lesson.title} 전체를 만듭니다.`
-    : productionMode === "preview"
-      ? `${start}페이지부터 약 30초 분량을 만듭니다.`
+    : productionMode === "chapter" && chapter
+      ? chapterMode === "lesson"
+        ? `${chapter.id.toUpperCase()} 전체를 ${lessons.length > 1 ? `${lessons.length}개 레슨 영상으로 나눠` : "한 편으로"} 만듭니다.`
+        : `${chapter.id.toUpperCase()} 전체를 하나의 영상으로 만듭니다.`
       : `${start}페이지부터 ${end}페이지까지 만듭니다.`;
-  $("#time-note").textContent = productionMode === "preview"
-    ? "짧게 확인한 뒤 필요한 범위로 확장하세요."
+  $("#time-note").textContent = productionMode === "chapter" && chapterMode === "lesson" && lessons.length > 1
+    ? "레슨별 결과를 각각 저장한 뒤 최근 결과에서 확인할 수 있습니다."
     : "완료되면 결과를 바로 열어 확인할 수 있습니다.";
   $("#job-name").value = suggestedName();
   updateCourseNavigator(start, end);
@@ -227,14 +261,20 @@ function updatePageScope() {
 }
 
 function setProductionMode(mode) {
-  productionMode = ["lesson", "preview", "bundle"].includes(mode) ? mode : "lesson";
+  productionMode = ["lesson", "page", "chapter"].includes(mode) ? mode : "lesson";
   $$("#mode-options button").forEach((button) => button.classList.toggle("selected", button.dataset.mode === productionMode));
   $("#lesson-panel").classList.toggle("hidden", productionMode !== "lesson");
-  $("#manual-scope").classList.toggle("hidden", productionMode === "lesson");
-  $("#range-arrow").classList.toggle("hidden", productionMode !== "bundle");
-  $("#end-page-group").classList.toggle("hidden", productionMode !== "bundle");
+  $("#chapter-panel").classList.toggle("hidden", productionMode !== "chapter");
+  $("#manual-scope").classList.toggle("hidden", productionMode !== "page");
   if (productionMode === "lesson") applySelectedLesson();
+  else if (productionMode === "chapter") applySelectedChapter();
   else updatePageScope();
+}
+
+function setChapterMode(mode) {
+  chapterMode = mode === "lesson" ? "lesson" : "single";
+  $$("#chapter-mode-options button").forEach((button) => button.classList.toggle("selected", button.dataset.chapterMode === chapterMode));
+  applySelectedChapter();
 }
 
 function paintGlobalRange() {
@@ -388,13 +428,16 @@ function formatDate(value) {
 
 function optionPayload() {
   const lesson = productionMode === "lesson" ? selectedLesson() : null;
+  const chapter = productionMode === "chapter" ? selectedChapter() : null;
   const name = $("#job-name").value.trim();
   return {
     name,
-    title: lesson?.title || `${name} 강의 영상`,
-    mode: productionMode === "preview" ? "preview" : "bundle",
+    title: lesson?.title || (chapter ? `${chapter.id.toUpperCase()} 전체` : `${name} 강의 영상`),
+    mode: productionMode,
     startPage: Number($("#start-page").value),
-    endPage: productionMode === "preview" ? null : Number($("#end-page").value),
+    endPage: Number($("#end-page").value),
+    chapter: chapter?.id || null,
+    chapterMode: productionMode === "chapter" ? chapterMode : "single",
     deliverable: $("#deliverable").value,
     burnCaptions: $("#burn-captions").checked,
   };
@@ -928,6 +971,7 @@ function handleJobEvent(event) {
   }
   if (event.type === "started") {
     latestTarget = { root: "render", name: event.options.name };
+    $("#open-latest").textContent = "영상 열기";
     $("#job-log").textContent = "";
     renderCompleteVoiceFindings([]);
     showJobView("active");
@@ -961,11 +1005,14 @@ function handleJobEvent(event) {
     const report = event.report;
     latestTarget = report.target;
     const findings = report.voiceFindings || [];
+    const unitCount = report.units?.length || 1;
     const voiceLine = findings.length
       ? ` · 목소리 확인 ${findings.length}곳`
       : report.voiceQuality ? " · 목소리 검수 통과" : "";
-    $("#complete-summary").textContent =
-      `${formatDuration(report.durationMs)} · ${report.summary.passed}개 항목 모두 통과${voiceLine}`;
+    $("#complete-summary").textContent = unitCount > 1
+      ? `${unitCount}개 영상 · ${formatDuration(report.durationMs)} 합계 · 모든 결과 검증 통과`
+      : `${formatDuration(report.durationMs)} · ${report.summary.passed}개 항목 모두 통과${voiceLine}`;
+    $("#open-latest").textContent = unitCount > 1 ? "첫 영상 열기" : "영상 열기";
     renderCompleteVoiceFindings(findings, report.videoPath ? report.target : null);
     loadOutputs();
     $("#job-name").value = suggestedName();
@@ -988,7 +1035,7 @@ async function initialize() {
   catalogPages = status.catalog?.pages || [];
   catalogLessons = status.catalog?.lessons || [];
   totalPages = Math.max(1, Number(status.catalog?.totalPages || 0));
-  populateChapterJump();
+  populateChapters();
   populateLessons();
   for (const selector of ["#start-page", "#end-page"]) {
     $(selector).max = String(totalPages);
@@ -1053,6 +1100,8 @@ async function initialize() {
 
 $$("#mode-options button").forEach((button) => button.addEventListener("click", () => setProductionMode(button.dataset.mode)));
 $("#lesson-select").addEventListener("change", applySelectedLesson);
+$("#chapter-select").addEventListener("change", applySelectedChapter);
+$$("#chapter-mode-options button").forEach((button) => button.addEventListener("click", () => setChapterMode(button.dataset.chapterMode)));
 $("#start-page").addEventListener("input", () => {
   if (Number($("#end-page").value) < Number($("#start-page").value)) {
     $("#end-page").value = $("#start-page").value;
@@ -1062,18 +1111,6 @@ $("#start-page").addEventListener("input", () => {
 $("#end-page").addEventListener("input", updatePageScope);
 $("#previous-page").addEventListener("click", () => moveToPage(Number($("#start-page").value) - 1));
 $("#next-page").addEventListener("click", () => moveToPage(Number($("#start-page").value) + 1));
-$("#chapter-jump").addEventListener("change", () => {
-  const chapter = catalogChapters.find((item) => item.id === $("#chapter-jump").value);
-  if (chapter) moveToPage(chapter.start);
-});
-$("#select-chapter-range").addEventListener("click", () => {
-  const chapter = catalogChapters.find((item) => item.id === $("#chapter-jump").value);
-  if (!chapter) return;
-  $("#start-page").value = String(chapter.start);
-  $("#end-page").value = String(chapter.end);
-  setProductionMode("bundle");
-  showToast(`${chapter.id.toUpperCase()} 전체 ${chapter.pageCount}페이지를 선택했습니다.`);
-});
 $("#deliverable").addEventListener("change", (event) => {
   $("#burn-captions").disabled = event.target.value !== "video";
   updateProductionBrief();

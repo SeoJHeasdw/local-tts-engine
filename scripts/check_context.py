@@ -17,6 +17,8 @@ REQUIRED_PATHS = [
     SOURCE_ROOT / "deck/narration/pronunciation.ko.json",
     SOURCE_ROOT / "deck/tools/captions.mjs",
     SOURCE_ROOT / "deck/tools/capture.mjs",
+    SOURCE_ROOT / "deck/tools/production.mjs",
+    SOURCE_ROOT / "deck/tools/preflight.mjs",
     SOURCE_ROOT / "deck/narration.config.json",
     VOICE_ROOT / "training/pvc/README.md",
     VOICE_ROOT / "training/pvc/manifest.json",

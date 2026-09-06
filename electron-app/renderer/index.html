@@ -58,19 +58,30 @@
               <span>범위 선택</span>
               <div class="segmented scope-tabs" id="mode-options">
                 <button type="button" data-mode="lesson" class="selected">레슨</button>
-                <button type="button" data-mode="preview">30초 미리보기</button>
-                <button type="button" data-mode="bundle">페이지 직접 선택</button>
+                <button type="button" data-mode="page">페이지 직접 선택</button>
+                <button type="button" data-mode="chapter">챕터 전체</button>
               </div>
               <div class="lesson-picker" id="lesson-panel">
                 <label for="lesson-select">레슨</label>
                 <select id="lesson-select" aria-label="만들 레슨"></select>
                 <div><strong id="lesson-title">레슨 정보를 불러오는 중입니다.</strong><small id="lesson-meta"></small></div>
               </div>
+              <div class="chapter-picker hidden" id="chapter-panel">
+                <label for="chapter-select">챕터</label>
+                <select id="chapter-select" aria-label="만들 챕터"></select>
+                <div><strong id="chapter-title">챕터 정보를 불러오는 중입니다.</strong><small id="chapter-meta"></small></div>
+                <div class="chapter-output-options">
+                  <span>촬영 단위</span>
+                  <div class="segmented" id="chapter-mode-options">
+                    <button type="button" data-chapter-mode="single" class="selected">한 영상으로 제작</button>
+                    <button type="button" data-chapter-mode="lesson">레슨 단위로 나눠 제작</button>
+                  </div>
+                  <small id="chapter-mode-meta">챕터 전체를 하나의 영상으로 만듭니다.</small>
+                </div>
+              </div>
               <div class="manual-scope hidden" id="manual-scope">
-                <div class="course-jump">
+                <div class="page-navigation">
                   <button type="button" class="page-stepper" id="previous-page" aria-label="이전 페이지">←</button>
-                  <label><span>챕터 이동</span><select id="chapter-jump" aria-label="챕터 빠른 이동"></select></label>
-                  <button type="button" class="chapter-range-button" id="select-chapter-range">챕터 전체</button>
                   <button type="button" class="page-stepper" id="next-page" aria-label="다음 페이지">→</button>
                 </div>
                 <div class="scope-panel">
@@ -79,8 +90,8 @@
                     <div class="page-input"><input id="start-page" type="number" min="1" value="1"><span id="start-page-total">/ 715</span></div>
                     <small id="start-page-meta">페이지 정보를 불러오는 중입니다.</small>
                   </div>
-                  <div class="range-arrow hidden" id="range-arrow">→</div>
-                  <div class="page-input-group hidden" id="end-page-group">
+                  <div class="range-arrow" id="range-arrow">→</div>
+                  <div class="page-input-group" id="end-page-group">
                     <label for="end-page">끝 페이지</label>
                     <div class="page-input"><input id="end-page" type="number" min="1" value="1"><span id="end-page-total">/ 715</span></div>
                     <small id="end-page-meta">마지막 스텝까지 포함</small>
@@ -92,7 +103,7 @@
                   <span id="scope-step-stat">4스텝</span>
                 </div>
               </div>
-              <p class="scope-explanation" id="scope-explanation">선택한 페이지의 0스텝부터 약 30초 분량을 만듭니다.</p>
+              <p class="scope-explanation" id="scope-explanation">선택한 레슨 전체를 만듭니다.</p>
             </div>
 
             <details class="advanced-options full">
@@ -107,7 +118,7 @@
             <button class="primary-button full" id="start-button" type="submit">
               <span>제작 시작</span><span aria-hidden="true">→</span>
             </button>
-            <p class="time-note full" id="time-note">30초 음성을 만든 뒤 실제 30초 촬영이 이어집니다.</p>
+            <p class="time-note full" id="time-note">완료되면 결과를 바로 열어 확인할 수 있습니다.</p>
           </form>
 
           <section class="card progress-card hidden" aria-live="polite">

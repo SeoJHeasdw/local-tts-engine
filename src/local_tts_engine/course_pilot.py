@@ -70,7 +70,10 @@ from .speech_quality import (
     chunk_severity,
     evaluate_candidate,
     quality_summary,
+    read_timed_words,
+    review_candidate_prosody,
 )
+from .prosody import MIN_INTERNAL_PAUSE_MS, PROSODY_POLICY, WORD_EDGE_GUARD_MS
 
 
 # ─── 프로젝트 경로 ────────────────────────────────────────────────────────────
@@ -645,9 +648,26 @@ def course_entries(
         steps = script_cache[chapter].get(slide_id)
         if not steps:
             raise ValueError(f"{chapter}/{slide_id}의 대본이 없습니다.")
-        for step in sorted(steps):
-            segments = split_forced_pause_segments(steps[step])
+        ordered_steps = sorted(steps)
+        pending_step_pause = 0
+        for step_index, step in enumerate(ordered_steps):
+            text = steps[step]
+            trailing_pause = 0
+            markers = list(FORCED_PAUSE_TOKEN_PATTERN.finditer(text))
+            if markers and not text[markers[-1].end():].strip() and step_index + 1 < len(ordered_steps):
+                # A recall question may end with [2s], with the answer in the
+                # next visual step. Keep the wait outside TTS and attach it to
+                # that next step; a marker without any following speech still
+                # follows the existing validation error.
+                marker = markers[-1]
+                trailing_pause = forced_pause_milliseconds(marker.group(0)) or 0
+                text = text[:marker.start()].strip()
+                if not text:
+                    raise ValueError("강제 무음 앞에는 읽을 문장이 있어야 합니다.")
+            segments = split_forced_pause_segments(text)
             for part_index, (source_text, pause_before_ms) in enumerate(segments):
+                if part_index == 0:
+                    pause_before_ms += pending_step_pause
                 preflight = pronunciation_preflight(source_text, pronunciation)
                 entries.append(
                     CourseEntry(
@@ -675,6 +695,7 @@ def course_entries(
                         ),
                     )
                 )
+            pending_step_pause = trailing_pause
 
     if not started:
         marker = f"{start_chapter}/{start_slide or '<first>'}"
@@ -1011,6 +1032,11 @@ def merge_step_record_parts(records: list[dict[str, Any]]) -> list[dict[str, Any
             else None
         )
         if identity != previous_identity:
+            if merged and int(record.get("pause_before_ms", 0)) > 0:
+                merged[-1]["forcedPauses"].append({
+                    "durationMs": int(record["pause_before_ms"]),
+                    "nextSpeechStartMs": int(record["speechStartMs"]),
+                })
             merged.append(
                 {
                     **record,
@@ -1113,6 +1139,29 @@ def load_or_create_alignment(
         },
     )
     return words
+
+
+def read_independent_word_times(audio_path: Path, text: str) -> list[dict[str, Any]]:
+    """Load the installed aligner only for a suspected pause, then release it.
+
+    This is independent of Whisper and does not read/write the subtitle alignment
+    cache. The normal full alignment phase still runs after TTS/ASR are released.
+    """
+    import mlx.core as mx
+    from mlx_audio.stt.utils import load_model
+    from mlx_audio.utils import get_model_path
+
+    aligner = load_model(resolve_model_path(ALIGNER_REPOSITORY, get_model_path))
+    try:
+        result = aligner.generate(audio=str(audio_path), text=text, language="English")
+        return [
+            {"text": item.text, "startMs": round(item.start_time * 1000), "endMs": round(item.end_time * 1000)}
+            for item in result.items
+        ]
+    finally:
+        del aligner
+        gc.collect()
+        mx.clear_cache()
 
 
 def resolve_chunk_take(
@@ -1491,6 +1540,7 @@ def synthesize_excerpt(
         keeps whichever reading is kinder — evidence only stands when it
         survives every attempt to read the audio.
         """
+        nonlocal quality_evaluation_ms
         def read(temperature: float) -> dict[str, Any]:
             return evaluate_candidate(
                 expected_text=chunk.tts_text,
@@ -1505,6 +1555,13 @@ def synthesize_excerpt(
         evaluation = read(0.0)
         if not evaluation["passed"]:
             evaluation = better_evaluation(evaluation, read(0.2))
+        started = time.perf_counter()
+        evaluation = review_candidate_prosody(
+            evaluation,
+            lambda path, temperature: read_timed_words(quality_model, path, temperature),
+            read_independent_word_times,
+        )
+        quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
         evaluation["hash"] = candidate["hash"]
         return evaluation
 
@@ -1864,6 +1921,14 @@ def synthesize_excerpt(
             "license": ASR_LICENSE if automatic_quality else None,
             "maxAttempts": quality_attempts if automatic_quality else 1,
             "secondOpinion": automatic_quality,
+            "prosodyGate": {
+                "enabled": automatic_quality,
+                "policy": PROSODY_POLICY,
+                "minimumPauseMs": MIN_INTERNAL_PAUSE_MS,
+                "wordEdgeGuardMs": WORD_EDGE_GUARD_MS,
+                "secondOpinion": True,
+                "confirmationModel": ALIGNER_REPOSITORY,
+            },
             "lexicalGate": {
                 "enabled": automatic_quality,
                 "minimumKeyLength": MIN_LEXICAL_KEY_LENGTH,
@@ -1876,6 +1941,10 @@ def synthesize_excerpt(
         "seed": seed,
         "settings": {"language": spec.language, **settings},
         "sourceProject": str(source_project.resolve()),
+        "sourceContract": (
+            json.loads((source_project / "production-input.json").read_text(encoding="utf-8"))["sourceContract"]
+            if (source_project / "production-input.json").is_file() else None
+        ),
         "start": {"chapter": start_chapter, "slide": start_slide},
         "targetSeconds": target_seconds,
         "pageRange": {

@@ -135,6 +135,7 @@ def timeline_from_course_manifest(
     return {
         "schemaVersion": int(manifest["schemaVersion"]),
         "generatedAt": manifest.get("generatedAt"),  # 생성 시각 (있으면 전달)
+        "sourceContract": manifest.get("sourceContract"),
         "preset": preset,
         "provider": provider,
         "startPadMs": int(manifest["timing"]["startPadMs"]),

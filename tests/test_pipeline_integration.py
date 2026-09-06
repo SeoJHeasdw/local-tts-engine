@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 import soundfile as sf
+import numpy as np
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -23,6 +24,22 @@ ONE_SLIDE = {
     "slides": {"ch00": ["intro"]},
     "scripts": {"ch00": "## intro\n### 1\n오늘은 래그를 봅니다.\n"},
 }
+
+
+def test_source_contract_survives_voice_generation_and_export(studio) -> None:
+    from local_tts_engine.export_udemy import timeline_from_course_manifest
+
+    lecture = studio(**ONE_SLIDE)
+    contract = {"schemaVersion": 1, "fingerprint": "frozen-source", "selected": [
+        {"slideId": "intro", "chapter": "ch00", "slideNumber": 1, "step": 1}
+    ]}
+    (lecture.root / "production-input.json").write_text(
+        json.dumps({"sourceContract": contract}), encoding="utf-8"
+    )
+    manifest = lecture.run(start_page=1, end_page=1)
+    timeline = timeline_from_course_manifest(manifest, {"name": "pilot"}, {"provider": "qwen3-local"})
+    assert manifest["sourceContract"] == contract
+    assert timeline["sourceContract"] == contract
 
 THREE_SLIDES = {
     "slides": {"ch00": ["intro", "middle", "outro"]},
@@ -50,6 +67,60 @@ def test_a_lecture_that_reads_correctly_costs_one_take_per_chunk(studio) -> None
     assert len(lecture.asr.calls) == 3
 
 
+def test_an_exact_english_reading_does_not_retry_a_korean_term_inside_it(studio) -> None:
+    literal = "Do my Bots share one computer?"
+    text = f"영어 표현도 함께 보겠습니다. {literal} 실행 환경입니다."
+    lecture = studio(
+        slides={"ch00": ["english"]}, scripts={"ch00": f"## english\n### 1\n{text}\n"},
+        dictionary=[
+            {"from": literal, "to": literal, "literal": True},
+            {"from": "Bots", "to": "봇츠"},
+        ],
+        readings={text: text.replace("Bots", "bots")},
+    )
+    manifest = lecture.run(start_page=1, end_page=1)
+    assert len(lecture.tts.calls) == 1
+    assert manifest["quality"]["summary"]["clean"]
+    assert manifest["quality"]["chunks"][0]["selected"]["requiredPronunciations"] == [literal]
+
+
+@pytest.mark.parametrize("internal_pause", [False, True])
+def test_a_recall_pause_at_step_end_waits_before_the_answer(studio, internal_pause) -> None:
+    from local_tts_engine.export_udemy import timeline_from_course_manifest
+
+    question = "어느 사용 방식인지 고르세요.\n[2s]"
+    if internal_pause:
+        question = "먼저 화면을 보세요.\n[1s]\n" + question
+    lecture = studio(
+        slides={"ch00": ["recall"]},
+        scripts={"ch00": f"## recall\n### 0\n{question}\n### 1\n정답은 첫 번째입니다.\n"},
+    )
+    manifest = lecture.run(start_page=1, end_page=1)
+    assert [e["step"] for e in manifest["entries"]] == [0, 1]
+    assert manifest["quality"]["summary"]["clean"]
+    assert len(manifest["chunks"]) == (3 if internal_pause else 2)
+    before, answer = manifest["chunks"][-2:]
+    assert answer["startMs"] - before["endMs"] == 2000
+    assert all("[" not in e["source_text"] and "[" not in e["tts_text"] for e in manifest["entries"])
+    pauses = manifest["entries"][0]["forcedPauses"]
+    assert [p["durationMs"] for p in pauses] == ([1000, 2000] if internal_pause else [2000])
+    assert pauses[-1]["nextSpeechStartMs"] == manifest["entries"][1]["speechStartMs"]
+    # The explicit wait is part of the assembled waveform, not a TTS request
+    # that an automatic silence check can trim or reject.
+    audio, rate = sf.read(manifest["audioPath"])
+    middle = audio[round((before["endMs"] + 100) * rate / 1000):round((answer["startMs"] - 100) * rate / 1000)]
+    assert np.max(np.abs(middle)) < 1e-6
+    timeline = timeline_from_course_manifest(manifest, {"name": "recall"}, {"provider": "qwen3-local"})
+    assert timeline["entries"][0]["forcedPauses"] == pauses
+
+
+def test_a_trailing_pause_without_a_following_step_still_stops_before_tts(studio) -> None:
+    lecture = studio(slides={"ch00": ["recall"]}, scripts={"ch00": "## recall\n### 0\n골라 보세요.\n[2s]\n"})
+    with pytest.raises(ValueError, match="뒤에는 이어서"):
+        lecture.run(start_page=1, end_page=1)
+    assert not lecture.tts.calls
+
+
 def test_a_misread_chunk_is_retried_until_it_reads_correctly(studio) -> None:
     lecture = studio(
         **THREE_SLIDES,
@@ -64,6 +135,64 @@ def test_a_misread_chunk_is_retried_until_it_reads_correctly(studio) -> None:
     assert retried["severity"] == "ok"
     assert manifest["quality"]["summary"]["ok"] is True
     assert manifest["quality"]["summary"]["retriedChunks"] == 1
+
+
+@pytest.mark.parametrize("always_paused", [False, True])
+@pytest.mark.parametrize("short_alignment", [False, True])
+def test_a_correctly_spelled_but_broken_word_is_retried_before_export(studio, monkeypatch, always_paused, short_alignment):
+    from local_tts_engine import course_pilot
+
+    lecture = studio(slides={"ch00": ["intro"]}, scripts={"ch00": "## intro\n### 1\n똑똑한 모델입니다.\n"})
+    generate = lecture.tts.generate
+    count = 0
+    def with_pause(**kwargs):
+        nonlocal count
+        count += 1
+        for result in generate(**kwargs):
+            if always_paused or count == 1:
+                cut = round(0.8 * result.sample_rate)
+                result.audio = np.concatenate([result.audio[:cut], np.zeros(round(0.4 * result.sample_rate), dtype=np.float32), result.audio[cut:]])
+            yield result
+    lecture.tts.generate = with_pause
+    timings = []
+    def timed_words(model, path, temperature):
+        timings.append(temperature)
+        return [
+            {"text": "똑", "startMs": 0, "endMs": 620, "probability": 0.98},
+            {"text": "똑한", "startMs": 1100, "endMs": 2000, "probability": 0.98},
+            {"text": "모델입니다", "startMs": 2000, "endMs": 3000, "probability": 0.98},
+        ]
+    monkeypatch.setattr(course_pilot, "read_timed_words", timed_words)
+    confirmations = []
+    original_confirmation = course_pilot.read_independent_word_times
+    def confirm(path, text):
+        confirmations.append(str(path))
+        words = original_confirmation(path, text)
+        if short_alignment:
+            words[0]["endMs"] = 500
+        return words
+    monkeypatch.setattr(course_pilot, "read_independent_word_times", confirm)
+    manifest = lecture.run(start_page=1, end_page=1, quality_attempts=2)
+    assert count == 2
+    record = manifest["quality"]["chunks"][0]
+    assert record["candidates"][0]["phoneticErrorRate"] == 0
+    assert record["candidates"][0]["prosody"]["checks"][0]["term"] == "똑똑한"
+    if short_alignment:
+        assert record["candidates"][0]["prosody"]["checks"][0]["confirmationEvidence"] == "unassigned-voiced-tail"
+    assert manifest["quality"]["summary"]["retriedChunks"] == 1
+    assert manifest["quality"]["summary"]["needsReview"] == []
+    if always_paused:
+        assert record["severity"] == "warning"
+        assert manifest["quality"]["summary"]["listenSuggested"]
+        assert timings == [0.0, 0.0]
+        assert len(confirmations) == 2
+    else:
+        assert record["selected"]["attempt"] == 2
+        assert record["severity"] == "ok"
+        assert manifest["quality"]["summary"]["clean"]
+        assert manifest["chunks"][0]["durationMs"] == record["selected"]["waveform"]["durationMs"]
+        assert timings == [0.0]
+        assert len(confirmations) == 1
 
 
 def test_a_chunk_that_never_reads_correctly_is_reported_not_raised(studio) -> None:

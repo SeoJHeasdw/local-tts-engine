@@ -2,7 +2,7 @@ import path from "node:path";
 
 const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
-export function makeJobName(now = new Date(), seconds = 30) {
+export function makeJobName(now = new Date(), seconds = null) {
   const stamp = [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, "0"),
@@ -12,7 +12,9 @@ export function makeJobName(now = new Date(), seconds = 30) {
     String(now.getMinutes()).padStart(2, "0"),
     String(now.getSeconds()).padStart(2, "0"),
   ].join("");
-  const length = seconds >= 60 ? `${Math.round(seconds / 60)}m` : `${seconds}s`;
+  const length = Number.isFinite(seconds)
+    ? seconds >= 60 ? `${Math.round(seconds / 60)}m` : `${seconds}s`
+    : "course";
   return `studio-${stamp}-${length}`;
 }
 
@@ -56,17 +58,22 @@ export function nextDisplayVideoFileName(title, existingNames = []) {
 }
 
 export function normalizeOptions(raw = {}) {
-  const mode = raw.mode === "bundle" ? "bundle" : "preview";
-  const targetSeconds = 30;
+  const mode = raw.mode === "bundle" || raw.mode === "page"
+    ? "page"
+    : ["lesson", "chapter"].includes(raw.mode)
+      ? raw.mode
+      : "lesson";
+  const targetSeconds = Number(raw.targetSeconds ?? 0);
   const startPage = Number(raw.startPage ?? 1);
-  const endPage = mode === "bundle" ? Number(raw.endPage ?? startPage) : null;
+  const endPage = Number(raw.endPage ?? startPage);
+  const chapterMode = raw.chapterMode === "lesson" ? "lesson" : "single";
   const adapterScale = Number(raw.adapterScale ?? 0.6);
   const voiceMode = raw.voiceMode === "zero" ? "zero" : "finetuned";
   const deliverable = ["audio", "captions", "video"].includes(raw.deliverable)
     ? raw.deliverable
     : "video";
   const title = String(raw.title ?? "로컬 강의 영상").trim().slice(0, 100);
-  const name = String(raw.name || makeJobName(new Date(), targetSeconds)).trim();
+  const name = String(raw.name || makeJobName()).trim();
 
   if (!SLUG_PATTERN.test(name)) {
     throw new Error("결과 이름은 영문 소문자, 숫자, 하이픈만 사용할 수 있습니다.");
@@ -74,7 +81,10 @@ export function normalizeOptions(raw = {}) {
   if (!Number.isInteger(startPage) || startPage < 1) {
     throw new Error("시작 페이지는 1 이상의 정수여야 합니다.");
   }
-  if (mode === "bundle" && (!Number.isInteger(endPage) || endPage < startPage)) {
+  if (!Number.isFinite(targetSeconds) || targetSeconds < 0) {
+    throw new Error("목표 길이는 0초 이상의 숫자여야 합니다.");
+  }
+  if (!Number.isInteger(endPage) || endPage < startPage) {
     throw new Error("끝 페이지는 시작 페이지보다 같거나 커야 합니다.");
   }
   if (voiceMode === "finetuned" && (!Number.isFinite(adapterScale) || adapterScale <= 0 || adapterScale > 1)) {
@@ -88,6 +98,8 @@ export function normalizeOptions(raw = {}) {
     targetSeconds,
     startPage,
     endPage,
+    chapter: String(raw.chapter || "").trim().toLowerCase() || null,
+    chapterMode,
     adapterScale,
     voiceMode,
     deliverable,
@@ -209,15 +221,18 @@ export function voiceQualityFindings(manifest = {}) {
       const timing = timings.get(String(chunk.chunkKey || "")) || {};
       const selected = chunk.selected || {};
       const reasons = [...(selected.failures || []), ...(selected.warnings || [])].map(String);
+      const pauses = selected.prosody?.checks || [];
+      const onlyPauses = pauses.length > 0 && reasons.every((reason) => reason === "단어 내부 끊김 확인 필요");
+      const clipStart = Number(timing.startMs || 0);
       return {
         chapter: String(chunk.chapter || ""),
         slideId: String(chunk.slideId || ""),
         slideNumber: Number(chunk.slideNumber || 0),
-        startMs: Number(timing.startMs || 0),
-        endMs: Number(timing.endMs || timing.startMs || 0),
+        startMs: onlyPauses ? clipStart + Math.min(...pauses.map((check) => check.startMs)) : clipStart,
+        endMs: onlyPauses ? clipStart + Math.max(...pauses.map((check) => check.endMs)) : Number(timing.endMs || timing.startMs || 0),
         severity,
         reasons: reasons.length ? reasons : ["자동 음성 검수 점수 미달"],
-        terms: (selected.pronunciationChecks || [])
+        terms: [...(selected.pronunciationChecks || []), ...pauses]
           .filter((check) => check?.status && check.status !== "ok")
           .map((check) => ({ term: String(check.term || ""), status: String(check.status) })),
         expectedText: String(selected.expectedText || ""),

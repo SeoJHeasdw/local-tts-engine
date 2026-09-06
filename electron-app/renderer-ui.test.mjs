@@ -33,6 +33,22 @@ test("새 영상의 중복 요약 패널은 대기 중 숨기고 작업 중에�
   assert.match(script, /classList\.toggle\("hidden", view === "idle"\)/);
 });
 
+test("새 영상은 레슨·페이지·챕터 전체의 세 가지 제작 범위를 제공한다", async () => {
+  const [html, script] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(renderer, "app.js"), "utf8"),
+  ]);
+  assert.match(html, /data-mode="lesson"[^>]*>레슨/);
+  assert.match(html, /data-mode="page"[^>]*>페이지 직접 선택/);
+  assert.match(html, /data-mode="chapter"[^>]*>챕터 전체/);
+  assert.doesNotMatch(html, /30초 미리보기/);
+  assert.doesNotMatch(html, /id="chapter-jump"|id="select-chapter-range"/);
+  assert.match(html, /data-chapter-mode="single"[^>]*>한 영상으로 제작/);
+  assert.match(html, /data-chapter-mode="lesson"[^>]*>레슨 단위로 나눠 제작/);
+  assert.doesNotMatch(script, /productionMode === "preview"|data-mode="preview"/);
+  assert.match(script, /chapterMode: productionMode === "chapter" \? chapterMode : "single"/);
+});
+
 
 test("최근 결과는 열기만 기본 행동으로 두고 나머지를 더 보기 메뉴에 둔다", async () => {
   const [script, css] = await Promise.all([

@@ -284,6 +284,38 @@ def test_a_protected_span_is_reported_as_a_deliberate_reading() -> None:
     assert {"from": "Do my Bots share one computer?", "to": "Do my Bots share one computer?"} in [
         {"from": match["from"], "to": match["to"]} for match in report["dictionaryMatches"]
     ]
+    assert report["requiredPronunciations"] == ["Do my Bots share one computer?"]
+    assert not any(match["from"] == "Bots" for match in report["dictionaryMatches"])
+
+
+def test_a_term_inside_and_outside_a_literal_span_is_still_checked_outside() -> None:
+    report = pronunciation_preflight(
+        '"Do my Bots share one computer?" 그다음 Bots를 설명합니다.', LITERAL_DICTIONARY,
+    )
+    assert report["requiredPronunciations"] == ["Do my Bots share one computer?", "봇츠"]
+    assert report["ttsText"].endswith("그다음 봇츠를 설명합니다.")
+
+
+def test_every_numeric_rule_respects_a_literal_span_but_checks_outside_numbers() -> None:
+    literal = "Start with 3 bots, 27B, Qwen3.6-27B, 3.6, 3분의 1, 50개."
+    report = pronunciation_preflight(
+        literal + " 바깥은 10개, 27B, Qwen3.6-27B, 3.6, 3분의 1, 50이라는 숫자입니다.",
+        [{"from": literal, "to": literal, "literal": True}],
+    )
+    assert report["ttsText"].startswith(literal)
+    assert report["requiredPronunciations"] == [
+        literal, "큐웬삼점육 이십칠비", "삼분의 일", "열 개", "이십칠비", "삼점육", "오십",
+    ]
+    assert report["normalizedNumbers"] == ["10개"]
+
+
+def test_an_overlapping_literal_entry_is_not_an_extra_required_reading() -> None:
+    literal = "Start with 3 bots."
+    report = pronunciation_preflight(literal, [
+        {"from": literal, "to": literal, "literal": True},
+        {"from": "3 bots", "to": "three bots", "literal": True},
+    ])
+    assert report["requiredPronunciations"] == [literal]
 
 
 def test_several_protected_spans_come_back_in_the_right_places() -> None:

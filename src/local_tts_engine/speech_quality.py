@@ -22,6 +22,8 @@ of being told the production failed.
 from __future__ import annotations
 
 import re
+import math
+import tempfile
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,7 @@ from .korean_phonetics import (
     pronunciation_distance,
 )
 from .pronunciation import apply_pronunciation
+from .prosody import PAUSE_WARNING, confirm_pause_checks, interior_silences, pause_checks
 
 
 ASR_REPOSITORY = "mlx-community/whisper-large-v3-turbo-asr-fp16"
@@ -478,6 +481,88 @@ def evaluate_candidate(
     }
 
 
+def read_timed_words(model: Any, audio_path: Path, temperature: float) -> list[dict[str, Any]]:
+    """Get clip-relative word times without changing the content-ASR path.
+
+    Use the same bounded reading windows as the content check. In particular,
+    a timestamp in the second window must be offset before comparing it to the
+    original waveform. No additional model is loaded.
+    """
+    audio, rate = sf.read(audio_path, dtype="float32", always_2d=True)
+    samples = np.mean(audio, axis=1, dtype=np.float32)
+    windows = asr_reading_windows(samples, rate)
+    words = []
+    with tempfile.TemporaryDirectory(prefix="tts-timing-") as scratch:
+        for index, (begin, end) in enumerate(windows):
+            path = audio_path
+            if len(windows) > 1:
+                path = Path(scratch) / f"window-{index}.wav"
+                sf.write(path, samples[begin:end], rate)
+            result = model.generate(
+                str(path), language="ko", task="transcribe", temperature=temperature,
+                return_timestamps=True, word_timestamps=True,
+                condition_on_previous_text=False, max_tokens=768,
+            )
+            for segment in getattr(result, "segments", None) or []:
+                for word in segment.get("words", []):
+                    try:
+                        start = float(word["start"]) * 1000 + begin * 1000 / rate
+                        finish = float(word["end"]) * 1000 + begin * 1000 / rate
+                        if not all(math.isfinite(value) for value in (start, finish)):
+                            start = finish = -1
+                    except (KeyError, TypeError, ValueError):
+                        start = finish = -1
+                    words.append({
+                        "text": str(word.get("word", "")),
+                        "startMs": round(start),
+                        "endMs": round(finish),
+                        "probability": word.get("probability", 0.0),
+                        "window": index,
+                    })
+    return words
+
+
+def review_candidate_prosody(
+    evaluation: dict[str, Any],
+    read_timings: Any,
+    align_independently: Any | None = None,
+) -> dict[str, Any]:
+    """Combine independent timings and acoustic coverage before requesting a retry.
+
+    Content checks keep their existing decoders and thresholds. Timing checks
+    run after them and never clear a pronunciation failure. An ambiguous rhythm
+    warning remains a warning even if every generation has the same rhythm.
+    """
+    result = dict(evaluation)
+    if not evaluation["passed"]:
+        result["prosody"] = {"status": "not-checked-content", "checks": []}
+        return result
+    path = Path(evaluation["audioPath"])
+    pauses = interior_silences(path)
+    first = pause_checks(
+        evaluation["expectedText"], read_timings(path, 0.0) if pauses else [], pauses,
+        duration_ms=int(evaluation["waveform"]["durationMs"]),
+    )
+    confirmed = first["checks"]
+    if confirmed:
+        # Re-decoding Whisper at another temperature repeats systematic timing
+        # errors. In the live sample it assigned the end of 건 to 도구의 twice,
+        # turning the legitimate gap between them into an internal-word pause.
+        # A different, forced aligner must corroborate the acoustic interval.
+        words = align_independently(path, evaluation["expectedText"]) if align_independently else []
+        first = confirm_pause_checks(
+            first, evaluation["expectedText"], words, pauses, path,
+            int(evaluation["waveform"]["durationMs"]),
+        )
+        confirmed = first["checks"]
+    result["prosody"] = {**first, "checks": confirmed}
+    if confirmed:
+        result["warnings"] = [*evaluation["warnings"], PAUSE_WARNING]
+        result["passed"] = False
+        result["score"] = round(float(evaluation["score"]) + WARNING_PENALTY + sum(c["pauseDurationMs"] for c in confirmed) / 1000, 6)
+    return result
+
+
 def better_evaluation(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
     """Return the more favourable of two readings of the same audio.
 
@@ -488,9 +573,10 @@ def better_evaluation(left: dict[str, Any], right: dict[str, Any]) -> dict[str, 
     return min((left, right), key=_candidate_rank)
 
 
-def _candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, float, int]:
+def _candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, float, int]:
     return (
         len(candidate.get("failures", [])),
+        len([warning for warning in candidate.get("warnings", []) if warning != PAUSE_WARNING]),
         len(candidate.get("warnings", [])),
         float(candidate.get("score", float("inf"))),
         int(candidate.get("attempt", 1)),
@@ -513,9 +599,12 @@ def chunk_severity(candidates: list[dict[str, Any]], selected: dict[str, Any]) -
     """
     if selected.get("failures"):
         return "failed"
-    warnings = selected.get("warnings") or []
-    if not warnings:
+    all_warnings = selected.get("warnings") or []
+    if not all_warnings:
         return "ok"
+    warnings = [warning for warning in all_warnings if warning != PAUSE_WARNING]
+    if not warnings:
+        return "warning"
     evaluated = [candidate for candidate in candidates if candidate.get("recognizedText") is not None]
     if len(evaluated) > 1 and all(
         set(warnings) <= set(candidate.get("warnings") or []) for candidate in evaluated

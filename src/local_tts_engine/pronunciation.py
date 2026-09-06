@@ -219,6 +219,8 @@ PROTECTED_PLACEHOLDER_START = 0xE000
 def _protect_literal_spans(
     text: str,
     dictionary: list[dict[str, Any]],
+    *,
+    matched: list[dict[str, str]] | None = None,
 ) -> tuple[str, list[str]]:
     """Swap every ``literal`` entry's match for a placeholder the rules ignore."""
     kept: list[str] = []
@@ -232,7 +234,10 @@ def _protect_literal_spans(
         if not item.get("literal"):
             continue
         replacement = str(item["to"])
-        output = _dictionary_pattern(item).sub(swap, output)
+        pattern = _dictionary_pattern(item)
+        if matched is not None and pattern.search(output):
+            matched.append({"from": str(item["from"]), "to": replacement})
+        output = pattern.sub(swap, output)
     return output, kept
 
 
@@ -280,18 +285,25 @@ def pronunciation_preflight(
 ) -> dict[str, Any]:
     """Return synthesis text and unresolved risky tokens for manifests and UI."""
     merged = merge_pronunciation_dictionaries(dictionary)
-    dictionary_text, protected_spans = _protect_literal_spans(source_text, merged)
+    matched: list[dict[str, str]] = []
+    inspection_text, _ = _protect_literal_spans(source_text, merged, matched=matched)
+    dictionary_text = inspection_text
     for item in merged:
         if item.get("literal"):
             continue
         dictionary_text = _dictionary_pattern(item).sub(str(item["to"]), dictionary_text)
     naturalness = korean_naturalness_preflight(dictionary_text)
     tts_text = apply_pronunciation(source_text, dictionary)
-    matched: list[dict[str, str]] = []
     dictionary_spans: list[tuple[int, int]] = []
-    required: list[str] = []
+    required = [item["to"] for item in matched]
+    # Synthesis protects deliberately English spans. The expected readings must
+    # use the same boundary: demanding 봇츠 inside "Do my Bots ..." rejected an
+    # exact transcript four times. All numeric patterns use this same masked
+    # coordinate space, so a long protected span cannot hide an outside number.
     for item in merged:
-        item_matches = list(_dictionary_pattern(item).finditer(source_text))
+        if item.get("literal"):
+            continue
+        item_matches = list(_dictionary_pattern(item).finditer(inspection_text))
         if item_matches:
             matched.append({"from": str(item["from"]), "to": str(item["to"])})
             required.append(str(item["to"]))
@@ -301,21 +313,21 @@ def pronunciation_preflight(
         start, end = match.span()
         return any(start >= item_start and end <= item_end for item_start, item_end in dictionary_spans)
 
-    if QWEN_MODEL_PATTERN.search(source_text):
+    if QWEN_MODEL_PATTERN.search(inspection_text):
         matched.append({"from": "Qwen<version>-<size>B", "to": "큐웬<버전> <크기>비"})
-    counted_matches = list(COUNTED_NUMBER_PATTERN.finditer(source_text))
+    counted_matches = list(COUNTED_NUMBER_PATTERN.finditer(inspection_text))
     counted = [match.group(0) for match in counted_matches]
-    for match in QWEN_MODEL_PATTERN.finditer(source_text):
+    for match in QWEN_MODEL_PATTERN.finditer(inspection_text):
         required.append(apply_pronunciation(match.group(0), dictionary))
-    for match in FRACTION_NUMBER_PATTERN.finditer(source_text):
+    for match in FRACTION_NUMBER_PATTERN.finditer(inspection_text):
         if not covered_by_dictionary(match):
             required.append(apply_pronunciation(match.group(0), dictionary))
     for match in counted_matches:
         if not covered_by_dictionary(match):
             required.append(apply_pronunciation(match.group(0), dictionary))
-    for match in PARAMETER_SIZE_PATTERN.finditer(source_text):
+    for match in PARAMETER_SIZE_PATTERN.finditer(inspection_text):
         required.append(apply_pronunciation(match.group(0), dictionary))
-    for match in DECIMAL_NUMBER_PATTERN.finditer(source_text):
+    for match in DECIMAL_NUMBER_PATTERN.finditer(inspection_text):
         required.append(apply_pronunciation(match.group(0), dictionary))
     for match in BARE_NUMBER_PATTERN.finditer(_apply_dictionary(source_text, dictionary)[0]):
         required.append(korean_sino_integer(match.group(1)))

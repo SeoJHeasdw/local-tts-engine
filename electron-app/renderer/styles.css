@@ -80,18 +80,18 @@ input:focus, select:focus { border-color: rgba(201,255,91,.56); box-shadow: 0 0 
 .segmented button { height:38px; border:0; border-radius:7px; background:transparent; color:#8a9286; cursor:pointer; font-size:13px; }
 .segmented button.selected { background: #292f25; color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 .scope-tabs { grid-template-columns: repeat(3,1fr); }
-.lesson-picker { display:grid; gap:8px; padding:14px; border:1px solid rgba(201,255,91,.2); border-radius:12px; background:rgba(201,255,91,.035); }
-.lesson-picker > label { color:#a5ada2; font-size:12px; font-weight:650; }.lesson-picker select { height:46px; background:#11140f; font-size:13px; }.lesson-picker > div { display:flex; align-items:center; justify-content:space-between; gap:12px; }.lesson-picker strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }.lesson-picker small { flex:0 0 auto; color:#818a7e; font-size:11px; }
+.lesson-picker,.chapter-picker { display:grid; gap:8px; padding:14px; border:1px solid rgba(201,255,91,.2); border-radius:12px; background:rgba(201,255,91,.035); }
+.lesson-picker > label,.chapter-picker > label { color:#a5ada2; font-size:12px; font-weight:650; }.lesson-picker select,.chapter-picker select { height:46px; background:#11140f; font-size:13px; }.lesson-picker > div,.chapter-picker > div { display:flex; align-items:center; justify-content:space-between; gap:12px; }.lesson-picker strong,.chapter-picker strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }.lesson-picker small,.chapter-picker small { flex:0 0 auto; color:#818a7e; font-size:11px; }
+.chapter-output-options { display:grid !important; gap:7px !important; margin-top:5px; align-items:stretch !important; }
+.chapter-output-options > span { color:#a5ada2; font-size:12px; font-weight:650; }
+.chapter-output-options .segmented { grid-template-columns:repeat(2,1fr); }
+.chapter-output-options > small { color:#818a7e; font-size:10px; }
 .manual-scope { display:grid; gap:10px; }
-.course-jump { display:grid; grid-template-columns:34px minmax(0,1fr) auto 34px; align-items:end; gap:7px; }
-.course-jump label { display:grid; gap:5px; min-width:0; }
-.course-jump label > span { color:#80887d; font-size:11px; }
-.course-jump select { height:38px; font-size:11px; }
-.page-stepper,.chapter-range-button { height:36px; border:1px solid var(--line); border-radius:9px; background:#171b16; color:#9ca498; cursor:pointer; }
+.page-navigation { display:flex; align-items:center; justify-content:space-between; gap:7px; }
+.page-stepper { height:36px; border:1px solid var(--line); border-radius:9px; background:#171b16; color:#9ca498; cursor:pointer; }
 .page-stepper { padding:0; color:var(--lime); font-size:14px; }
-.page-stepper:hover,.chapter-range-button:hover { border-color:rgba(201,255,91,.32); background:#20251d; }
-.page-stepper:disabled,.chapter-range-button:disabled { opacity:.35; cursor:default; }
-.chapter-range-button { padding:0 11px; color:#b2b9ae; font-size:11px; white-space:nowrap; }
+.page-stepper:hover { border-color:rgba(201,255,91,.32); background:#20251d; }
+.page-stepper:disabled { opacity:.35; cursor:default; }
 .scope-panel { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: #141712; }
 .page-input-group { display: grid; gap: 7px; min-width: 0; }
 .page-input-group label { color:#99a093; font-size:11px; }
