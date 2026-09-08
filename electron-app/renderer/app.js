@@ -1,3 +1,4 @@
+import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import {
   buildChapterRanges,
   filterOutputItems,
@@ -53,7 +54,7 @@ function showToast(message, kind = "success") {
   toast.querySelector("span").textContent = kind === "error" ? "!" : "✓";
   toast.querySelector("div").textContent = message;
   $("#toast-stack").append(toast);
-  setTimeout(() => toast.remove(), 3600);
+  setTimeout(() => dismissToast(toast), 3600);
 }
 
 function setIconStatus(selector, label, tone = "idle") {
@@ -261,14 +262,16 @@ function updatePageScope() {
 }
 
 function setProductionMode(mode) {
-  productionMode = ["lesson", "page", "chapter"].includes(mode) ? mode : "lesson";
-  $$("#mode-options button").forEach((button) => button.classList.toggle("selected", button.dataset.mode === productionMode));
-  $("#lesson-panel").classList.toggle("hidden", productionMode !== "lesson");
-  $("#chapter-panel").classList.toggle("hidden", productionMode !== "chapter");
-  $("#manual-scope").classList.toggle("hidden", productionMode !== "page");
-  if (productionMode === "lesson") applySelectedLesson();
-  else if (productionMode === "chapter") applySelectedChapter();
-  else updatePageScope();
+  return animateLayout($(".scope-field"), () => {
+    productionMode = ["lesson", "page", "chapter"].includes(mode) ? mode : "lesson";
+    $$("#mode-options button").forEach((button) => button.classList.toggle("selected", button.dataset.mode === productionMode));
+    $("#lesson-panel").classList.toggle("hidden", productionMode !== "lesson");
+    $("#chapter-panel").classList.toggle("hidden", productionMode !== "chapter");
+    $("#manual-scope").classList.toggle("hidden", productionMode !== "page");
+    if (productionMode === "lesson") applySelectedLesson();
+    else if (productionMode === "chapter") applySelectedChapter();
+    else updatePageScope();
+  });
 }
 
 function setChapterMode(mode) {
@@ -351,8 +354,7 @@ function updateStages(current, done = false) {
 
 function appendLog(text) {
   const log = $("#job-log");
-  log.textContent = `${log.textContent}${text}`.slice(-30000);
-  log.scrollTop = log.scrollHeight;
+  appendFollowingLog(log, text);
 }
 
 function formatDuration(ms) {
@@ -449,36 +451,42 @@ function suggestedEditName(operation = editOperation) {
 }
 
 function setEditOperation(operation) {
-  editOperation = ["merge", "trim", "voice"].includes(operation) ? operation : "merge";
-  $$("#edit-operation-tabs button").forEach((button) => button.classList.toggle("selected", button.dataset.operation === editOperation));
-  $("#edit-merge-panel").classList.toggle("hidden", editOperation !== "merge");
-  $("#edit-trim-panel").classList.toggle("hidden", editOperation !== "trim");
-  $("#edit-voice-panel").classList.toggle("hidden", editOperation !== "voice");
-  $("#start-edit-label").textContent = { merge: "영상 합치기", trim: "영상 자르기", voice: "목소리 후보 생성" }[editOperation];
-  $("#edit-name").value = suggestedEditName();
-  if (editOperation === "voice") setVoiceSource("generate");
+  return animateLayout($("#edit-form"), () => {
+    editOperation = ["merge", "trim", "voice"].includes(operation) ? operation : "merge";
+    $$("#edit-operation-tabs button").forEach((button) => button.classList.toggle("selected", button.dataset.operation === editOperation));
+    $("#edit-merge-panel").classList.toggle("hidden", editOperation !== "merge");
+    $("#edit-trim-panel").classList.toggle("hidden", editOperation !== "trim");
+    $("#edit-voice-panel").classList.toggle("hidden", editOperation !== "voice");
+    $("#start-edit-label").textContent = { merge: "영상 합치기", trim: "영상 자르기", voice: "목소리 후보 생성" }[editOperation];
+    $("#edit-name").value = suggestedEditName();
+    if (editOperation === "voice") setVoiceSource("generate");
+  });
 }
 
 function setVoiceSource(source) {
-  voiceSource = source === "generate" ? "generate" : "file";
-  $$("#voice-source-tabs button").forEach((button) => button.classList.toggle("selected", button.dataset.source === voiceSource));
-  $("#pick-voice-audio").classList.toggle("hidden", voiceSource !== "file");
-  $("#generated-voice-options").classList.toggle("hidden", voiceSource !== "generate");
-  if (editOperation === "voice") {
-    $("#start-edit-label").textContent = voiceSource === "generate" ? "목소리 후보 생성" : "목소리 교체";
-  }
+  return animateLayout($("#edit-voice-panel"), () => {
+    voiceSource = source === "generate" ? "generate" : "file";
+    $$("#voice-source-tabs button").forEach((button) => button.classList.toggle("selected", button.dataset.source === voiceSource));
+    $("#pick-voice-audio").classList.toggle("hidden", voiceSource !== "file");
+    $("#generated-voice-options").classList.toggle("hidden", voiceSource !== "generate");
+    if (editOperation === "voice") {
+      $("#start-edit-label").textContent = voiceSource === "generate" ? "목소리 후보 생성" : "목소리 교체";
+    }
+  });
 }
 
 function setTrimMode(mode) {
-  trimMode = mode === "pages" ? "pages" : "time";
-  $$("#trim-mode-tabs button").forEach((button) => button.classList.toggle("selected", button.dataset.trimMode === trimMode));
-  $("#trim-time-options").classList.toggle("hidden", trimMode !== "time");
-  $("#trim-page-options").classList.toggle("hidden", trimMode !== "pages");
-  $("#trim-hint").textContent = trimMode === "pages"
-    ? trimVideo?.pageRange
-      ? `이 영상은 ${trimVideo.pageRange.start}~${trimVideo.pageRange.end}페이지 타임라인과 연결되어 있습니다.`
-      : "앱에서 만든 타임라인 영상만 페이지로 자를 수 있습니다."
-    : "초 단위 숫자나 시:분:초 형식을 사용할 수 있습니다.";
+  return animateLayout($("#edit-trim-panel"), () => {
+    trimMode = mode === "pages" ? "pages" : "time";
+    $$("#trim-mode-tabs button").forEach((button) => button.classList.toggle("selected", button.dataset.trimMode === trimMode));
+    $("#trim-time-options").classList.toggle("hidden", trimMode !== "time");
+    $("#trim-page-options").classList.toggle("hidden", trimMode !== "pages");
+    $("#trim-hint").textContent = trimMode === "pages"
+      ? trimVideo?.pageRange
+        ? `이 영상은 ${trimVideo.pageRange.start}~${trimVideo.pageRange.end}페이지 타임라인과 연결되어 있습니다.`
+        : "앱에서 만든 타임라인 영상만 페이지로 자를 수 있습니다."
+      : "초 단위 숫자나 시:분:초 형식을 사용할 수 있습니다.";
+  });
 }
 
 function renderMergeQueue() {
@@ -557,8 +565,7 @@ function setEditBusy(busy) {
 
 function appendEditLog(text) {
   const log = $("#edit-log");
-  log.textContent = `${log.textContent}${text}`.slice(-30000);
-  log.scrollTop = log.scrollHeight;
+  appendFollowingLog(log, text);
 }
 
 function openJobDialog(title) {
@@ -756,92 +763,94 @@ function closeResultMenus({ restoreFocus = false } = {}) {
 }
 
 function renderOutputs() {
-  const list = filterOutputItems(outputItems, $("#result-search").value, outputFilter);
-  const container = $("#output-list");
-  if (!list.length) {
-    container.innerHTML = `<div class="empty-output">${outputItems.length ? "조건에 맞는 결과가 없습니다." : "아직 완성된 결과가 없습니다."}</div>`;
-    return;
-  }
-  container.replaceChildren(...list.map((item) => {
-    const kind = outputKind(item);
-    const approved = item.review?.status === "approved";
-    const row = document.createElement("article");
-    row.className = "output-item";
-    row.innerHTML = `
-      <div class="output-type ${kind}">${kind === "edit" ? "✂" : item.video ? "▶" : "♪"}</div>
-      <div class="output-copy"><strong></strong><small></small></div>
-      <div class="output-status" aria-label="결과 상태">
-        <span class="status-symbol ${item.ok ? "verified" : "unverified"}" tabindex="0" data-tooltip="${item.ok ? "자동 파일 검증 완료" : "자동 검증 기록 없음"}" aria-label="${item.ok ? "자동 파일 검증 완료" : "자동 검증 기록 없음"}">${item.ok ? "✓" : "!"}</span>
-        <span class="status-symbol ${approved ? "reviewed" : "review-pending"}" tabindex="0" data-tooltip="${approved ? "직접 확인 완료" : "직접 확인 필요"}" aria-label="${approved ? "직접 확인 완료" : "직접 확인 필요"}">${approved ? "✓" : "○"}</span>
-      </div>
-      <div class="item-actions">
-        <button class="open-button" type="button">열기</button>
-        <details class="result-menu">
-          <summary aria-label="결과 작업 더 보기">•••</summary>
-          <div>
-            <button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "확인 완료 취소" : "확인 완료로 표시"}</button>
-            <button class="reveal-button" type="button">Finder에서 보기</button>
-          </div>
-        </details>
-      </div>`;
-    row.querySelector("strong").textContent = item.displayName || item.name;
-    const findings = item.voiceFindings || [];
-    const voiceSummary = summarizeVoiceFindings(findings);
-    row.querySelector("small").textContent = [
-      outputLabel(item),
-      formatDuration(item.durationMs),
-      formatDate(item.updatedAt),
-      voiceSummary.total ? `목소리 ${voiceSummary.title}` : "",
-    ].filter(Boolean).join(" · ");
-    const automaticStatus = row.querySelector(".output-status .status-symbol");
-    const automaticLabel = !item.ok
-      ? "자동 검증 실패 또는 기록 없음"
-      : voiceSummary.total
-        ? `${voiceSummary.title} · ${voiceFindingSummaryLine(findings)}`
-        : "파일과 음성 자동 검수 완료";
-    automaticStatus.classList.toggle("verified", Boolean(item.ok) && !voiceSummary.total);
-    automaticStatus.classList.toggle("advisory", Boolean(item.ok) && voiceSummary.total > 0);
-    automaticStatus.textContent = item.ok ? (voiceSummary.total ? "!" : "✓") : "!";
-    automaticStatus.dataset.tooltip = automaticLabel;
-    automaticStatus.setAttribute("aria-label", automaticLabel);
-    const target = { root: item.root, name: item.name, day: item.day, store: item.store };
-    const resultMenu = row.querySelector(".result-menu");
-    resultMenu.addEventListener("toggle", () => {
-      if (!resultMenu.open) {
-        resultMenu.classList.remove("open-upward");
-        return;
-      }
-      $$(".result-menu[open]").forEach((other) => {
-        if (other !== resultMenu) other.removeAttribute("open");
-      });
-      const popover = resultMenu.querySelector(":scope > div");
-      const availableBelow = window.innerHeight - resultMenu.getBoundingClientRect().bottom;
-      resultMenu.classList.toggle("open-upward", shouldOpenMenuUpward(availableBelow, popover.offsetHeight));
-    });
-    row.querySelector(".review-button").addEventListener("click", async () => {
-      try {
-        const review = await api.setOutputReview(target, approved ? "pending" : "approved");
-        item.review = review;
-        renderOutputSummary();
-        renderOutputs();
-        showToast(approved ? "확인 완료 표시를 취소했습니다." : "직접 확인한 결과로 표시했습니다.");
-      } catch (error) {
-        showToast(error.message, "error");
-      }
-    });
-    if (voiceSummary.total && item.video) {
-      const findingsPanel = document.createElement("ul");
-      findingsPanel.className = "output-findings";
-      findingsPanel.replaceChildren(...findings.map((finding) => renderVoiceFindingRow(finding, target)));
-      row.append(findingsPanel);
+  return animateLayout($("#output-list"), () => {
+    const list = filterOutputItems(outputItems, $("#result-search").value, outputFilter);
+    const container = $("#output-list");
+    if (!list.length) {
+      container.innerHTML = `<div class="empty-output">${outputItems.length ? "조건에 맞는 결과가 없습니다." : "아직 완성된 결과가 없습니다."}</div>`;
+      return;
     }
-    row.querySelector(".open-button").addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
-    row.querySelector(".reveal-button").addEventListener("click", () => {
-      resultMenu.removeAttribute("open");
-      api.reveal(target).catch((error) => showToast(error.message, "error"));
-    });
-    return row;
-  }));
+    container.replaceChildren(...list.map((item) => {
+      const kind = outputKind(item);
+      const approved = item.review?.status === "approved";
+      const row = document.createElement("article");
+      row.className = "output-item";
+      row.innerHTML = `
+        <div class="output-type ${kind}">${kind === "edit" ? "✂" : item.video ? "▶" : "♪"}</div>
+        <div class="output-copy"><strong></strong><small></small></div>
+        <div class="output-status" aria-label="결과 상태">
+          <span class="status-symbol ${item.ok ? "verified" : "unverified"}" tabindex="0" data-tooltip="${item.ok ? "자동 파일 검증 완료" : "자동 검증 기록 없음"}" aria-label="${item.ok ? "자동 파일 검증 완료" : "자동 검증 기록 없음"}">${item.ok ? "✓" : "!"}</span>
+          <span class="status-symbol ${approved ? "reviewed" : "review-pending"}" tabindex="0" data-tooltip="${approved ? "직접 확인 완료" : "직접 확인 필요"}" aria-label="${approved ? "직접 확인 완료" : "직접 확인 필요"}">${approved ? "✓" : "○"}</span>
+        </div>
+        <div class="item-actions">
+          <button class="open-button" type="button">열기</button>
+          <details class="result-menu">
+            <summary aria-label="결과 작업 더 보기">•••</summary>
+            <div>
+              <button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "확인 완료 취소" : "확인 완료로 표시"}</button>
+              <button class="reveal-button" type="button">Finder에서 보기</button>
+            </div>
+          </details>
+        </div>`;
+      row.querySelector("strong").textContent = item.displayName || item.name;
+      const findings = item.voiceFindings || [];
+      const voiceSummary = summarizeVoiceFindings(findings);
+      row.querySelector("small").textContent = [
+        outputLabel(item),
+        formatDuration(item.durationMs),
+        formatDate(item.updatedAt),
+        voiceSummary.total ? `목소리 ${voiceSummary.title}` : "",
+      ].filter(Boolean).join(" · ");
+      const automaticStatus = row.querySelector(".output-status .status-symbol");
+      const automaticLabel = !item.ok
+        ? "자동 검증 실패 또는 기록 없음"
+        : voiceSummary.total
+          ? `${voiceSummary.title} · ${voiceFindingSummaryLine(findings)}`
+          : "파일과 음성 자동 검수 완료";
+      automaticStatus.classList.toggle("verified", Boolean(item.ok) && !voiceSummary.total);
+      automaticStatus.classList.toggle("advisory", Boolean(item.ok) && voiceSummary.total > 0);
+      automaticStatus.textContent = item.ok ? (voiceSummary.total ? "!" : "✓") : "!";
+      automaticStatus.dataset.tooltip = automaticLabel;
+      automaticStatus.setAttribute("aria-label", automaticLabel);
+      const target = { root: item.root, name: item.name, day: item.day, store: item.store };
+      const resultMenu = row.querySelector(".result-menu");
+      resultMenu.addEventListener("toggle", () => {
+        if (!resultMenu.open) {
+          resultMenu.classList.remove("open-upward");
+          return;
+        }
+        $$(".result-menu[open]").forEach((other) => {
+          if (other !== resultMenu) other.removeAttribute("open");
+        });
+        const popover = resultMenu.querySelector(":scope > div");
+        const availableBelow = window.innerHeight - resultMenu.getBoundingClientRect().bottom;
+        resultMenu.classList.toggle("open-upward", shouldOpenMenuUpward(availableBelow, popover.offsetHeight));
+      });
+      row.querySelector(".review-button").addEventListener("click", async () => {
+        try {
+          const review = await api.setOutputReview(target, approved ? "pending" : "approved");
+          item.review = review;
+          renderOutputSummary();
+          renderOutputs();
+          showToast(approved ? "확인 완료 표시를 취소했습니다." : "직접 확인한 결과로 표시했습니다.");
+        } catch (error) {
+          showToast(error.message, "error");
+        }
+      });
+      if (voiceSummary.total && item.video) {
+        const findingsPanel = document.createElement("ul");
+        findingsPanel.className = "output-findings";
+        findingsPanel.replaceChildren(...findings.map((finding) => renderVoiceFindingRow(finding, target)));
+        row.append(findingsPanel);
+      }
+      row.querySelector(".open-button").addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
+      row.querySelector(".reveal-button").addEventListener("click", () => {
+        resultMenu.removeAttribute("open");
+        api.reveal(target).catch((error) => showToast(error.message, "error"));
+      });
+      return row;
+    }));
+  });
 }
 
 async function loadOutputs() {
@@ -929,6 +938,7 @@ async function openModelSettings() {
   renderSettings(await api.getSettings());
   $("#finetune-name").value = `jaeho-ko-r16-${dateStamp()}`.toLowerCase();
   $("#finetune-panel").classList.add("hidden");
+  $("#open-finetune-panel").setAttribute("aria-expanded", "false");
   $(".advanced-engine-settings").open = false;
   $(".advanced-paths").open = false;
   $("#model-settings-dialog").showModal();
@@ -957,6 +967,13 @@ function handleTrainingEvent(event) {
 }
 
 function handleJobEvent(event) {
+  if (["log", "progress", "stage"].includes(event.type)) return renderJobEvent(event);
+  const container = ["edit", "text-voice", "training"].includes(event.jobKind)
+    ? $("#edit-job-dialog .job-modal-body") : $("#job-workspace");
+  return animateLayout(container, () => renderJobEvent(event));
+}
+
+function renderJobEvent(event) {
   if (event.jobKind === "text-voice") {
     handleTextVoiceEvent(event);
     return;
@@ -1287,7 +1304,12 @@ $$('[data-pick-path]').forEach((button) => button.addEventListener("click", asyn
     if (button.dataset.pickPath === "outputRoot") $("#output-root-name").textContent = fileName(value);
   }
 }));
-$("#open-finetune-panel").addEventListener("click", () => $("#finetune-panel").classList.toggle("hidden"));
+$("#open-finetune-panel").addEventListener("click", () => {
+  animateLayout($("#finetune-panel").closest(".settings-column"), () => {
+    $("#finetune-panel").classList.toggle("hidden");
+    $("#open-finetune-panel").setAttribute("aria-expanded", String(!$("#finetune-panel").classList.contains("hidden")));
+  });
+});
 $("#start-finetune").addEventListener("click", async () => {
   const name = $("#finetune-name").value.trim();
   const maxSteps = Number($("#finetune-steps").value);
@@ -1338,17 +1360,29 @@ attachNativeDrop($("#pick-voice-audio"), "audio", (files) => {
   [voiceAudio] = files;
   if (voiceAudio) $("#voice-audio-name").textContent = voiceAudio.name;
 });
-$$('[data-view]').forEach((button) => button.addEventListener("click", async () => {
+let currentView = "new";
+let renderedView = "new";
+let navigationVersion = 0;
+const viewScrollPositions = new Map();
+$$('[data-view]').forEach((button) => button.addEventListener("click", () => {
   const view = button.dataset.view;
-  $$(".nav-item").forEach((item) => item.classList.toggle("active", item === button));
-  $("#view-new").classList.toggle("hidden", view !== "new");
-  $("#view-voice").classList.toggle("hidden", view !== "voice");
-  $("#view-edit").classList.toggle("hidden", view !== "edit");
-  $("#view-results").classList.toggle("hidden", view !== "results");
-  if (view === "results") await loadOutputs();
-  window.scrollTo({ top: 0, behavior: "instant" });
+  if (view === currentView) return;
+  viewScrollPositions.set(renderedView, window.scrollY);
+  currentView = view;
+  const version = ++navigationVersion;
+  transitionPage(() => {
+    if (version !== navigationVersion) return;
+    $$(".nav-item").forEach((item) => {
+      item.classList.toggle("active", item === button);
+      if (item === button) item.setAttribute("aria-current", "page");
+      else item.removeAttribute("aria-current");
+    });
+    renderedView = view;
+    for (const page of $$(".page-view")) page.classList.toggle("hidden", page.id !== `view-${view}`);
+    window.scrollTo({ top: viewScrollPositions.get(view) || 0, behavior: "instant" });
+  });
+  if (view === "results") loadOutputs();
 }));
-
 initialize().catch((error) => {
   $("#runtime-label").textContent = "환경 확인 실패";
   appendLog(`[초기화 오류] ${error.message}\n`);
