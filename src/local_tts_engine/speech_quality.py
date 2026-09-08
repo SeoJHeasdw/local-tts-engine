@@ -36,6 +36,7 @@ from .korean_phonetics import (
     phonetic_variants,
     pronunciation_distance,
 )
+from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
 from .pronunciation import apply_pronunciation
 from .prosody import PAUSE_WARNING, confirm_pause_checks, interior_silences, pause_checks
 
@@ -543,23 +544,32 @@ def review_candidate_prosody(
         evaluation["expectedText"], read_timings(path, 0.0) if pauses else [], pauses,
         duration_ms=int(evaluation["waveform"]["durationMs"]),
     )
+    restart_candidates = acoustic_restarts(path)
+    independent_words = []
     confirmed = first["checks"]
-    if confirmed:
+    if confirmed or restart_candidates:
         # Re-decoding Whisper at another temperature repeats systematic timing
         # errors. In the live sample it assigned the end of 건 to 도구의 twice,
         # turning the legitimate gap between them into an internal-word pause.
         # A different, forced aligner must corroborate the acoustic interval.
-        words = align_independently(path, evaluation["expectedText"]) if align_independently else []
+        independent_words = align_independently(path, evaluation["expectedText"]) if align_independently else []
         first = confirm_pause_checks(
-            first, evaluation["expectedText"], words, pauses, path,
+            first, evaluation["expectedText"], independent_words, pauses, path,
             int(evaluation["waveform"]["durationMs"]),
         )
         confirmed = first["checks"]
+    restarts = confirm_restarts(restart_candidates, independent_words, evaluation["expectedText"])
+    result["restarts"] = {"policy": RESTART_POLICY, "status": "alignment-unavailable" if restart_candidates and not independent_words else "checked",
+                          "candidates": restart_candidates, "checks": restarts}
     result["prosody"] = {**first, "checks": confirmed}
     if confirmed:
         result["warnings"] = [*evaluation["warnings"], PAUSE_WARNING]
         result["passed"] = False
         result["score"] = round(float(evaluation["score"]) + WARNING_PENALTY + sum(c["pauseDurationMs"] for c in confirmed) / 1000, 6)
+    if restarts:
+        result["warnings"] = [*result["warnings"], RESTART_WARNING]
+        result["passed"] = False
+        result["score"] = round(float(result["score"]) + WARNING_PENALTY + len(restarts), 6)
     return result
 
 
@@ -576,7 +586,7 @@ def better_evaluation(left: dict[str, Any], right: dict[str, Any]) -> dict[str, 
 def _candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, float, int]:
     return (
         len(candidate.get("failures", [])),
-        len([warning for warning in candidate.get("warnings", []) if warning != PAUSE_WARNING]),
+        len([warning for warning in candidate.get("warnings", []) if warning not in {PAUSE_WARNING, RESTART_WARNING}]),
         len(candidate.get("warnings", [])),
         float(candidate.get("score", float("inf"))),
         int(candidate.get("attempt", 1)),
@@ -602,7 +612,7 @@ def chunk_severity(candidates: list[dict[str, Any]], selected: dict[str, Any]) -
     all_warnings = selected.get("warnings") or []
     if not all_warnings:
         return "ok"
-    warnings = [warning for warning in all_warnings if warning != PAUSE_WARNING]
+    warnings = [warning for warning in all_warnings if warning not in {PAUSE_WARNING, RESTART_WARNING}]
     if not warnings:
         return "warning"
     evaluated = [candidate for candidate in candidates if candidate.get("recognizedText") is not None]

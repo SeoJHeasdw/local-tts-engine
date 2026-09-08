@@ -111,3 +111,17 @@ test("최근 결과 한 줄에는 첫 구간과 나머지 개수만 적는다", 
   assert.equal(voiceFindingSummaryLine([FINDINGS[0]]), "2:14–2:21 · 148페이지");
   assert.equal(voiceFindingSummaryLine([]), "");
 });
+
+
+test('뒤로·앞으로 이동과 이동 후 새 화면 선택은 브라우저처럼 동작한다', async () => {
+  const {createViewHistory} = await import('./renderer/view-utils.mjs');
+  const history=createViewHistory();
+  assert.equal(history.canBack,false);
+  history.visit('results'); history.visit('review'); history.visit('review');
+  assert.equal(history.back(),'results'); assert.equal(history.canForward,true);
+  assert.equal(history.forward(),'review');
+  history.back(); history.visit('edit');
+  assert.equal(history.canForward,false);
+  assert.equal(history.back(),'results'); assert.equal(history.back(),'new');
+  assert.equal(history.back(),'new'); assert.equal(history.canBack,false);
+});

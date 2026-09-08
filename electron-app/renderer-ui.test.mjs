@@ -73,34 +73,13 @@ test("최근 결과는 열기만 기본 행동으로 두고 나머지를 더 보
 });
 
 
-test("제작 완료 패널이 목소리 확인 구간을 실제로 그린다", async () => {
-  // The renderer used to define this and never call it, so a run that flagged a
-  // page finished with an empty panel and the finding only lived in a file.
-  const [html, script, css] = await Promise.all([
-    fs.readFile(path.join(renderer, "index.html"), "utf8"),
-    fs.readFile(path.join(renderer, "app.js"), "utf8"),
-    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
-  ]);
-  assert.match(html, /id="voice-quality-panel"/);
-  assert.match(html, /id="voice-quality-list"/);
-  // Audio-only runs have no video to repair, so their segments are shown but
-  // not offered as a click that could only fail.
-  assert.match(script, /renderCompleteVoiceFindings\(findings, report\.videoPath \? report\.target : null\)/);
-  assert.match(script, /panel\.dataset\.repairable = target \? "yes" : "no"/);
-  // Cleared when the next job starts, so a clean run never shows stale findings.
-  assert.match(script, /renderCompleteVoiceFindings\(\[\]\);/);
-  assert.match(css, /\.voice-quality-panel\[data-tone="failed"\]/);
-});
-
-test("확인 구간을 누르면 그 페이지가 채워진 영상 편집으로 넘어간다", async () => {
-  const script = await fs.readFile(path.join(renderer, "app.js"), "utf8");
-  assert.match(script, /async function openVoiceRepair\(target, finding\)/);
-  assert.match(script, /api\.adoptResultVideo\(target\)/);
-  assert.match(script, /\$\("\[data-view='edit'\]"\)\.click\(\)/);
-  assert.match(script, /setEditOperation\("voice"\)/);
-  assert.match(script, /setVoiceSource\("generate"\)/);
-  assert.match(script, /\$\("#voice-start-page"\)\.value = String\(finding\.slideNumber\)/);
-  assert.match(script, /\$\("#voice-end-page"\)\.value = String\(finding\.slideNumber\)/);
+test("완료 화면은 권장 요약과 전용 검수 화면 진입을 제공한다", async () => {
+  const html = await fs.readFile(path.join(renderer, "index.html"), "utf8");
+  assert.match(html, /id="review-latest"/);
+  assert.match(html, /id="view-review"/);
+  assert.match(html, /id="review-player"/);
+  assert.match(html, /id="review-findings-list"/);
+  assert.doesNotMatch(html, /id="finding-dialog"|data-operation="voice"/);
 });
 
 test("결과를 편집으로 넘기는 통로가 preload와 main 양쪽에 있다", async () => {
@@ -112,13 +91,11 @@ test("결과를 편집으로 넘기는 통로가 preload와 main 양쪽에 있�
   assert.match(main, /ipcMain\.handle\("studio:adopt-result-video"/);
 });
 
-test("최근 결과도 확인 구간을 시간과 함께 보여 준다", async () => {
+test("최근 영상 결과는 전용 검수 화면에서 열린다", async () => {
   const script = await fs.readFile(path.join(renderer, "app.js"), "utf8");
   assert.match(script, /const findings = item\.voiceFindings \|\| \[\]/);
-  assert.match(script, /summarizeVoiceFindings\(findings\)/);
-  assert.match(script, /voiceFindingSummaryLine\(findings\)/);
-  assert.match(script, /findingsPanel\.className = "output-findings"/);
-  assert.match(script, /renderVoiceFindingRow\(finding, target\)/);
+  assert.match(script, /openReview\(target\)/);
+  assert.doesNotMatch(script, /findingsPanel\.className = "output-findings"/);
 });
 
 test("목소리 확인은 제작 실패가 아니라 별도 확인 항목이다", async () => {

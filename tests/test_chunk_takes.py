@@ -154,3 +154,20 @@ def test_a_chunk_whose_text_was_never_rewritten_is_not_marked_risky() -> None:
 def test_generating_zero_takes_is_refused() -> None:
     with pytest.raises(ValueError):
         resolve_chunk_take(chunk(), attempt_limit=0, synthesize=synthesizer(), review=None)
+
+
+def test_short_restart_retries_then_stops_when_clean():
+    synthesize = synthesizer()
+    review = reader([{'warnings': ['짧은 발음 반복 확인 필요']}, {}])
+    result = resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=review)
+    assert synthesize.made == [1, 2]
+    assert result['selected']['attempt'] == 2
+    assert result['severity'] == 'ok'
+
+
+def test_unresolved_restart_uses_existing_budget_and_stays_a_listening_warning():
+    synthesize = synthesizer()
+    review = reader([{'warnings': ['짧은 발음 반복 확인 필요']}] * 4)
+    result = resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=review)
+    assert synthesize.made == [1, 2, 3, 4]
+    assert result['severity'] == 'warning'

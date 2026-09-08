@@ -106,3 +106,20 @@ export function voiceFindingSummaryLine(findings = []) {
   const first = findings[0];
   return `${voiceFindingLabel(first)} · ${first.slideNumber}페이지${summary.total > 1 ? ` 외 ${summary.total - 1}곳` : ""}`;
 }
+
+export function createViewHistory(initial = 'new') {
+  let items = [initial], index = 0;
+  return {
+    get current() { return items[index]; },
+    get canBack() { return index > 0; },
+    get canForward() { return index < items.length - 1; },
+    visit(view) {
+      if (view === items[index]) return view;
+      items = [...items.slice(0, index + 1), view].slice(-100);
+      index = items.length - 1;
+      return view;
+    },
+    back() { if (index > 0) index--; return items[index]; },
+    forward() { if (index < items.length - 1) index++; return items[index]; },
+  };
+}

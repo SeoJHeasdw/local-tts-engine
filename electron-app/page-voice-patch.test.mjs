@@ -180,3 +180,47 @@ test("교체한 길이만큼 이후 타임라인이 밀린다", () => {
     startMs: 2_000, endMs: 4_000, replacementDurationMs: 3_000, deltaMs: 1_000,
   });
 });
+
+test('짧은 소리 제거는 선택 음성만 무음 처리하고 영상 스트림을 보존한다', async () => {
+  const {muteRegionFilter} = await import('./pipeline-utils.mjs');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(),'tts-mute-test-'));
+  try {
+    const input = await makeVideo(path.join(dir,'input.mp4'), {seconds:3});
+    const output = path.join(dir,'output.mp4');
+    await run('ffmpeg',['-v','error','-i',input,'-map','0:v:0','-map','0:a:0','-c:v','copy','-af',muteRegionFilter(1,1.2,3),'-c:a','aac','-b:a','192k',output]);
+    const hash = async file => (await run('ffmpeg',['-v','error','-i',file,'-map','0:v:0','-c','copy','-f','hash','-'])).stdout;
+    assert.equal(await hash(input),await hash(output));
+    assert(Math.abs(await ffprobeDuration(input)-await ffprobeDuration(output)) <= .025);
+    const pcm = path.join(dir,'audio.f32');
+    await run('ffmpeg',['-v','error','-i',output,'-vn','-f','f32le','-ac','1','-ar','48000',pcm]);
+    const samples=await fs.readFile(pcm);
+    const rms=(start,end)=>{
+      let sum=0,count=0;
+      for(let index=Math.round(start*48000);index<Math.round(end*48000);index++){sum+=samples.readFloatLE(index*4)**2;count++;}
+      return Math.sqrt(sum/count);
+    };
+    assert(rms(1.03,1.17)<.0001);
+    assert(rms(.8,.95)>.01 && rms(1.3,1.5)>.01);
+  } finally {await fs.rm(dir,{recursive:true,force:true});}
+});
+
+
+test('짧은 소리 교체는 지정한 구간에만 새 음성을 넣고 나머지를 보존한다', async () => {
+  const {replaceRegionPlan}=await import('./pipeline-utils.mjs');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'tts-region-test-'));
+  try {
+    const input=await makeVideo(path.join(dir,'in.mp4'),{seconds:3});
+    const voice=await makeVoice(path.join(dir,'voice.wav'),{seconds:.4});
+    const output=path.join(dir,'out.mp4');
+    await run('ffmpeg',['-v','error','-i',input,'-i',voice,'-filter_complex',replaceRegionPlan(1,2,3,.4),'-map','0:v:0','-map','[outa]','-c:v','copy','-c:a','aac','-b:a','192k',output]);
+    assert(Math.abs(await ffprobeDuration(input)-await ffprobeDuration(output))<=.025);
+    const hash=async file=>(await run('ffmpeg',['-v','error','-i',file,'-map','0:v:0','-c','copy','-f','hash','-'])).stdout;
+    assert.equal(await hash(input),await hash(output));
+    const inside=await meanVolume(output,1.05,.25);
+    const outside=await meanVolume(output,.2,.4);
+    const after=await meanVolume(output,2.2,.4);
+    const padding=await meanVolume(output,1.6,.2);
+    assert(inside>outside+10 && inside>after+10);
+    assert(padding< -70);
+  } finally {await fs.rm(dir,{recursive:true,force:true});}
+});

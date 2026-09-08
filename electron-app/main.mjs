@@ -7,6 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   combineLessonCatalogs,
+  reviewPages,
+  muteRegionFilter,
+  replaceRegionPlan,
   isInside,
   lessonCatalogFromPresets,
   mapWithConcurrency,
@@ -767,10 +770,24 @@ async function registerSelected(paths, kind, extras = []) {
       if (pageRange) {
         value.timelinePath = timelinePath;
         value.pageRange = pageRange;
+        value.pages = reviewPages(timeline);
+      }
+    }
+    if (kind === "video") {
+      const settings = await readAppSettings();
+      const captionRoot = runtimePaths(settings.paths).captionOutputRoot;
+      const reports = [path.join(path.dirname(value.path), "validation-report.json"),
+        path.join(captionRoot, path.basename(path.dirname(value.path)), "validation-report.json")];
+      for (const reportPath of reports) {
+        const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
+        if (report?.videoPath && path.resolve(report.videoPath) === value.path) {
+          value.voiceFindings = report.voiceFindings || [];
+          break;
+        }
       }
     }
     selectedFiles.set(token, value);
-    return { token, kind, name: value.name, path: value.path, pageRange: value.pageRange };
+    return { token, kind, name: value.name, path: value.path, pageRange: value.pageRange, audioUrl: kind === "audio" ? pathToFileURL(value.path).href : null, pages: value.pages || [], voiceFindings: value.voiceFindings || [], videoUrl: kind === "video" ? pathToFileURL(value.path).href : null };
   }));
 }
 
@@ -1197,6 +1214,52 @@ async function runVoiceBatchEdit(options, outputDir) {
   return report;
 }
 
+async function runMuteEdit(options, outputDir) {
+  const record = chosenRecord(options.videoToken, "video");
+  const probe = await inspectMedia(record.path);
+  if (!probe.streams?.some(stream => stream.codec_type === "audio")) throw new Error("음성 트랙이 없는 영상입니다.");
+  const start = Number(options.muteStart), end = Number(options.muteEnd);
+  const filter = muteRegionFilter(start, end, Number(probe.format?.duration));
+  const output = path.join(outputDir, `${options.name}.mp4`);
+  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
+    "-n", "-hide_banner", "-nostats", "-i", record.path, "-map", "0:v:0", "-map", "0:a:0",
+    "-c:v", "copy", "-af", filter, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output,
+  ]);
+  if (record.timelinePath) {
+    await fs.copyFile(record.timelinePath, path.join(outputDir, "timeline.json"));
+    await fs.copyFile(record.timelinePath, path.join(outputDir, videoTimelineFileName(output)));
+  }
+  const report = await validateEditVideo(output, "mute-region", [record.path], outputDir);
+  report.repair = { startMs: Math.round(start * 1000), endMs: Math.round(end * 1000), fadeMs: 5 };
+  report.review = { status: "pending" };
+  await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  return report;
+}
+
+async function runRegionReplaceEdit(options, outputDir) {
+  const video = chosenRecord(options.videoToken, "video");
+  const audio = chosenRecord(options.audioToken, "audio");
+  const [videoProbe, audioProbe] = await Promise.all([inspectMedia(video.path), inspectMedia(audio.path)]);
+  if (!videoProbe.streams?.some(s => s.codec_type === "audio") || !audioProbe.streams?.some(s => s.codec_type === "audio")) throw new Error("영상과 교체 파일에 음성 트랙이 필요합니다.");
+  const start = Number(options.muteStart), end = Number(options.muteEnd);
+  const filter = replaceRegionPlan(start, end, Number(videoProbe.format?.duration), Number(audioProbe.format?.duration));
+  const output = path.join(outputDir, `${options.name}.mp4`);
+  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
+    "-n", "-hide_banner", "-nostats", "-i", video.path, "-i", audio.path,
+    "-filter_complex", filter, "-map", "0:v:0", "-map", "[outa]",
+    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output,
+  ]);
+  if (video.timelinePath) {
+    await fs.copyFile(video.timelinePath, path.join(outputDir, "timeline.json"));
+    await fs.copyFile(video.timelinePath, path.join(outputDir, videoTimelineFileName(output)));
+  }
+  const report = await validateEditVideo(output, "replace-region", [video.path, audio.path], outputDir);
+  report.repair = { startMs:Math.round(start*1000), endMs:Math.round(end*1000), audioDurationMs:Math.round(Number(audioProbe.format.duration)*1000), fadeMs:5 };
+  report.review = { status:"pending" };
+  await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  return report;
+}
+
 async function runVideoEdit(options) {
   const job = activeJob;
   const studio = runtimePaths(options.paths);
@@ -1213,6 +1276,8 @@ async function runVideoEdit(options) {
   let report;
   if (options.operation === "merge") report = await runMergeEdit(options, outputDir);
   else if (options.operation === "trim") report = await runTrimEdit(options, outputDir);
+  else if (options.operation === "mute-region") report = await runMuteEdit(options, outputDir);
+  else if (options.operation === "replace-region") report = await runRegionReplaceEdit(options, outputDir);
   else if (options.operation === "voice") report = await runVoiceBatchEdit(options, outputDir);
   else throw new Error("지원하지 않는 편집 작업입니다.");
   if (activeJob !== job) return;
@@ -1581,7 +1646,7 @@ function registerIpc() {
       throw new Error("이미 실행 중인 작업이 있습니다.");
     }
     requireRuntimeTool("ffmpeg", "FFmpeg");
-    const operation = ["merge", "trim", "voice", "voice-candidates"].includes(rawOptions.operation)
+    const operation = ["merge", "trim", "voice", "voice-candidates", "mute-region", "replace-region"].includes(rawOptions.operation)
       ? rawOptions.operation
       : null;
     if (!operation) throw new Error("편집 종류를 선택해 주세요.");
@@ -1783,10 +1848,11 @@ function registerIpc() {
   // video they were just looking at, so the result adopts itself as the input.
   ipcMain.handle("studio:adopt-result-video", async (event, target) => {
     guard(event);
-    const { file } = await resolveOutputFile(target);
+    const { file, directory } = await resolveOutputFile(target);
     if (!file || !/\.mp4$/i.test(file)) throw new Error("이 결과에는 편집할 영상이 없습니다.");
     const [registered] = await registerSelected([file], "video");
-    return registered;
+    const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
+    return { ...registered, voiceFindings: report?.voiceFindings || [] };
   });
 }
 

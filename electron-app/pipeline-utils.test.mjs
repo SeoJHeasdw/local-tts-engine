@@ -419,3 +419,45 @@ test("페이지 타임라인이 없으면 전체 음성을 덮지 않고 이유�
     /시작·끝 페이지를 확인/,
   );
 });
+
+test("짧은 반복 경고는 영상의 해당 단어 시각과 함께 표시한다", () => {
+  const [finding] = voiceQualityFindings({
+    chunks: [{key: "a", startMs: 1300, endMs: 33660}],
+    quality: {chunks: [{chunkKey: "a", slideNumber: 1, severity: "warning", selected: {
+      warnings: ["짧은 발음 반복 확인 필요"],
+      restarts: {checks: [{term: "초안", status: "warning", startMs: 19210, endMs: 19650}]},
+    }}]},
+  });
+  assert.equal(finding.startMs, 20510);
+  assert.equal(finding.endMs, 20950);
+  assert.deepEqual(finding.terms, [{term: "초안", status: "warning"}]);
+});
+
+
+test("검수 페이지는 연속 스텝의 원문과 시각을 합친다", async () => {
+  const { reviewPages } = await import('./pipeline-utils.mjs');
+  assert.deepEqual(reviewPages({entries:[
+    {slideNumber:10,slideId:'a',startMs:100,endMs:800,sourceText:'첫 문장'},
+    {slideNumber:10,slideId:'a',startMs:800,endMs:1800,sourceText:'다음 문장'},
+    {slideNumber:11,slideId:'b',startMs:2000,endMs:3000,sourceText:'둘째 페이지'},
+  ]}), [
+    {number:10,slideId:'a',startMs:100,endMs:1800,text:'첫 문장\n다음 문장'},
+    {number:11,slideId:'b',startMs:2000,endMs:3000,text:'둘째 페이지'},
+  ]);
+  assert.deepEqual(reviewPages(null), []);
+});
+
+test("구간 무음은 유효한 짧은 범위만 허용한다", async () => {
+  const { muteRegionFilter } = await import('./pipeline-utils.mjs');
+  for (const [start,end,duration] of [[-1,1,10],[0,3,10],[3,2,10],[9,11,10],[0,NaN,10],[0,.01,10]]) assert.throws(() => muteRegionFilter(start,end,duration));
+  assert.match(muteRegionFilter(20.495,20.640,297.58), /val\(ch\)/);
+});
+
+
+test('짧은 교체 음성이 선택 구간보다 길면 잘라내지 않고 거절한다', async () => {
+  const {replaceRegionPlan}=await import('./pipeline-utils.mjs');
+  assert.throws(()=>replaceRegionPlan(1,2,5,1.1), /보다 깁니다/);
+  assert.throws(()=>replaceRegionPlan(1,12,15,1));
+  assert.throws(()=>replaceRegionPlan(1,2,5,NaN));
+  assert.match(replaceRegionPlan(1,2,5,.5), /duration=first:normalize=0/);
+});

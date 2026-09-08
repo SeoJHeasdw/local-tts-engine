@@ -221,8 +221,8 @@ export function voiceQualityFindings(manifest = {}) {
       const timing = timings.get(String(chunk.chunkKey || "")) || {};
       const selected = chunk.selected || {};
       const reasons = [...(selected.failures || []), ...(selected.warnings || [])].map(String);
-      const pauses = selected.prosody?.checks || [];
-      const onlyPauses = pauses.length > 0 && reasons.every((reason) => reason === "단어 내부 끊김 확인 필요");
+      const pauses = [...(selected.prosody?.checks || []), ...(selected.restarts?.checks || [])];
+      const onlyPauses = pauses.length > 0 && reasons.every((reason) => ["단어 내부 끊김 확인 필요", "짧은 발음 반복 확인 필요"].includes(reason));
       const clipStart = Number(timing.startMs || 0);
       return {
         chapter: String(chunk.chapter || ""),
@@ -474,4 +474,38 @@ export async function mapWithConcurrency(items, limit, worker) {
   const concurrency = Math.max(1, Math.min(Math.floor(limit) || 1, values.length || 1));
   await Promise.all(Array.from({ length: concurrency }, () => run()));
   return results;
+}
+
+export function reviewPages(timeline) {
+  const pages = [];
+  for (const entry of timeline?.entries || []) {
+    const number = Number(entry.slideNumber), startMs = Number(entry.startMs), endMs = Number(entry.endMs);
+    if (!Number.isInteger(number) || number < 1 || !Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs <= startMs) continue;
+    let page = pages.at(-1);
+    if (!page || page.number !== number || page.slideId !== entry.slideId) {
+      page = { number, slideId: String(entry.slideId || ''), startMs, endMs, text: '' };
+      pages.push(page);
+    }
+    page.endMs = Math.max(page.endMs, endMs);
+    page.text += `${page.text ? '\n' : ''}${String(entry.sourceText || '')}`;
+  }
+  return pages;
+}
+
+export function muteRegionFilter(start, end, duration, maxSeconds = 2) {
+  if (![start, end, duration].every(Number.isFinite) || start < 0 || end > duration || end - start < .05 || end - start > maxSeconds) {
+    throw new Error('영상 안에서 0.05~2초의 제거 구간을 선택해 주세요.');
+  }
+  const a = start.toFixed(6), b = end.toFixed(6), innerA = (start + .005).toFixed(6), innerB = (end - .005).toFixed(6);
+  return `aeval='val(ch)*if(lt(t,${a}),1,if(lt(t,${innerA}),(${innerA}-t)/0.005,if(lt(t,${innerB}),0,if(lt(t,${b}),(t-${innerB})/0.005,1))))':c=same`;
+}
+
+export function replaceRegionPlan(start, end, videoDuration, audioDuration) {
+  if (![start, end, videoDuration, audioDuration].every(Number.isFinite) || start < 0 || end > videoDuration || end - start < .05 || end - start > 10 || audioDuration < .01) {
+    throw new Error('영상 안에서 0.05~10초의 교체 구간과 유효한 음성을 선택해 주세요.');
+  }
+  if (audioDuration > end - start + .001) throw new Error(`교체 음성(${audioDuration.toFixed(2)}초)이 선택 구간(${(end-start).toFixed(2)}초)보다 깁니다. 구간을 늘리거나 더 짧은 음성을 선택해 주세요.`);
+  const base = muteRegionFilter(start, end, videoDuration, 10);
+  const span = (end-start).toFixed(6), fadeStart = Math.max(0,audioDuration-.005).toFixed(6);
+  return `[0:a]${base}[base];[1:a]atrim=duration=${audioDuration.toFixed(6)},asetpts=PTS-STARTPTS,afade=t=in:d=0.005,afade=t=out:st=${fadeStart}:d=0.005,apad=whole_dur=${span},atrim=duration=${span},adelay=${(start*1000).toFixed(3)}:all=1[patch];[base][patch]amix=inputs=2:duration=first:normalize=0[outa]`;
 }

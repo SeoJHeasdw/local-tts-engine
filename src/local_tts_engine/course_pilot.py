@@ -73,6 +73,7 @@ from .speech_quality import (
     read_timed_words,
     review_candidate_prosody,
 )
+from .restarts import RESTART_POLICY
 from .prosody import MIN_INTERNAL_PAUSE_MS, PROSODY_POLICY, WORD_EDGE_GUARD_MS
 
 
@@ -1929,6 +1930,7 @@ def synthesize_excerpt(
                 "secondOpinion": True,
                 "confirmationModel": ALIGNER_REPOSITORY,
             },
+            "restartGate": {"enabled": automatic_quality, "policy": RESTART_POLICY},
             "lexicalGate": {
                 "enabled": automatic_quality,
                 "minimumKeyLength": MIN_LEXICAL_KEY_LENGTH,
