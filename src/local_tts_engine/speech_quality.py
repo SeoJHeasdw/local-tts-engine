@@ -102,6 +102,39 @@ LEXICAL_WARNING_DISTANCE = 0.24
 LEXICAL_FAILURE_DISTANCE = 0.55
 HANGUL_WORD_PATTERN = re.compile(r"[가-힣]+")
 
+# The reader writes numbers as digits no matter how the script spells them, so
+# "일곱 챕터" comes back as "7챕터", and the pronunciation pass then expands that
+# to the Sino-Korean "칠챕터". The script said the native "일곱", so two spellings
+# of the same number end up compared as different words and a mispronunciation
+# that never happened is reported.
+#
+# Only a term that is *entirely* a numeral is excused, and only when the reader
+# wrote the digits that numeral actually denotes, read from the transcript
+# before digits are expanded. A script reading 일곱 that the reader heard as
+# 여덟 comes back as "8", does not match, and is still reported. 셋뿐 is a
+# numeral plus a particle, not a numeral, so it is never excused.
+NUMERAL_DIGITS = {
+    # Native Korean, the forms that reach the lexical check as whole words.
+    "하나": "1", "한": "1", "둘": "2", "두": "2", "셋": "3", "세": "3",
+    "넷": "4", "네": "4", "다섯": "5", "여섯": "6", "일곱": "7", "여덟": "8",
+    "아홉": "9", "열": "10", "스물": "20", "서른": "30", "마흔": "40",
+    "쉰": "50", "예순": "60", "일흔": "70", "여든": "80", "아흔": "90",
+    # Sino-Korean. Most are single syllables that the key-length gate already
+    # skips; they are listed so the few that survive it behave consistently.
+    "영": "0", "공": "0", "일": "1", "이": "2", "삼": "3", "사": "4",
+    "오": "5", "육": "6", "칠": "7", "팔": "8", "구": "9", "십": "10",
+    "백": "100", "천": "1000", "만": "10000",
+}
+
+
+def numeral_written_as_digits(term: str, recognized_text: str) -> bool:
+    """Say whether a numeral-only term shows up as its own digits in the reading."""
+    digits = NUMERAL_DIGITS.get(term)
+    if digits is None:
+        return False
+    return re.search(rf"(?<!\d){re.escape(digits)}(?!\d)", recognized_text) is not None
+
+
 FAILURE_PENALTY = 25.0
 WARNING_PENALTY = 6.0
 TARGET_CHARACTERS_PER_SECOND = 4.2
@@ -258,6 +291,9 @@ def lexical_pronunciation_checks(
         ):
             continue
         seen.add(term)
+        # Read from the raw transcript: recognized_value has digits expanded.
+        if numeral_written_as_digits(term, recognized_text):
+            continue
         term_keys = tuple(key for key in phonetic_variants(term) if key)
         if not term_keys or max(map(len, term_keys)) < MIN_LEXICAL_KEY_LENGTH:
             continue

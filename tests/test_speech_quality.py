@@ -24,6 +24,7 @@ from local_tts_engine.speech_quality import (
     comparison_text,
     evaluate_candidate,
     lexical_pronunciation_checks,
+    numeral_written_as_digits,
     phonetic_error_rate,
     quality_summary,
 )
@@ -514,3 +515,43 @@ def test_a_single_word_term_still_suppresses_its_duplicate_lexical_check() -> No
         expected, recognized, COMPOUND_DICTIONARY, ("가드레일",)
     )
     assert not any(check["term"].startswith("가드레일") for check in reported)
+
+
+def test_a_numeral_read_back_as_its_own_digits_is_not_a_mispronunciation() -> None:
+    # The reader writes numbers as digits whatever the script says, so a
+    # correctly read 일곱 comes back as 7 and used to be reported as a missing
+    # word. This is the real CH00 슬라이드 10 line.
+    checks = lexical_pronunciation_checks(
+        "강의는 일곱 챕터인데, 따라가는 질문은 셋뿐입니다.",
+        "강의는 7챕터인데 따라가는 질문은 3분입니다.",
+    )
+
+    assert not any(check["term"] == "일곱" for check in checks)
+
+
+def test_a_numeral_heard_as_a_different_number_is_still_reported() -> None:
+    # The suppression must not become "numbers are never checked". 일곱 read as
+    # 여덟 comes back as 8, which is not the digit 일곱 denotes.
+    checks = lexical_pronunciation_checks(
+        "강의는 일곱 챕터로 이루어져 있습니다.",
+        "강의는 8챕터로 이루어져 있습니다.",
+    )
+
+    assert any(check["term"] == "일곱" for check in checks)
+
+
+def test_a_word_that_merely_starts_with_a_numeral_is_not_excused() -> None:
+    # 셋뿐 is not a numeral, it is a numeral plus a particle, and the reader
+    # hearing 3분 is a real difference the listener should get to judge.
+    checks = lexical_pronunciation_checks(
+        "따라가는 질문은 셋뿐입니다. 나머지는 뒤에서 다룹니다.",
+        "따라가는 질문은 3분입니다. 나머지는 뒤에서 다룹니다.",
+    )
+
+    assert any(check["term"] == "셋뿐입니다" for check in checks)
+
+
+def test_the_digit_match_does_not_straddle_a_longer_number() -> None:
+    # 열 denotes 10, and a reading that says 100 must not satisfy it.
+    assert numeral_written_as_digits("열", "열 장이 아니라 100장입니다") is False
+    assert numeral_written_as_digits("열", "10장을 봅니다") is True
