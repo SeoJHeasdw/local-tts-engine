@@ -7,6 +7,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import {
+  clipTimeline,
+  concatTimelines,
   pageVoicePatchPlan,
   pageVoicePatchesPlan,
   patchedTimeline,
@@ -363,4 +365,75 @@ test('짧은 소리 교체는 지정한 구간에만 새 음성을 넣고 나머
     assert(inside>outside+10 && inside>after+10);
     assert(padding< -70);
   } finally {await fs.rm(dir,{recursive:true,force:true});}
+});
+
+// A lecture split into lessons is joined back into a chapter, and a chapter is
+// trimmed down to a range. Both used to throw the page boundaries away, which
+// silently ended the video's life as something the app could repair.
+function lessonTimeline(pages, msPerPage, firstPage) {
+  return {
+    totalMs: pages * msPerPage,
+    entries: Array.from({ length: pages }, (_, index) => ({
+      slideNumber: firstPage + index,
+      startMs: index * msPerPage,
+      endMs: (index + 1) * msPerPage,
+      transitionAtMs: (index + 1) * msPerPage,
+      speechStartMs: index * msPerPage + 100,
+      speechEndMs: (index + 1) * msPerPage - 100,
+      alignment: { words: [{ startMs: index * msPerPage + 100, endMs: index * msPerPage + 400 }] },
+    })),
+  };
+}
+
+test("레슨 영상을 이어 붙이면 페이지 경계가 이어져 계속 다듬을 수 있다", () => {
+  const joined = concatTimelines([
+    { timeline: lessonTimeline(3, 2_000, 1), durationMs: 6_000 },
+    { timeline: lessonTimeline(2, 2_000, 4), durationMs: 4_000 },
+    { timeline: lessonTimeline(2, 2_000, 6), durationMs: 4_000 },
+  ]);
+
+  assert.equal(joined.totalMs, 14_000);
+  assert.deepEqual(joined.entries.map((entry) => entry.slideNumber), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(
+    joined.entries.map((entry) => [entry.startMs, entry.endMs]),
+    [[0, 2_000], [2_000, 4_000], [4_000, 6_000], [6_000, 8_000], [8_000, 10_000], [10_000, 12_000], [12_000, 14_000]],
+  );
+  // 이어 붙인 뒤에도 각 페이지의 시각이 실제 영상 위치를 가리켜야 교체가 맞는
+  // 자리에 들어간다.
+  assert.equal(joined.entries[3].speechStartMs, 6_100);
+  assert.equal(joined.entries[3].alignment.words[0].startMs, 6_100);
+});
+
+test("타임라인이 없는 영상이 섞여도 뒤 영상의 시각이 밀리지 않는다", () => {
+  const joined = concatTimelines([
+    { timeline: null, durationMs: 5_000 },
+    { timeline: lessonTimeline(2, 2_000, 1), durationMs: 4_000 },
+  ]);
+
+  assert.equal(joined.totalMs, 9_000);
+  assert.deepEqual(joined.entries.map((entry) => [entry.startMs, entry.endMs]), [[5_000, 7_000], [7_000, 9_000]]);
+});
+
+test("자른 영상은 남은 구간의 페이지만 0부터 다시 센다", () => {
+  const clipped = clipTimeline(lessonTimeline(5, 2_000, 10), 4_000, 8_000);
+
+  assert.equal(clipped.totalMs, 4_000);
+  assert.deepEqual(clipped.entries.map((entry) => entry.slideNumber), [12, 13]);
+  assert.deepEqual(clipped.entries.map((entry) => [entry.startMs, entry.endMs]), [[0, 2_000], [2_000, 4_000]]);
+});
+
+test("경계에 걸친 페이지는 버리지 않고 남는 만큼으로 줄인다", () => {
+  // 페이지 한가운데를 자르면 그 페이지는 잘린 채로라도 남아야, 대본과 화면이
+  // 있는 구간이 타임라인에서 사라지지 않는다.
+  const clipped = clipTimeline(lessonTimeline(4, 2_000, 1), 1_000, 5_000);
+
+  assert.deepEqual(clipped.entries.map((entry) => entry.slideNumber), [1, 2, 3]);
+  assert.deepEqual(clipped.entries.map((entry) => [entry.startMs, entry.endMs]), [[0, 1_000], [1_000, 3_000], [3_000, 4_000]]);
+  assert.equal(clipped.totalMs, 4_000);
+});
+
+test("남는 구간에 페이지가 하나도 없으면 타임라인을 만들지 않는다", () => {
+  assert.equal(clipTimeline(lessonTimeline(2, 2_000, 1), 9_000, 10_000), null);
+  assert.equal(clipTimeline({ entries: [] }, 0, 1_000), null);
+  assert.equal(concatTimelines([{ timeline: null, durationMs: 1_000 }]), null);
 });

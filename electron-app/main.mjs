@@ -24,6 +24,8 @@ import {
   presetFromManifest,
   providerForOptions,
   summarizeChecks,
+  clipTimeline,
+  concatTimelines,
   pageVoicePatchesPlan,
   timeRangeForPages,
   assertPageReplaceable,
@@ -824,13 +826,36 @@ async function validateEditVideo(outputPath, operation, inputs, outputDir) {
   return report;
 }
 
+// The app's own lectures already come out at the target spec, so re-encoding
+// them to concatenate costs an hour of x264 to change nothing. Only inputs that
+// actually differ are normalized.
+function mergeSegmentMatchesTarget(probe) {
+  const video = probe.streams?.find((stream) => stream.codec_type === "video");
+  const audio = probe.streams?.find((stream) => stream.codec_type === "audio");
+  if (!video || !audio) return false;
+  const [num, den] = String(video.r_frame_rate || "").split("/").map(Number);
+  return video.codec_name === "h264"
+    && Number(video.width) === 1920 && Number(video.height) === 1080
+    && video.pix_fmt === "yuv420p"
+    && den > 0 && Math.abs(num / den - 25) < 0.01
+    && audio.codec_name === "aac" && Number(audio.sample_rate) === 48000;
+}
+
 async function runMergeEdit(options, outputDir) {
-  const inputs = options.videoTokens.map((token) => chosenFile(token, "video"));
+  const records = options.videoTokens.map((token) => chosenRecord(token, "video"));
+  const inputs = records.map((record) => record.path);
   if (inputs.length < 2) throw new Error("합칠 영상은 2개 이상 선택해 주세요.");
   const segmentDir = path.join(outputDir, "work");
   await fs.mkdir(segmentDir, { recursive: true });
+  const probes = await Promise.all(inputs.map((input) => inspectMedia(input)));
+  const uniform = probes.every(mergeSegmentMatchesTarget);
+  if (uniform) {
+    emit({ type: "log", stream: "stdout",
+      text: "합칠 영상의 규격이 모두 같아 다시 굽지 않고 그대로 이어 붙입니다.\n" });
+  }
   const segments = [];
   for (const [index, input] of inputs.entries()) {
+    if (uniform) { segments.push(input); continue; }
     const output = path.join(segmentDir, `${String(index + 1).padStart(3, "0")}.mp4`);
     await normalizeMergeSegment(input, output);
     segments.push(output);
@@ -844,7 +869,28 @@ async function runMergeEdit(options, outputDir) {
     "-f", "concat", "-safe", "0", "-i", concatPath,
     "-c", "copy", "-movflags", "+faststart", output,
   ]);
-  return validateEditVideo(output, "merge", inputs, outputDir);
+
+  // Joining the files without joining their timelines produces a chapter the
+  // app can no longer repair: page replacement needs page boundaries.
+  const parts = await Promise.all(records.map(async (record, index) => ({
+    durationMs: Math.round(Number(probes[index].format?.duration || 0) * 1000),
+    timeline: record.timelinePath
+      ? await fs.readFile(record.timelinePath, "utf8").then(JSON.parse).catch(() => null)
+      : null,
+  })));
+  const report = await validateEditVideo(output, "merge", inputs, outputDir);
+  const merged = concatTimelines(parts);
+  if (merged) {
+    const timelinePath = path.join(outputDir, "timeline.json");
+    await fs.writeFile(timelinePath, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
+    report.timelinePath = timelinePath;
+  } else {
+    emit({ type: "log", stream: "stdout",
+      text: "합친 영상에 페이지 타임라인이 없습니다. 이 결과는 페이지 단위로 다듬을 수 없습니다.\n" });
+  }
+  report.videoReencoded = !uniform;
+  await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return report;
 }
 
 async function runTrimEdit(options, outputDir) {
@@ -880,7 +926,21 @@ async function runTrimEdit(options, outputDir) {
     "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
     "-movflags", "+faststart", output,
   ]);
-  return validateEditVideo(output, "trim", [input], outputDir);
+  const report = await validateEditVideo(output, "trim", [input], outputDir);
+  // Reading the timeline to resolve pages but not writing one back left the
+  // trimmed video unrepairable, which is the opposite of what trimming by page
+  // is for.
+  if (selected.timelinePath) {
+    const source = await fs.readFile(selected.timelinePath, "utf8").then(JSON.parse).catch(() => null);
+    const clipped = source && clipTimeline(source, Math.round(start * 1000), Math.round(end * 1000));
+    if (clipped) {
+      const timelinePath = path.join(outputDir, "timeline.json");
+      await fs.writeFile(timelinePath, `${JSON.stringify(clipped, null, 2)}\n`, "utf8");
+      report.timelinePath = timelinePath;
+      await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    }
+  }
+  return report;
 }
 
 async function generateReplacementVoice(options, outputDir) {

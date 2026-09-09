@@ -602,3 +602,87 @@ export function replaceRegionPlan(start, end, videoDuration, audioDuration) {
   const span = (end-start).toFixed(6), fadeStart = Math.max(0,audioDuration-.005).toFixed(6);
   return `[0:a]${base}[base];[1:a]atrim=duration=${audioDuration.toFixed(6)},asetpts=PTS-STARTPTS,afade=t=in:d=0.005,afade=t=out:st=${fadeStart}:d=0.005,apad=whole_dur=${span},atrim=duration=${span},adelay=${(start*1000).toFixed(3)}:all=1[patch];[base][patch]amix=inputs=2:duration=first:normalize=0[outa]`;
 }
+
+const SHIFTED_ENTRY_FIELDS = ["startMs", "endMs", "transitionAtMs", "speechStartMs", "speechEndMs"];
+
+function shiftTimelineEntry(entry, offsetMs) {
+  const moved = { ...entry };
+  for (const field of SHIFTED_ENTRY_FIELDS) {
+    if (Number.isFinite(Number(entry[field]))) moved[field] = Math.round(Number(entry[field]) + offsetMs);
+  }
+  if (entry.alignment?.words) {
+    moved.alignment = {
+      ...entry.alignment,
+      words: entry.alignment.words.map((word) => ({
+        ...word,
+        startMs: Math.round(Number(word.startMs) + offsetMs),
+        endMs: Math.round(Number(word.endMs) + offsetMs),
+      })),
+    };
+  }
+  if (entry.forcedPauses) {
+    moved.forcedPauses = entry.forcedPauses.map((pause) => ({
+      ...pause,
+      nextSpeechStartMs: Number.isFinite(Number(pause.nextSpeechStartMs))
+        ? Math.round(Number(pause.nextSpeechStartMs) + offsetMs)
+        : pause.nextSpeechStartMs,
+    }));
+  }
+  return moved;
+}
+
+/**
+ * Join the timelines of videos being concatenated into one.
+ *
+ * Without this a merged chapter is a video the app can no longer repair: page
+ * replacement needs page boundaries, and joining the files threw them away. The
+ * offset for each part is the summed duration of the parts before it, measured
+ * from the files rather than from the timelines, because the encoder's output
+ * length is what the merged video actually plays.
+ */
+export function concatTimelines(parts = [], now = new Date()) {
+  const usable = parts.filter((part) => part?.timeline?.entries?.length);
+  if (!usable.length) return null;
+  const entries = [];
+  let offsetMs = 0;
+  for (const part of parts) {
+    const durationMs = Math.round(Number(part?.durationMs) || 0);
+    if (part?.timeline?.entries?.length) {
+      for (const entry of part.timeline.entries) entries.push(shiftTimelineEntry(entry, offsetMs));
+    }
+    offsetMs += durationMs;
+  }
+  for (const [index, entry] of entries.entries()) {
+    const nextStart = index + 1 < entries.length ? Number(entries[index + 1].startMs) : offsetMs;
+    entry.gapAfterMs = Math.max(0, Math.round(nextStart - Number(entry.endMs)));
+  }
+  return { ...usable[0].timeline, generatedAt: now.toISOString(), totalMs: offsetMs, entries };
+}
+
+/**
+ * Keep only the part of a timeline that survives a trim, moved back to zero.
+ *
+ * A page is kept when it overlaps the kept span at all; its own bounds are then
+ * clamped, so a page cut in half still names the range the trimmed video plays
+ * rather than pointing outside it.
+ */
+export function clipTimeline(timeline, startMs, endMs, now = new Date()) {
+  const from = Math.round(Number(startMs));
+  const to = Math.round(Number(endMs));
+  if (!timeline?.entries?.length || !(to > from)) return null;
+  const entries = timeline.entries
+    .filter((entry) => Number(entry.endMs) > from && Number(entry.startMs) < to)
+    .map((entry) => {
+      const moved = shiftTimelineEntry(entry, -from);
+      moved.startMs = Math.max(0, Number(moved.startMs));
+      moved.endMs = Math.min(to - from, Number(moved.endMs));
+      moved.audio = { ...(entry.audio || {}), durationMs: moved.endMs - moved.startMs };
+      return moved;
+    });
+  if (!entries.length) return null;
+  for (const [index, entry] of entries.entries()) {
+    const nextStart = index + 1 < entries.length ? Number(entries[index + 1].startMs) : to - from;
+    entry.gapAfterMs = Math.max(0, Math.round(nextStart - Number(entry.endMs)));
+  }
+  return { ...timeline, generatedAt: now.toISOString(), totalMs: to - from, entries };
+}
