@@ -447,6 +447,7 @@ def evaluate_candidate(
     required_pronunciations: tuple[str, ...] | list[str] = (),
     attempt: int = 1,
     seed: int | None = None,
+    speech_parts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Score one TTS candidate and return a serializable quality record."""
     expected = comparison_text(expected_text, dictionary)
@@ -456,6 +457,15 @@ def evaluate_candidate(
     waveform = waveform_metrics(audio_path)
     duration_seconds = float(waveform["durationMs"]) / 1000
     pace = len(expected) / duration_seconds if duration_seconds else float("inf")
+    english_rates = []
+    if speech_parts:
+        korean_parts = [part for part in speech_parts if part["language"] != "English"]
+        korean_seconds = sum(part["durationMs"] for part in korean_parts) / 1000
+        korean_text = comparison_text(" ".join(part["text"] for part in korean_parts), dictionary)
+        pace = len(korean_text) / korean_seconds if korean_seconds else None
+        english_rates = [{"text": part["text"], "wordsPerSecond": round(
+            len(re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", part["text"])) / (part["durationMs"] / 1000), 3)}
+            for part in speech_parts if part["language"] == "English" and part["durationMs"] > 0]
     required_checks = [
         check_pronunciation(term, expected_text, recognized_text, dictionary)
         for term in required_pronunciations
@@ -481,9 +491,9 @@ def evaluate_candidate(
         failures.append("과도한 무음")
     if float(waveform["clippingRatio"]) > MAX_CLIPPING_RATIO:
         failures.append("클리핑")
-    if pace < MIN_SPEAKING_CHARACTERS_PER_SECOND:
+    if pace is not None and pace < MIN_SPEAKING_CHARACTERS_PER_SECOND:
         failures.append("지나치게 느린 발화")
-    if pace > MAX_SPEAKING_CHARACTERS_PER_SECOND:
+    if pace is not None and pace > MAX_SPEAKING_CHARACTERS_PER_SECOND:
         failures.append("지나치게 빠른 발화")
     for check in checks:
         reason = str(check.get("reason") or "")
@@ -499,7 +509,7 @@ def evaluate_candidate(
         + len(failures) * FAILURE_PENALTY
         + len(warnings) * WARNING_PENALTY
         + sum(float(check["distance"]) for check in checks)
-        + abs(pace - TARGET_CHARACTERS_PER_SECOND) * 0.25
+        + (abs(pace - TARGET_CHARACTERS_PER_SECOND) * 0.25 if pace is not None else 0)
     )
     return {
         "attempt": attempt,
@@ -514,7 +524,8 @@ def evaluate_candidate(
         "missingPronunciations": unheard,
         "characterErrorRate": round(cer, 6),
         "phoneticErrorRate": round(per, 6),
-        "speakingCharactersPerSecond": round(pace, 3),
+        "speakingCharactersPerSecond": round(pace, 3) if pace is not None else None,
+        **({"paceGateLanguage": "Korean", "englishSpeakingRates": english_rates} if speech_parts else {}),
         "waveform": waveform,
         "passed": not failures and not warnings,
         "failures": failures,
@@ -523,7 +534,7 @@ def evaluate_candidate(
     }
 
 
-def read_timed_words(model: Any, audio_path: Path, temperature: float) -> list[dict[str, Any]]:
+def read_timed_words(model: Any, audio_path: Path, temperature: float, *, language: str = "ko") -> list[dict[str, Any]]:
     """Get clip-relative word times without changing the content-ASR path.
 
     Use the same bounded reading windows as the content check. In particular,
@@ -541,7 +552,7 @@ def read_timed_words(model: Any, audio_path: Path, temperature: float) -> list[d
                 path = Path(scratch) / f"window-{index}.wav"
                 sf.write(path, samples[begin:end], rate)
             result = model.generate(
-                str(path), language="ko", task="transcribe", temperature=temperature,
+                str(path), language=language, task="transcribe", temperature=temperature,
                 return_timestamps=True, word_timestamps=True,
                 condition_on_previous_text=False, max_tokens=768,
             )

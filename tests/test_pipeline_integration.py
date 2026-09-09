@@ -67,7 +67,7 @@ def test_a_lecture_that_reads_correctly_costs_one_take_per_chunk(studio) -> None
     assert len(lecture.asr.calls) == 3
 
 
-def test_an_exact_english_reading_does_not_retry_a_korean_term_inside_it(studio) -> None:
+def test_an_exact_english_reading_does_not_retry_a_korean_term_inside_it(studio, monkeypatch) -> None:
     literal = "Do my Bots share one computer?"
     text = f"영어 표현도 함께 보겠습니다. {literal} 실행 환경입니다."
     lecture = studio(
@@ -78,8 +78,22 @@ def test_an_exact_english_reading_does_not_retry_a_korean_term_inside_it(studio)
         ],
         readings={text: text.replace("Bots", "bots")},
     )
+    from types import SimpleNamespace
+    readings = iter(["영어 표현도 함께 보겠습니다.", literal.lower(), "실행 환경입니다."])
+    languages = []
+    def read_segment(path, **kwargs):
+        if kwargs.get("return_timestamps"):
+            return SimpleNamespace(text="", segments=[])
+        languages.append(kwargs["language"])
+        return SimpleNamespace(text=next(readings))
+    monkeypatch.setattr(lecture.asr, "generate", read_segment)
     manifest = lecture.run(start_page=1, end_page=1)
-    assert len(lecture.tts.calls) == 1
+    assert len(lecture.tts.calls) == 3
+    assert [call["lang_code"] for call in lecture.tts.calls] == ["Korean", "English", "Korean"]
+    assert "ref_text" not in lecture.tts.calls[1]
+    assert lecture.tts.calls[0]["ref_text"] == lecture.tts.calls[2]["ref_text"]
+    assert languages == ["ko", "en", "ko"]
+    assert manifest["chunks"][0]["voiceRouting"]["englishReferenceMode"] == "speaker-only"
     assert manifest["quality"]["summary"]["clean"]
     assert manifest["quality"]["chunks"][0]["selected"]["requiredPronunciations"] == [literal]
 

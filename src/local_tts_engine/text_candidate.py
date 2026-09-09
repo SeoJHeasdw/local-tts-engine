@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import soundfile as sf
 
 from .course_pilot import (
@@ -19,9 +18,10 @@ from .course_pilot import (
     apply_adapter_scale,
     apply_pronunciation,
     production_pronunciation,
-    trim_and_fade_audio,
+    generate_candidate_audio,
     write_json,
 )
+from .english_voice import EnglishVoiceRouter
 from .pilot import (
     MODEL_SPECS,
     normalize_audio,
@@ -124,23 +124,16 @@ def generate_candidate(
     if model_key == "qwen3-tts":
         generation_args["ref_text"] = reference_text
 
-    started = time.perf_counter()
-    results = list(model.generate(**generation_args))
-    generation_ms = round((time.perf_counter() - started) * 1000)
-    if not results:
-        raise RuntimeError("목소리 후보가 생성되지 않았습니다.")
-    sample_rate = int(results[0].sample_rate)
-    if any(int(result.sample_rate) != sample_rate for result in results):
-        raise RuntimeError("생성 결과의 샘플레이트가 서로 다릅니다.")
-
-    raw = np.concatenate([np.asarray(result.audio) for result in results])
-    audio, cleanup = trim_and_fade_audio(raw, sample_rate)
+    router = EnglishVoiceRouter(production_pronunciation(), training_wrapper.model if training_wrapper else None) if model_key == "qwen3-tts" else None
+    generated = generate_candidate_audio(model.generate, generation_args, voice_router=router)
+    generation_ms = generated["generationMs"]
+    sample_rate, audio, cleanup = generated["sampleRate"], generated["audio"], generated["cleanup"]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     native_path = output_path.with_name(f"{output_path.stem}-native.wav")
     sf.write(native_path, audio, sample_rate, subtype="PCM_24")
     normalization = normalize_audio(native_path, output_path)
     output_probe = probe_audio(output_path)
-    peak_memory_gb = max(float(result.peak_memory_usage) for result in results)
+    peak_memory_gb = generated["peakMemoryGb"]
 
     metadata = {
         "schemaVersion": 1,
@@ -156,6 +149,7 @@ def generate_candidate(
         "reference": str(reference_path.resolve()),
         "output": str(output_path.resolve()),
         "cleanup": cleanup,
+        **({"voiceRouting": cleanup["voiceRouting"]} if cleanup.get("voiceRouting") else {}),
         "normalization": normalization,
         "performance": {
             "modelLoadMs": load_ms,
@@ -166,6 +160,7 @@ def generate_candidate(
     }
     write_json(metadata_path, metadata)
 
+    del router
     del model
     if training_wrapper is not None:
         del training_wrapper

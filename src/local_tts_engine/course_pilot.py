@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from .transcript_coverage import COVERAGE_POLICY, omission_recovery_parts, repeated_omissions, saved_omissions
+from .english_voice import EnglishVoiceRouter, LANGUAGE_GAP_MS, speech_segments, read_routed_transcript, read_routed_timings, match_english_level
 
 import numpy as np
 import soundfile as sf
@@ -1173,16 +1174,24 @@ def read_independent_word_times(audio_path: Path, text: str) -> list[dict[str, A
         mx.clear_cache()
 
 
-def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: list[str] | None = None) -> dict[str, Any]:
+def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: list[str] | None = None,
+                             *, voice_router: EnglishVoiceRouter | None = None) -> dict[str, Any]:
     """Make a normal take or join punctuation-bounded recovery pieces."""
     texts = parts or [arguments["text"]]
     if parts and " ".join(texts) != " ".join(arguments["text"].split()):
         raise ValueError("누락 복구 조각이 원래 발음문과 다릅니다.")
+    routing = voice_router.identity(arguments["text"]) if voice_router else {}
+    segments = [segment for text in texts for segment in (
+        speech_segments(text, voice_router.dictionary) if routing else [{"text": text, "language": arguments.get("lang_code", "Korean")}]
+    )]
     pieces, cleanups, part_records = [], [], []
     rate, generation_ms, peak, cursor = None, 0, 0.0, 0
-    for text in texts:
+    previous_language = None
+    for segment in segments:
+        text, language = segment["text"], segment["language"]
         started = time.perf_counter()
-        results = list(generate(**{**arguments, "text": text}))
+        call_arguments = {**arguments, "text": text}
+        results = list(voice_router.generate(generate, call_arguments, language) if routing else generate(**call_arguments))
         generation_ms += round((time.perf_counter() - started) * 1000)
         if not results:
             raise RuntimeError("음성 후보에서 오디오가 생성되지 않았습니다.")
@@ -1192,24 +1201,32 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
         raw = np.concatenate([np.asarray(result.audio) for result in results])
         audio, cleanup = trim_and_fade_audio(raw, rate)
         if pieces:
-            gap = np.zeros(round(STEP_GAP_MS * rate / 1000), dtype=audio.dtype)
+            gap_ms = LANGUAGE_GAP_MS if routing and previous_language != language else STEP_GAP_MS
+            gap = np.zeros(round(gap_ms * rate / 1000), dtype=audio.dtype)
             pieces.append(gap)
             cursor += len(gap)
         part_records.append({"text": text, "startMs": round(cursor * 1000 / rate),
-                             "durationMs": round(len(audio) * 1000 / rate)})
+                             "durationMs": round(len(audio) * 1000 / rate),
+                             **({"language": language, "startSample": cursor, "endSample": cursor + len(audio)} if routing else {})})
         pieces.append(audio)
         cleanups.append(cleanup)
         cursor += len(audio)
+        previous_language = language
         peak = max(peak, *(float(result.peak_memory_usage) for result in results))
     cleanup = dict(cleanups[0])
-    if parts:
+    if parts or routing:
         cleanup.update({
             "trimmedTailMs": cleanups[-1]["trimmedTailMs"],
             "shortenedSilenceCount": sum(c["shortenedSilenceCount"] for c in cleanups),
             "shortenedSilenceMs": sum(c["shortenedSilenceMs"] for c in cleanups),
-            "recovery": {"strategy": COVERAGE_POLICY, "gapMs": STEP_GAP_MS, "parts": part_records},
         })
-    return {"audio": np.concatenate(pieces), "sampleRate": rate, "cleanup": cleanup,
+    if parts:
+        cleanup["recovery"] = {"strategy": COVERAGE_POLICY, "gapMs": STEP_GAP_MS, "parts": part_records}
+    combined = np.concatenate(pieces)
+    if routing:
+        match_english_level(combined, rate, part_records)
+        cleanup["voiceRouting"] = {**routing, "sampleRate": rate, "segments": part_records}
+    return {"audio": combined, "sampleRate": rate, "cleanup": cleanup,
             "generationMs": generation_ms, "peakMemoryGb": peak}
 
 
@@ -1458,6 +1475,8 @@ def synthesize_excerpt(
         model = training_wrapper.full_model
     load_ms = round((time.perf_counter() - load_started) * 1000)
 
+    voice_router = EnglishVoiceRouter(pronunciation, training_wrapper.model if training_wrapper else None) if model_key == "qwen3-tts" else None
+
     # 루프 전 초기화 (첫 번째 클립에서 샘플레이트가 결정된다)
     target_samples: int | None = None
     native_rate: int | None = None
@@ -1500,6 +1519,7 @@ def synthesize_excerpt(
                 "maxInternalSilenceMs": MAX_INTERNAL_SILENCE_MS,
                 "targetInternalSilenceMs": TARGET_INTERNAL_SILENCE_MS,
                 **({"recovery": {"policy": COVERAGE_POLICY, "parts": parts, "gapMs": STEP_GAP_MS}} if parts else {}),
+                **({"voiceRouting": voice_router.identity(chunk.tts_text)} if voice_router and voice_router.identity(chunk.tts_text) else {}),
             }
         )
         clip_path = clips_dir / f"{chunk.key}--take-{attempt}--{cache_hash[:12]}.wav"
@@ -1530,7 +1550,7 @@ def synthesize_excerpt(
                 generation_args["ref_text"] = reference_text
             if parts:
                 print(f"[구절 누락 복구] {chunk.key}: 후보 {attempt}, 원문 그대로 {len(parts)}조각 합성", flush=True)
-            generated = generate_candidate_audio(model.generate, generation_args, parts)
+            generated = generate_candidate_audio(model.generate, generation_args, parts, voice_router=voice_router)
             generation_ms += generated["generationMs"]
             rate, audio, trim_info = generated["sampleRate"], generated["audio"], generated["cleanup"]
             sf.write(clip_path, audio, rate, subtype="PCM_24")
@@ -1550,11 +1570,11 @@ def synthesize_excerpt(
 
     quality_records: list[dict[str, Any]] = []
 
-    def read_once(audio_path: str, temperature: float) -> str:
+    def read_once(audio_path: str, temperature: float, language: str = "ko") -> str:
         """Run the independent ASR over one file that fits in a single window."""
         result = quality_model.generate(
             audio_path,
-            language="ko",
+            language=language,
             task="transcribe",
             temperature=temperature,
             return_timestamps=False,
@@ -1563,7 +1583,7 @@ def synthesize_excerpt(
         )
         return result.text
 
-    def transcribe(audio_path: str, temperature: float) -> str:
+    def transcribe(audio_path: str, temperature: float, routing: dict | None = None) -> tuple[str, list]:
         """Read one clip back, never handing the ASR more than one window.
 
         A clip longer than the ASR window is read in pieces cut at interior
@@ -1574,6 +1594,10 @@ def synthesize_excerpt(
         """
         nonlocal quality_evaluation_ms
         started = time.perf_counter()
+        if routing:
+            result = read_routed_transcript(Path(audio_path), routing, read_once, temperature)
+            quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
+            return result
         samples, rate = sf.read(audio_path, dtype="float32", always_2d=True)
         mono = np.mean(samples, axis=1, dtype=np.float32)
         windows = asr_reading_windows(mono, rate)
@@ -1588,7 +1612,7 @@ def synthesize_excerpt(
                     readings.append(read_once(str(window_path), temperature).strip())
             text = " ".join(reading for reading in readings if reading)
         quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
-        return text
+        return text, []
 
     def evaluate(chunk: CourseChunk, candidate: dict[str, Any]) -> dict[str, Any]:
         """Judge one take, ruling out decoder noise before blaming the take.
@@ -1600,15 +1624,25 @@ def synthesize_excerpt(
         """
         nonlocal quality_evaluation_ms
         def read(temperature: float) -> dict[str, Any]:
-            return evaluate_candidate(
+            recognized, english_checks = transcribe(candidate["audioPath"], temperature, candidate.get("voiceRouting"))
+            result = evaluate_candidate(
                 expected_text=chunk.tts_text,
-                recognized_text=transcribe(candidate["audioPath"], temperature),
+                recognized_text=recognized,
                 audio_path=Path(candidate["audioPath"]),
                 dictionary=pronunciation,
                 required_pronunciations=chunk.required_pronunciations,
                 attempt=int(candidate["attempt"]),
                 seed=int(candidate["seed"]),
+                speech_parts=candidate.get("voiceRouting", {}).get("segments"),
             )
+            if english_checks:
+                result["englishChecks"] = english_checks
+                mismatches = sum(not item["passed"] for item in english_checks)
+                if mismatches:
+                    result["warnings"].append("영어 구절 받아쓰기 확인 필요")
+                    result["passed"] = False
+                    result["score"] += 10 * mismatches
+            return result
 
         evaluation = read(0.0)
         if not evaluation["passed"]:
@@ -1616,7 +1650,7 @@ def synthesize_excerpt(
         started = time.perf_counter()
         evaluation = review_candidate_prosody(
             evaluation,
-            lambda path, temperature: read_timed_words(quality_model, path, temperature),
+            lambda path, temperature: read_routed_timings(quality_model, path, temperature, candidate["voiceRouting"]) if candidate.get("voiceRouting") else read_timed_words(quality_model, path, temperature),
             read_independent_word_times,
         )
         quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
@@ -1677,6 +1711,7 @@ def synthesize_excerpt(
                 "startMs": round(start_sample * 1000 / rate),
                 "endMs": round(end_sample * 1000 / rate),
                 "durationMs": round(frames * 1000 / rate),
+                **({"voiceRouting": selected["voiceRouting"]} if selected.get("voiceRouting") else {}),
                 **{
                     key: selected[key]
                     for key in (
@@ -1735,6 +1770,7 @@ def synthesize_excerpt(
 
     # Generation and review are finished together, so both models can go before
     # forced alignment claims the Metal memory they were using.
+    del voice_router
     del model
     if training_wrapper is not None:
         del training_wrapper
@@ -1912,6 +1948,7 @@ def synthesize_excerpt(
             "selectedAttempt": quality_by_chunk[item["key"]]["selected"].get("attempt", 1),
             "qualityPassed": quality_by_chunk[item["key"]]["selected"].get("passed", True),
             "qualitySeverity": quality_by_chunk[item["key"]].get("severity", "ok"),
+            **({"voiceRouting": item["voiceRouting"]} if item.get("voiceRouting") else {}),
         }
         for item in selected_chunks
     ]
@@ -2067,6 +2104,10 @@ def synthesize_excerpt(
         "previewPath": str(preview.resolve()),
         **final_probe,
         "chunks": chunk_manifest,
+        **({"voiceRouting": {"policy": "english-speaker-only-v1", "englishAdapter": None,
+              "englishReferenceMode": "speaker-only", "accentEnforced": False,
+              "changedChunks": sum(bool(item.get("voiceRouting")) for item in chunk_manifest)}}
+           if any(item.get("voiceRouting") for item in chunk_manifest) else {}),
         "entries": step_records,
         "software": {
             "python": platform.python_version(),

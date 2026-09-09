@@ -7,8 +7,8 @@ must never be responsible for deciding how a technical term or number is read.
 
 A dictionary entry marked ``"literal": true`` protects the span it matches from
 every later rule.  The lecture quotes English documentation aloud, and those
-sentences are read correctly as English — measured at a 0.019 phonetic distance
-on page 186.  Without protection the term dictionary reaches inside them and
+sentences keep their English spelling. ASR agreement does not establish natural
+English pronunciation. Without protection the term dictionary reaches inside them and
 produces "Do my 봇츠 share one computer?", which is neither language.
 """
 
@@ -214,6 +214,14 @@ def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:
 # rules run.  They are category ``Co``: no pattern in this module matches them,
 # so a protected span cannot be split, read as a number, or partially replaced.
 PROTECTED_PLACEHOLDER_START = 0xE000
+QUOTED_ENGLISH_PATTERN = re.compile(r'''["“]([^"“”\n]+)["”]''')
+
+
+def is_english_sentence(text: str) -> bool:
+    """Conservatively recognize prose, not an isolated technical identifier."""
+    return not re.search(r"[가-힣ㄱ-ㅎㅏ-ㅣ\ue000-\uf8ff]", text) and sum(
+        bool(re.search(r"[A-Za-z]", token)) for token in text.split()
+    ) >= 3
 
 
 def _protect_literal_spans(
@@ -238,6 +246,17 @@ def _protect_literal_spans(
         if matched is not None and pattern.search(output):
             matched.append({"from": str(item["from"]), "to": replacement})
         output = pattern.sub(swap, output)
+    # Deliberate English prose keeps its spelling even if a technical term
+    # inside it also has a Korean dictionary entry. Single terms keep that entry.
+    def protect_sentence(match: re.Match[str]) -> str:
+        if not is_english_sentence(match.group(1)):
+            return match.group(0)
+        kept.append(match.group(0))
+        return chr(PROTECTED_PLACEHOLDER_START + len(kept) - 1)
+    output = QUOTED_ENGLISH_PATTERN.sub(protect_sentence, output)
+    if is_english_sentence(output):
+        kept.append(output)
+        output = chr(PROTECTED_PLACEHOLDER_START + len(kept) - 1)
     return output, kept
 
 

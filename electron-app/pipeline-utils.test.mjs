@@ -44,6 +44,22 @@ test("기본 작업은 제작 LoRA v1 0.6과 레슨 전체 제작이다", () => 
   assert.equal(options.deliverable, "video");
 });
 
+test("영어 받아쓰기 확인은 실제 영어 구간으로 이동하고 다른 한국어 경고는 청크 범위를 유지한다", () => {
+  const selected = {warnings:["영어 구절 받아쓰기 확인 필요"],failures:[],
+    englishChecks:[{passed:false,startMs:1500,durationMs:2200,expectedText:"Do not use it.",recognizedText:"Do use it."}]};
+  const manifest={chunks:[{key:"a",startMs:10000,endMs:20000}],quality:{chunks:[{
+    chunkKey:"a",slideNumber:203,slideId:"grok-bot-doc",severity:"warning",selected,candidates:[selected]
+  }]}};
+  let findings=voiceQualityFindings(manifest);
+  assert.equal(findings[0].startMs,11500);
+  assert.equal(findings[0].endMs,13700);
+  assert.deepEqual(findings[0].englishChecks,selected.englishChecks);
+  selected.warnings.push("단어 발음 확인 필요");
+  findings=voiceQualityFindings(manifest);
+  assert.equal(findings[0].startMs,10000);
+  assert.equal(findings[0].endMs,20000);
+});
+
 test("페이지 직접 선택은 시작과 끝 범위를 보존한다", () => {
   const options = normalizeOptions({ name: "bundle-a", mode: "page", startPage: 25, endPage: 81 });
   assert.equal(options.mode, "page");

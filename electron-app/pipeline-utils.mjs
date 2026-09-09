@@ -223,13 +223,15 @@ export function voiceQualityFindings(manifest = {}) {
       const reasons = [...(selected.failures || []), ...(selected.warnings || [])].map(String);
       const pauses = [...(selected.prosody?.checks || []), ...(selected.restarts?.checks || [])];
       const onlyPauses = pauses.length > 0 && reasons.every((reason) => ["단어 내부 끊김 확인 필요", "짧은 발음 반복 확인 필요"].includes(reason));
+      const englishChecks = (selected.englishChecks || []).filter(check => !check.passed);
+      const onlyEnglish = englishChecks.length > 0 && reasons.every(reason => reason === "영어 구절 받아쓰기 확인 필요");
       const clipStart = Number(timing.startMs || 0);
       return {
         chapter: String(chunk.chapter || ""),
         slideId: String(chunk.slideId || ""),
         slideNumber: Number(chunk.slideNumber || 0),
-        startMs: onlyPauses ? clipStart + Math.min(...pauses.map((check) => check.startMs)) : clipStart,
-        endMs: onlyPauses ? clipStart + Math.max(...pauses.map((check) => check.endMs)) : Number(timing.endMs || timing.startMs || 0),
+        startMs: onlyEnglish ? clipStart + Math.min(...englishChecks.map(check => check.startMs)) : onlyPauses ? clipStart + Math.min(...pauses.map((check) => check.startMs)) : clipStart,
+        endMs: onlyEnglish ? clipStart + Math.max(...englishChecks.map(check => check.startMs + check.durationMs)) : onlyPauses ? clipStart + Math.max(...pauses.map((check) => check.endMs)) : Number(timing.endMs || timing.startMs || 0),
         severity,
         reasons: reasons.length ? reasons : ["자동 음성 검수 점수 미달"],
         terms: [...(selected.pronunciationChecks || []), ...pauses]
@@ -238,6 +240,7 @@ export function voiceQualityFindings(manifest = {}) {
         expectedText: String(selected.expectedText || ""),
         recognizedText: String(selected.recognizedText || ""),
         ...(selected.contentChecks?.length ? {contentChecks: selected.contentChecks} : {}),
+        ...(englishChecks.length ? {englishChecks} : {}),
         ...(selected.recovery ? {recovery: selected.recovery} : {}),
         selectedAttempt: Number(selected.attempt || 1),
         attempts: Array.isArray(chunk.candidates) ? chunk.candidates.length : 1,

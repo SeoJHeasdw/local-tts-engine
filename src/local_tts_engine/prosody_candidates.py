@@ -29,11 +29,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import soundfile as sf
 
 from .course_pilot import (
@@ -42,10 +40,11 @@ from .course_pilot import (
     create_preview,
     production_pronunciation,
     stable_digest,
-    trim_and_fade_audio,
+    generate_candidate_audio,
     write_json,
 )
 from .pilot import MODEL_SPECS, normalize_audio, probe_audio, snapshot_revision
+from .english_voice import EnglishVoiceRouter
 
 
 # ─── 텍스트 추출 ─────────────────────────────────────────────────────────────
@@ -132,25 +131,16 @@ def generate_candidates(
                 stable_digest({"chunkKey": chunk_key, "take": take})[:8], 16
             )
             mx.random.seed(seed)
-            started = time.perf_counter()
-            results = list(
-                model.generate(
+            generated = generate_candidate_audio(model.generate, dict(
                     text=text,
                     ref_audio=reference["path"],
                     ref_text=reference_text,
                     lang_code=spec.language,
                     verbose=False,   # 후보 생성은 조용히 진행
                     **settings,
-                )
-            )
-            generation_ms = round((time.perf_counter() - started) * 1000)
-            if not results:
-                raise RuntimeError(f"{chunk_key} take {take} 생성 결과가 없습니다.")
-
-            rate = int(results[0].sample_rate)
-            raw = np.concatenate([np.asarray(result.audio) for result in results])
-            # 트리밍·페이드 적용 (cleanup 통계는 index.json 에 기록)
-            audio, cleanup = trim_and_fade_audio(raw, rate)
+                ), voice_router=EnglishVoiceRouter(production_pronunciation()))
+            generation_ms = generated["generationMs"]
+            rate, audio, cleanup = generated["sampleRate"], generated["audio"], generated["cleanup"]
 
             # 파일 경로 정의
             native_path = chunk_dir / f"take-{take}-native.wav"  # 트리밍만 된 원본
