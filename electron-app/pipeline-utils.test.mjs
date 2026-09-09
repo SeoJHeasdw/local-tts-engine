@@ -24,6 +24,8 @@ import {
   withOutputReview,
   voiceFindingSeverity,
   voiceQualityFindings,
+  composeTotalMs,
+  normalizeComposeClips,
 } from "./pipeline-utils.mjs";
 
 test("기본 작업은 제작 LoRA v1 0.6과 레슨 전체 제작이다", () => {
@@ -460,4 +462,33 @@ test('짧은 교체 음성이 선택 구간보다 길면 잘라내지 않고 거
   assert.throws(()=>replaceRegionPlan(1,12,15,1));
   assert.throws(()=>replaceRegionPlan(1,2,5,NaN));
   assert.match(replaceRegionPlan(1,2,5,.5), /duration=first:normalize=0/);
+});
+
+test("편집 목록은 자르기와 합치기를 한 모델로 푼다", () => {
+  // 클립 하나에 구간을 주면 자르기, 여럿을 구간 없이 담으면 합치기,
+  // 섞으면 예전 두 탭으로는 표현할 수 없던 편집이 된다.
+  const trim = normalizeComposeClips([{ inMs: 0, outMs: 60_000 }], [600_000]);
+  assert.equal(trim[0].lengthMs, 60_000);
+  assert.equal(trim[0].trimmed, true);
+
+  const merge = normalizeComposeClips([{}, {}], [10_000, 20_000]);
+  assert.deepEqual(merge.map((clip) => clip.trimmed), [false, false]);
+  assert.equal(composeTotalMs(merge), 30_000);
+
+  const mixed = normalizeComposeClips([{ inMs: 5_000 }, {}], [20_000, 10_000]);
+  assert.deepEqual(mixed.map((clip) => [clip.inMs, clip.outMs, clip.trimmed]), [
+    [5_000, 20_000, true], [0, 10_000, false],
+  ]);
+  assert.equal(composeTotalMs(mixed), 25_000);
+});
+
+test("끝 지점을 비우면 그 영상 끝까지, 넘겨 적으면 끝에서 멈춘다", () => {
+  const clips = normalizeComposeClips([{ inMs: 1_000 }, { inMs: 0, outMs: 999_000 }], [5_000, 8_000]);
+  assert.deepEqual(clips.map((clip) => clip.outMs), [5_000, 8_000]);
+});
+
+test("빈 목록과 뒤집힌 구간은 렌더 전에 거절한다", () => {
+  assert.throws(() => normalizeComposeClips([], []), /하나 이상/);
+  assert.throws(() => normalizeComposeClips([{ inMs: 5_000, outMs: 2_000 }], [10_000]), /끝 지점/);
+  assert.throws(() => normalizeComposeClips([{}], [0]), /길이를 읽지 못했습니다/);
 });

@@ -437,3 +437,53 @@ test("남는 구간에 페이지가 하나도 없으면 타임라인을 만들�
   assert.equal(clipTimeline({ entries: [] }, 0, 1_000), null);
   assert.equal(concatTimelines([{ timeline: null, durationMs: 1_000 }]), null);
 });
+
+// 클립 하나에 구간을 주면 자르기, 여럿을 구간 없이 담으면 합치기다. 편집기와
+// 다듬기의 간단 기능이 같은 경로를 쓰므로, 원본을 그대로 복사한 구간과 잘라서
+// 다시 구운 구간이 한 파일로 이어 붙는지가 이 모델 전체의 전제다.
+test("자른 클립과 그대로 쓰는 클립을 섞어도 한 영상으로 이어 붙는다", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "compose-"));
+  try {
+    const spec = (file, seconds, tone) => run("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", `testsrc=size=320x240:rate=25:duration=${seconds}`,
+      "-f", "lavfi", "-i", `sine=frequency=${tone}:duration=${seconds}:sample_rate=48000`,
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-shortest", file,
+    ]).then(() => file);
+
+    const whole = await spec(path.join(dir, "whole.mp4"), 4, 300);
+    const source = await spec(path.join(dir, "source.mp4"), 6, 900);
+
+    // 잘라 쓰는 클립만 다시 굽는다. -ss 를 -i 뒤에 두어 정확한 프레임에서 자른다.
+    const cut = path.join(dir, "cut.mp4");
+    await run("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error", "-i", source, "-ss", "2.000",
+      "-map", "0:v:0", "-map", "0:a:0",
+      "-vf", "scale=320:240,fps=25,format=yuv420p", "-af", "aresample=48000",
+      "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "96k", "-ar", "48000",
+      "-t", "2.000", "-movflags", "+faststart", cut,
+    ]);
+
+    const concatPath = path.join(dir, "concat.txt");
+    await fs.writeFile(concatPath, `file '${whole}'\nfile '${cut}'\n`, "utf8");
+    const output = path.join(dir, "out.mp4");
+    await run("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "concat", "-safe", "0", "-i", concatPath,
+      "-c", "copy", "-movflags", "+faststart", output,
+    ]);
+
+    assert.ok(Math.abs(await ffprobeDuration(output) - 6) < 0.3, "통클립 4초 + 자른 클립 2초");
+    const streams = await ffprobeStreams(output);
+    assert.ok(streams.some((stream) => stream.codec_type === "video"));
+    assert.ok(streams.some((stream) => stream.codec_type === "audio"));
+
+    // 앞은 원본 300Hz, 뒤는 잘라 온 900Hz 여야 순서가 맞다.
+    const head = await meanVolume(output, 1.0, 1.5);
+    const tail = await meanVolume(output, 4.5, 1.0);
+    assert.ok(tail > head + 8, `클립 순서가 어긋났다 (${head} vs ${tail})`);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

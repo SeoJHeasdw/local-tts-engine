@@ -686,3 +686,36 @@ export function clipTimeline(timeline, startMs, endMs, now = new Date()) {
   }
   return { ...timeline, generatedAt: now.toISOString(), totalMs: to - from, entries };
 }
+
+/**
+ * Resolve an edit list into the segments a render will actually produce.
+ *
+ * Merging and trimming are not two operations. A clip carries an in and an out;
+ * one clip with a range is a trim, several clips without one is a merge, and
+ * any mixture is what neither of the old two tabs could express. Everything
+ * downstream — the ffmpeg plan, the joined timeline, the length shown before
+ * rendering — reads this one list.
+ */
+export function normalizeComposeClips(clips = [], durationsMs = []) {
+  if (!Array.isArray(clips) || clips.length === 0) {
+    throw new Error("편집할 영상을 하나 이상 담아 주세요.");
+  }
+  return clips.map((clip, index) => {
+    const durationMs = Math.round(Number(durationsMs[index]) || 0);
+    if (!(durationMs > 0)) throw new Error(`${index + 1}번째 영상의 길이를 읽지 못했습니다.`);
+    const inMs = Math.max(0, Math.round(Number(clip?.inMs) || 0));
+    const rawOut = clip?.outMs == null || clip.outMs === "" ? durationMs : Math.round(Number(clip.outMs));
+    const outMs = Math.min(durationMs, rawOut);
+    if (!(outMs > inMs)) {
+      throw new Error(`${index + 1}번째 영상의 끝 지점은 시작 이후여야 합니다.`);
+    }
+    // A clip that spans its whole source can be carried through untouched;
+    // only a real cut forces the frame-accurate path.
+    const trimmed = inMs > 0 || outMs < durationMs;
+    return { index, inMs, outMs, durationMs, trimmed, lengthMs: outMs - inMs };
+  });
+}
+
+export function composeTotalMs(segments = []) {
+  return segments.reduce((total, segment) => total + Number(segment.lengthMs || 0), 0);
+}

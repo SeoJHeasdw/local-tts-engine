@@ -25,7 +25,9 @@ import {
   providerForOptions,
   summarizeChecks,
   clipTimeline,
+  composeTotalMs,
   concatTimelines,
+  normalizeComposeClips,
   pageVoicePatchesPlan,
   timeRangeForPages,
   assertPageReplaceable,
@@ -780,12 +782,16 @@ async function registerSelected(paths, kind, extras = []) {
   }));
 }
 
-async function normalizeMergeSegment(input, output) {
+async function normalizeMergeSegment(input, output, { startSeconds = 0, durationSeconds = null } = {}) {
   const probe = await inspectMedia(input);
-  const duration = Number(probe.format?.duration || 0);
-  if (!duration) throw new Error(`영상 길이를 읽지 못했습니다: ${path.basename(input)}`);
+  const whole = Number(probe.format?.duration || 0);
+  if (!whole) throw new Error(`영상 길이를 읽지 못했습니다: ${path.basename(input)}`);
+  const duration = durationSeconds == null ? whole : durationSeconds;
   const hasAudio = probe.streams?.some((stream) => stream.codec_type === "audio");
+  // -ss before -i seeks by keyframe; placing it after decodes from the start and
+  // cuts on the exact frame, which is what a cut the user positioned deserves.
   const args = ["-y", "-hide_banner", "-nostats", "-i", input];
+  if (startSeconds > 0) args.push("-ss", startSeconds.toFixed(3));
   if (!hasAudio) args.push("-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono");
   args.push(
     "-map", "0:v:0",
@@ -839,6 +845,97 @@ function mergeSegmentMatchesTarget(probe) {
     && video.pix_fmt === "yuv420p"
     && den > 0 && Math.abs(num / den - 25) < 0.01
     && audio.codec_name === "aac" && Number(audio.sample_rate) === 48000;
+}
+
+/**
+ * Render one edit list: any number of clips, each with its own in and out.
+ *
+ * This is the only video assembly path. Trimming is a single clip with a range,
+ * merging is several clips without one, and the mixture the two old tabs could
+ * not express costs nothing extra here.
+ *
+ * Cut precision is decided per clip rather than per job. A clip that spans its
+ * whole source and already matches the target spec is carried through
+ * untouched; only a clip with a real cut is re-encoded, and then only that
+ * clip. Joining sixteen finished lessons therefore copies rather than spending
+ * an hour of x264 to change nothing.
+ */
+async function runComposeEdit(options, outputDir) {
+  const records = (options.clips || []).map((clip) => chosenRecord(clip.videoToken, "video"));
+  const probes = await Promise.all(records.map((record) => inspectMedia(record.path)));
+  const durations = probes.map((probe) => Math.round(Number(probe.format?.duration || 0) * 1000));
+  const segments = normalizeComposeClips(options.clips, durations);
+
+  const workDir = path.join(outputDir, "work");
+  await fs.mkdir(workDir, { recursive: true });
+
+  const prepared = [];
+  for (const segment of segments) {
+    const record = records[segment.index];
+    const carry = !segment.trimmed && mergeSegmentMatchesTarget(probes[segment.index]);
+    if (carry) { prepared.push(record.path); continue; }
+    const output = path.join(workDir, `${String(segment.index + 1).padStart(3, "0")}.mp4`);
+    await normalizeMergeSegment(record.path, output, {
+      startSeconds: segment.inMs / 1000,
+      durationSeconds: segment.lengthMs / 1000,
+    });
+    prepared.push(output);
+  }
+
+  const reencoded = prepared.filter((file, index) => file !== records[segments[index].index].path).length;
+  emit({ type: "log", stream: "stdout",
+    text: reencoded === 0
+      ? `클립 ${segments.length}개를 모두 다시 굽지 않고 그대로 이어 붙입니다.\n`
+      : `클립 ${segments.length}개 중 ${reencoded}개만 다시 굽습니다. 나머지는 원본을 그대로 씁니다.\n` });
+
+  const output = path.join(outputDir, `${options.name}.mp4`);
+  if (prepared.length === 1) {
+    await fs.copyFile(prepared[0], output);
+  } else {
+    const concatPath = path.join(workDir, "concat.txt");
+    await fs.writeFile(
+      concatPath,
+      `${prepared.map((file) => `file '${file.replaceAll("'", "'\\''")}'`).join("\n")}\n`,
+      "utf8",
+    );
+    await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
+      "-y", "-hide_banner", "-nostats",
+      "-f", "concat", "-safe", "0", "-i", concatPath,
+      "-c", "copy", "-movflags", "+faststart", output,
+    ]);
+  }
+
+  const report = await validateEditVideo(output, "compose", records.map((record) => record.path), outputDir);
+
+  // Each clip's page boundaries are cut to its own range and then joined, so a
+  // composed video stays something the app can still repair page by page.
+  const parts = await Promise.all(segments.map(async (segment) => {
+    const record = records[segment.index];
+    const source = record.timelinePath
+      ? await fs.readFile(record.timelinePath, "utf8").then(JSON.parse).catch(() => null)
+      : null;
+    return {
+      durationMs: segment.lengthMs,
+      timeline: source && (segment.trimmed ? clipTimeline(source, segment.inMs, segment.outMs) : source),
+    };
+  }));
+  const timeline = concatTimelines(parts);
+  if (timeline) {
+    const timelinePath = path.join(outputDir, "timeline.json");
+    await fs.writeFile(timelinePath, `${JSON.stringify(timeline, null, 2)}\n`, "utf8");
+    report.timelinePath = timelinePath;
+  } else {
+    emit({ type: "log", stream: "stdout",
+      text: "편집 결과에 페이지 타임라인이 없습니다. 이 영상은 페이지 단위로 다듬을 수 없습니다.\n" });
+  }
+  report.clips = segments.map((segment) => ({
+    name: records[segment.index].name,
+    inMs: segment.inMs, outMs: segment.outMs, lengthMs: segment.lengthMs,
+  }));
+  report.plannedMs = composeTotalMs(segments);
+  report.videoReencoded = reencoded > 0;
+  await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return report;
 }
 
 async function runMergeEdit(options, outputDir) {
@@ -1429,6 +1526,7 @@ async function runVideoEdit(options) {
   else if (options.operation === "replace-region") report = await runRegionReplaceEdit(options, outputDir);
   else if (options.operation === "voice") report = await runVoiceBatchEdit(options, outputDir);
   else if (options.operation === "voice-pages") report = await runPageVoicePatchBatch(options, outputDir);
+  else if (options.operation === "compose") report = await runComposeEdit(options, outputDir);
   else throw new Error("지원하지 않는 편집 작업입니다.");
   if (activeJob !== job) return;
   job.state = "done";
@@ -1796,7 +1894,7 @@ function registerIpc() {
       throw new Error("이미 실행 중인 작업이 있습니다.");
     }
     requireRuntimeTool("ffmpeg", "FFmpeg");
-    const operation = ["merge", "trim", "voice", "voice-pages", "voice-candidates", "mute-region", "replace-region"].includes(rawOptions.operation)
+    const operation = ["compose", "merge", "trim", "voice", "voice-pages", "voice-candidates", "mute-region", "replace-region"].includes(rawOptions.operation)
       ? rawOptions.operation
       : null;
     if (!operation) throw new Error("편집 종류를 선택해 주세요.");
