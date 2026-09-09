@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   buildChapterRanges,
+  findingExcerpt,
+  findingSeek,
   compactOutputLabel,
   outputGroupTitle,
   splitOutputTitle,
@@ -273,4 +275,68 @@ test("편에 속하지 않는 결과는 이름을 그대로 쓴다", () => {
   assert.deepEqual(splitOutputTitle("CH01 전체", ""), { scope: "", unit: "", title: "CH01 전체" });
   // 제목 없이 편 표시만 있는 경우도 깨지지 않는다.
   assert.equal(compactOutputLabel({ name: "j-ch02-lessons-ch02-l07", displayName: "CH02 L07" }), "L07");
+});
+
+// 실제 CH00 슬라이드 10. 대본 121자 중 걸린 낱말은 하나다.
+const CH00_FINDING = {
+  slideNumber: 10,
+  startMs: 272_385,
+  endMs: 290_000,
+  severity: "warning",
+  reasons: ["단어 일부 누락"],
+  terms: [{ term: "셋뿐입니다", status: "warning" }],
+  expectedText: "강의는 일곱 챕터인데, 따라가는 질문은 셋뿐입니다. 일 장은 왜 에이전트가 나왔는지 봅니다.",
+};
+const CH00_PAGE = {
+  number: 10, startMs: 272_385, endMs: 290_000,
+  words: [
+    { text: "강의는", startMs: 272_385, endMs: 272_945 },
+    { text: "일곱", startMs: 272_945, endMs: 273_265 },
+    { text: "챕터인데", startMs: 273_585, endMs: 273_985 },
+    { text: "따라가는", startMs: 274_305, endMs: 274_865 },
+    { text: "질문은", startMs: 274_865, endMs: 275_425 },
+    { text: "셋뿐입니다", startMs: 275_745, endMs: 276_145 },
+  ],
+};
+
+test("확인 항목은 대본 전체가 아니라 걸린 낱말과 그 앞뒤만 보여 준다", () => {
+  const excerpt = findingExcerpt(CH00_FINDING);
+  assert.equal(excerpt.term, "셋뿐입니다");
+  assert.ok(excerpt.before.endsWith("질문은 "), `앞이 잘못 잘렸다: ${excerpt.before}`);
+  assert.ok(excerpt.before.startsWith("…"), "앞을 잘랐으면 잘랐다고 표시한다");
+  assert.ok(excerpt.after.endsWith("…"), "뒤를 잘랐으면 잘랐다고 표시한다");
+  const whole = excerpt.before + excerpt.term + excerpt.after;
+  assert.ok(whole.length < CH00_FINDING.expectedText.length, "발췌가 원문보다 길면 발췌가 아니다");
+});
+
+test("걸린 낱말이 없으면 짧게 줄인 원문을 보여 준다", () => {
+  const excerpt = findingExcerpt({ expectedText: "짧은 문장", terms: [] });
+  assert.equal(excerpt.term, "");
+  assert.equal(excerpt.after, "짧은 문장");
+  assert.equal(findingExcerpt({}), null);
+});
+
+test("확인 항목을 누르면 청크 첫머리가 아니라 걸린 낱말로 옮겨 간다", () => {
+  // 청크는 272.4초에서 시작하지만 문제의 낱말은 275.7초에 있다. 청크 첫머리로
+  // 보내면 어디가 문제인지 다시 찾아야 한다.
+  const at = findingSeek(CH00_FINDING, CH00_PAGE);
+  assert.equal(at.word, "셋뿐입니다");
+  assert.equal(at.startMs, 275_045, "낱말 앞 0.7초부터 들려주어야 맥락 속에서 들린다");
+  assert.equal(at.endMs, 276_645);
+  assert.ok(at.startMs > CH00_FINDING.startMs, "청크 첫머리보다 뒤여야 한다");
+});
+
+test("낱말 시각이 없으면 원래 구간으로 옮겨 간다", () => {
+  assert.deepEqual(findingSeek(CH00_FINDING, { startMs: 0, endMs: 1, words: [] }), {
+    startMs: 272_385, endMs: 290_000,
+  });
+  assert.deepEqual(findingSeek(CH00_FINDING, null), { startMs: 272_385, endMs: 290_000 });
+});
+
+test("낱말 앞 여유는 페이지 시작을 넘어가지 않는다", () => {
+  const at = findingSeek(
+    { ...CH00_FINDING, terms: [{ term: "강의는" }] },
+    CH00_PAGE,
+  );
+  assert.equal(at.startMs, 272_385, "페이지보다 앞으로 되감지 않는다");
 });

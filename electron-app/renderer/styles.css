@@ -1357,3 +1357,13 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
 .output-group-body { display: grid; gap: 1px; background: var(--line); }
 .output-group-body .output-item { border: 0; border-radius: 0; background: var(--surface); }
 .output-group-body .output-item:hover { background: var(--raised); }
+
+/* 걸린 낱말은 문장 안에서 바로 짚여야 한다. 색만으로 말하지 않고 밑줄을 함께
+   두어, 색을 구분하기 어려워도 어디를 보라는 것인지 남는다. */
+.finding-term {
+  background: var(--warn-soft); color: var(--warn); font-weight: var(--fw-semi);
+  padding: 0 var(--s1); border-radius: 3px; box-shadow: inset 0 -2px 0 var(--warn);
+}
+li[data-severity="failed"] .finding-term {
+  background: var(--dngr-soft); color: var(--danger); box-shadow: inset 0 -2px 0 var(--danger);
+}

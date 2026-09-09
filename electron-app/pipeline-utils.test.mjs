@@ -442,13 +442,18 @@ test("짧은 반복 경고는 영상의 해당 단어 시각과 함께 표시한
 
 test("검수 페이지는 연속 스텝의 원문과 시각을 합친다", async () => {
   const { reviewPages } = await import('./pipeline-utils.mjs');
+  // 낱말 시각도 함께 모은다. 이것이 없으면 걸린 낱말이 아니라 페이지 처음으로
+  // 옮겨 가고, 어디가 문제인지 다시 찾아야 한다.
   assert.deepEqual(reviewPages({entries:[
-    {slideNumber:10,slideId:'a',startMs:100,endMs:800,sourceText:'첫 문장'},
-    {slideNumber:10,slideId:'a',startMs:800,endMs:1800,sourceText:'다음 문장'},
+    {slideNumber:10,slideId:'a',startMs:100,endMs:800,sourceText:'첫 문장',
+      alignment:{words:[{text:'첫',startMs:120,endMs:300},{text:'문장',startMs:300,endMs:700}]}},
+    {slideNumber:10,slideId:'a',startMs:800,endMs:1800,sourceText:'다음 문장',
+      alignment:{words:[{text:'다음',startMs:820,endMs:1200}]}},
     {slideNumber:11,slideId:'b',startMs:2000,endMs:3000,sourceText:'둘째 페이지'},
   ]}), [
-    {number:10,slideId:'a',startMs:100,endMs:1800,text:'첫 문장\n다음 문장'},
-    {number:11,slideId:'b',startMs:2000,endMs:3000,text:'둘째 페이지'},
+    {number:10,slideId:'a',startMs:100,endMs:1800,text:'첫 문장\n다음 문장',
+      words:[{text:'첫',startMs:120,endMs:300},{text:'문장',startMs:300,endMs:700},{text:'다음',startMs:820,endMs:1200}]},
+    {number:11,slideId:'b',startMs:2000,endMs:3000,text:'둘째 페이지',words:[]},
   ]);
   assert.deepEqual(reviewPages(null), []);
 });

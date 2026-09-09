@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 
-import { findingKeyOf } from './renderer/view-utils.mjs';
+import { findingExcerpt, findingKeyOf, findingSeek } from './renderer/view-utils.mjs';
 
 const source = await fs.readFile(new URL('./renderer/app.js', import.meta.url), 'utf8');
 const controller = source.slice(source.indexOf('let reviewTarget ='), source.indexOf('function formatDate('));
@@ -21,7 +21,7 @@ function fixture() {
   const context = vm.createContext({ $, $$:key=>key==='#review-mode-tabs button'?modes:[],
     document:{createElement:element}, voiceVideo:null, latestEditTarget:null,
     api:{startEdit:async payload=>calls.push(payload), setClearedFindings:async(target,keys)=>saved.push({target,keys})}, setEditBusy(){}, showToast(){},
-    findingKeyOf,
+    findingKeyOf, findingExcerpt, findingSeek,
     updateVoicePageMeta(){}, formatDuration:ms=>`${ms}`, voiceFindingReason:()=>'', voiceFindingLabel:()=>'',
     summarizeVoiceFindings:()=>({total:0,title:'',tone:'warning'}), Date, Number, Math,
   });

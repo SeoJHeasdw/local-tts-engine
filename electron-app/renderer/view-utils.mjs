@@ -273,3 +273,49 @@ export function outputGroupTitle(group = {}) {
   const { scope } = splitOutputTitle(first?.displayName, outputUnitLabel(first || {}));
   return scope || group.key || "";
 }
+
+// 확인 항목이 알려 줘야 하는 것은 대본 전체가 아니라 어느 낱말을 귀 기울여
+// 들어야 하는지다. 걸린 낱말만 뽑고, 그 낱말이 놓인 자리를 짧게 보여 준다.
+export function findingTerms(finding = {}) {
+  return (finding.terms || []).map((item) => String(item?.term || "")).filter(Boolean);
+}
+
+export function findingExcerpt(finding = {}, radius = 16) {
+  const text = String(finding.expectedText || "").trim();
+  const [term] = findingTerms(finding);
+  if (!text) return null;
+  const index = term ? text.indexOf(term) : -1;
+  if (index === -1) {
+    return { before: "", term: "", after: text.length > radius * 3 ? `${text.slice(0, radius * 3)}…` : text };
+  }
+  const from = Math.max(0, index - radius);
+  const to = Math.min(text.length, index + term.length + radius);
+  return {
+    before: `${from > 0 ? "…" : ""}${text.slice(from, index)}`,
+    term,
+    after: `${text.slice(index + term.length, to)}${to < text.length ? "…" : ""}`,
+  };
+}
+
+/**
+ * Where to move the playhead for a finding.
+ *
+ * The finding's own span is the whole chunk, so seeking to it lands at the top
+ * of a paragraph and leaves the listener hunting for the word again. When the
+ * page carries word timings, the flagged word's own time is used, with a short
+ * run-up so the word arrives in context rather than mid-syllable.
+ */
+export function findingSeek(finding = {}, page = null, leadInMs = 700, tailMs = 500) {
+  const fallback = { startMs: Number(finding.startMs) || 0, endMs: Number(finding.endMs) || 0 };
+  const words = page?.words || [];
+  const terms = findingTerms(finding);
+  if (!words.length || !terms.length) return fallback;
+  const hit = words.find((word) => terms.some((term) => term && String(word.text || "").includes(term)))
+    || words.find((word) => terms.some((term) => term && term.includes(String(word.text || "")) && String(word.text || "").length > 1));
+  if (!hit) return fallback;
+  return {
+    startMs: Math.max(Number(page.startMs) || 0, Number(hit.startMs) - leadInMs),
+    endMs: Math.min(Number(page.endMs) || Number(hit.endMs) + tailMs, Number(hit.endMs) + tailMs),
+    word: String(hit.text || ""),
+  };
+}

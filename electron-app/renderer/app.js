@@ -3,7 +3,9 @@ import {
   buildChapterRanges,
   chapterEtaLabel,
   createViewHistory,
+  findingExcerpt,
   findingKeyOf,
+  findingSeek,
   groupOutputs,
   etaLabel,
   filterOutputItems,
@@ -615,9 +617,19 @@ function renderVoiceFindingRow(finding) {
   time.textContent = voiceFindingLabel(finding);
   head.append(title, time);
 
+  // 대본을 통째로 말면 어느 낱말을 들어야 하는지가 오히려 묻힌다. 걸린 낱말과
+  // 그 앞뒤만 짧게 보여 준다.
   const line = document.createElement('p');
   line.className = 'finding-line';
-  line.textContent = String(finding.expectedText || '').trim() || voiceFindingReason(finding);
+  const excerpt = findingExcerpt(finding);
+  if (excerpt?.term) {
+    const before = document.createElement('span'); before.textContent = excerpt.before;
+    const term = document.createElement('mark'); term.className = 'finding-term'; term.textContent = excerpt.term;
+    const after = document.createElement('span'); after.textContent = excerpt.after;
+    line.append(before, term, after);
+  } else {
+    line.textContent = excerpt?.after || voiceFindingReason(finding);
+  }
 
   button.append(head, line);
 
@@ -644,7 +656,10 @@ function renderVoiceFindingRow(finding) {
     const page = voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
     selectReviewPage(page, voiceFindingReason(finding));
     showFindingDiff(finding);
-    seekReview(Number(finding.startMs) / 1000, Number(finding.endMs) / 1000);
+    // 항목의 구간은 청크 전체다. 그대로 옮기면 문단 첫머리에 떨어져 문제가 된
+    // 낱말을 다시 찾아야 한다. 낱말 시각이 있으면 그 자리로 간다.
+    const at = findingSeek(finding, page);
+    seekReview(at.startMs / 1000, at.endMs / 1000);
   });
   return row;
 }

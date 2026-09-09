@@ -576,11 +576,18 @@ export function reviewPages(timeline) {
     if (!Number.isInteger(number) || number < 1 || !Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs < 0 || endMs <= startMs) continue;
     let page = pages.at(-1);
     if (!page || page.number !== number || page.slideId !== entry.slideId) {
-      page = { number, slideId: String(entry.slideId || ''), startMs, endMs, text: '' };
+      page = { number, slideId: String(entry.slideId || ''), startMs, endMs, text: '', words: [] };
       pages.push(page);
     }
     page.endMs = Math.max(page.endMs, endMs);
     page.text += `${page.text ? '\n' : ''}${String(entry.sourceText || '')}`;
+    // 낱말별 시각이 있어야 걸린 단어로 정확히 옮겨 갈 수 있다. 없으면 페이지
+    // 처음으로 보내는 수밖에 없고, 그러면 어디가 문제인지 다시 찾아야 한다.
+    for (const word of entry.alignment?.words || []) {
+      const wordStart = Number(word.startMs), wordEnd = Number(word.endMs);
+      if (!Number.isFinite(wordStart) || !Number.isFinite(wordEnd)) continue;
+      page.words.push({ text: String(word.text || ''), startMs: wordStart, endMs: wordEnd });
+    }
   }
   return pages;
 }
