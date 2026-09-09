@@ -30,6 +30,15 @@
   참조하는 `english-speaker-only-v1`**(비교 5번)을 사용한다. 영어 구간은 English로
   별도 생성하고 참조 전사는 주지 않는다. 한국어는 기존 0.60과 참조 전사를 유지한다.
   미국식 발음은 청취 목표이며 모델이 강제하거나 자동 검수가 보증하는 설정이 아니다.
+- 같은 날 단어별 영어 전환 비교는 사용자가 네 샘플 모두 불합격으로 판정했다.
+  5번 영어 문장 승인을 개별 용어 전환 승인으로 확대하지 않는다.
+- 후속 전체 문장 비교의 Observation은 0.60/0.20 모두 청취 승인됐다. 기존 강도
+  0.60을 유지하며, `literal: true, inline: true` 용어는 영어 철자를 한국어 문장
+  안에 그대로 넣어 함께 합성한다. 이 용어만 영어 음성으로 분리하지 않는다.
+  2026-09-10 추가 청취로 Anthropic, permission denied(코드 표기 포함),
+  Artificial Analysis, Intelligence Index, Boris Cherny, Y Combinator도 채택했다.
+  Authentication/Authorization은 보류, Attention Budget/knowledge cutoff는
+  새 방식 불채택으로 기존 한글 읽기를 유지한다. 추가 용어도 각각 먼저 들려준다.
 
 ## 데이터와 안전
 

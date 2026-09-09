@@ -181,11 +181,17 @@
   },
   {
     "from": "Intelligence Index",
-    "to": "인텔리전스 인덱스"
+    "to": "Intelligence Index",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "인텔리전스 인덱스"
   },
   {
     "from": "Artificial Analysis",
-    "to": "아티피셜 애널리시스"
+    "to": "Artificial Analysis",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "아티피셜 애널리시스"
   },
   {
     "from": "Large Language Model",
@@ -241,7 +247,10 @@
   },
   {
     "from": "Boris Cherny",
-    "to": "보리스 체르니"
+    "to": "Boris Cherny",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "보리스 체르니"
   },
   {
     "from": "knowledge cutoff",
@@ -517,7 +526,10 @@
   },
   {
     "from": "Observation",
-    "to": "옵저베이션"
+    "to": "Observation",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "옵저베이션"
   },
   {
     "from": "Permission",
@@ -621,7 +633,10 @@
   },
   {
     "from": "permissiondenied",
-    "to": "퍼미션 디나이드"
+    "to": "permission denied",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "퍼미션 디나이드"
   },
   {
     "from": "gmailsend",
@@ -995,5 +1010,33 @@
   {
     "from": "eat",
     "to": "이트"
+  },
+  {
+    "from": "permission_denied",
+    "to": "permission denied",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "퍼미션 디나이드"
+  },
+  {
+    "from": "permission denied",
+    "to": "permission denied",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "퍼미션 디나이드"
+  },
+  {
+    "from": "Y Combinator",
+    "to": "Y Combinator",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "와이 콤비네이터"
+  },
+  {
+    "from": "Anthropic",
+    "to": "Anthropic",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "앤스로픽"
   }
 ]

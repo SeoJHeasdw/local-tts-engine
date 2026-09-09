@@ -262,3 +262,72 @@
   5번을 선택했다. 미국식 억양의 강제 지원이나 자동 품질 보증으로 표현하지 않는다.
 - 확인 출처(2026-09-09): [Qwen3-TTS 공식 모델·라이선스](https://github.com/QwenLM/Qwen3-TTS),
   [Base voice clone 설명](https://github.com/QwenLM/Qwen3-TTS#voice-clone).
+
+### 같은 날 후속: 단어별 영어 전환 불채택
+
+사용자가 어색한 용어만 선별하도록 위임해 Observation, Anthropic,
+Authentication/Authorization, permission denied의 한국어 문장 내 분리 합성을
+비교했다. 영어는 5번, 한국어와 조사·어미는 0.60으로 합성하고 경계 쉼을 줄였다.
+사용자가 각 새 샘플을 듣고 **“다 fail 망함”**으로 모두 거절했다.
+
+용어 사전·분리/연결 로직·UI 설명을 실험 전으로 되돌렸다. L09 교체는 실행하지
+않았으며 기존 5번 영어 인용문 처리와 L05 수정본은 유지한다. 실패 원인을
+특정 음소·목소리·연결부로 단정하지 않는다. 받아쓰기 통과는 청취 승인과 다르며,
+영어 문장에 대한 승인을 단어 삽입 방식에 확대 적용하지 않는다.
+
+실험 음성과 검수 기록은 `output/reviews/2026-09-09/selected-english-terms/`,
+복원 전 변경은 그 안의 `rejected-implementation/`에 보존했다. 생성 결과는
+`reviewStatus: rejected`로 기록하고 L09용 ready.json은 rejected-ready.json으로
+이동해 기존 준비 결과가 후속 교체 대상으로 남지 않게 했다. 후속 자동 생성·
+영상 수정은 중단한다. 다시 비교할 때는 개별 청취 확인을 먼저 받는다.
+
+### 2026-09-10 후속: Observation 전체 문장 합성 승인
+
+사용자가 `다음 판단에 넣을 새로운 Observation입니다.`를 문장 전체로 합성한
+0.60·0.20 샘플을 듣고 “둘 다 좋은데?”라고 승인했다. 영어 철자를 보존하면서
+한국어 모드·기존 참조 음성과 전사를 쓰며 단어마다 음성 모드를 바꾸지 않는다.
+기존 제작값을 보존하는 0.60을 채택한다. 앞선 실패와는 합성 단위뿐 아니라
+영어의 참조 방식도 달라졌으므로, 어느 한 요소만 원인으로 입증했다고 표현하지
+않는다. 승인 표본은 unsplit-english-term/comparison-20260909-235104-467862다.
+
+프로그램에는 Observation만 먼저 반영했다. 나머지 선별 용어는 같은 0.60으로
+문장 여섯 개를 준비해 독립 청취한다. 이 제안 사전과 실행 계획은
+`output/reviews/2026-09-10/unsplit-remaining-terms/`에 있으며 제작 사전과 분리한다.
+L09에서는 단어만 교체하지 않고 승인된 문장 범위를 교체한다. 현재 영상은 아직
+수정하지 않았고 새 단어 정렬과 나머지 샘플 청취를 기다린다.
+
+### 같은 날 후속: 용어별 최종 선택
+
+사용자가 여섯 후속 샘플을 각각 듣고 1·3·5·6은 좋음, 2는 애매함, 4는 이상함으로
+판정했다. Anthropic, permission denied, Artificial Analysis/Intelligence Index,
+Boris Cherny/Y Combinator를 한국어 문장 안에서 영어 철자를 유지하는 0.60 방식으로
+채택한다. 이전에 승인한 Observation도 유지한다. permissiondenied와
+permission_denied는 같은 `permission denied` 발음문으로 읽는다.
+
+Authentication/Authorization은 보류하고 Attention Budget/knowledge cutoff의
+새 읽기는 적용하지 않는다. 이 네 용어는 기존 한글 읽기를 유지한다. 원어민 억양이나
+모든 사용 문맥의 품질을 보증하는 결정이 아니라 해당 샘플의 사용자 청취 선택이다.
+제작 사전은 승인 항목 9개 표기만 inline으로 지정한다. 단어별 음성 분리는 사용하지
+않으며 한국어 0.60·참조 전사와 기존 영어 인용문 5번 정책을 보존한다.
+
+L09는 승인한 Observation의 전체 문장과 permission denied를 포함한 전체 스텝을
+교체한다. 거절된 단어별 분리 음성을 재사용하지 않는다. 원본의 말끝을 남기지
+않도록 교체 끝을 조용한 꼬리 구간으로 넓혔다(152.480초와 191.560초).
+원본 영상과 수정 밖 음성은 보존하고, 검수 기록에서는 교체한 지적 단어만 해결
+이력으로 이동하며 교체 밖 `반환` 지적은 유지한다.
+
+### 같은 날 기존 CH01·CH02 보정과 추가 청취
+
+사용자가 기존 17개 영상에도 정책 적용을 요청했다. 추가 대상은 CH01의 Anthropic
+2문장, CH02 L03의 Boris Cherny 1문장, L04의 Anthropic 5문장, L05의 Anthropic
+1문장, L08의 Artificial Analysis/Intelligence Index 2문장이다. 이미 보정한 L09는
+유지했다. L04·L05는 최신 편집 PCM·타임라인에서 이어 편집해 과거 수리를 보존한다.
+
+이 과정에서 Boris Cherny의 새 문장은 사용자가 직접 승인했다. CH01의 첫
+Anthropic 문장은 두 번의 비교 이후 세 후보 중 영어 철자 0.60을 선택했다.
+0.20과 앤쓰로픽 한글 표기 후보는 실험에만 사용하고 현재 정책은 유지한다.
+
+발음 기준 확인(2026-09-10): [Cambridge Anthropic 발음](https://dictionary.cambridge.org/us/pronunciation/english/anthropic)의
+미국식은 /ænˈθrɑː.pɪk/이다. 첫 모음은 /æ/여서 한국어로는 앤 쪽에 가깝지만
+TH /θ/를 한국어 쓰와 동일한 소리라고 표현하지 않는다. 이 설명과 개별 합성의
+첫 모음·자연스러움이 좋은지는 별개이며, 최종 후보는 사용자의 청취로 선택했다.

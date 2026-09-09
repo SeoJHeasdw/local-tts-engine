@@ -1,11 +1,12 @@
 #!/usr/bin/env python3.13
-"""Replace prepared English quotes and retime burned captions without changing Korean PCM."""
+"""Replace prepared speech and retime burned captions, preserving PCM outside edits."""
 from __future__ import annotations
 
 import argparse
 import copy
 import datetime
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -38,7 +39,7 @@ class AudioTimeMap:
         return round(value + delta)
 
 
-def patch_timeline(original, replacements):
+def patch_timeline(original, replacements, policy="english-speaker-only-v1"):
     mapping = AudioTimeMap(replacements)
     timeline = copy.deepcopy(original)
     for old, entry in zip(original["entries"], timeline["entries"]):
@@ -56,13 +57,17 @@ def patch_timeline(original, replacements):
                 raise ValueError("교체 음성의 단어 수가 기존 타임라인과 다릅니다.")
             start = item["wordStart"]
             words[start:start + item["wordCount"]] = new_words
+            if item.get("entryTtsText"):
+                entry["ttsText"] = item["entryTtsText"]
         entry["speechStartMs"], entry["speechEndMs"] = words[0]["startMs"], words[-1]["endMs"]
         for pause in entry.get("forcedPauses", []):
             if "nextSpeechStartMs" in pause:
                 pause["nextSpeechStartMs"] = mapping(pause["nextSpeechStartMs"])
     timeline["totalMs"] = mapping(original["totalMs"])
     timeline["generatedAt"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    timeline["editTiming"] = {"method": "english-word-alignment-and-caption-anchors", "policy": "english-speaker-only-v1"}
+    if original.get("editTiming"):
+        timeline["previousEditTiming"] = copy.deepcopy(original["editTiming"])
+    timeline["editTiming"] = {"method": "speech-word-alignment-and-caption-anchors", "policy": policy}
     return timeline, mapping
 
 
@@ -162,6 +167,54 @@ def video_filter(anchors):
     return "setpts='(" + "+".join(terms) + ")/TB',fps=25"
 
 
+def replaced_finding_terms(finding, replacements):
+    """Identify old term warnings fully covered by user-approved replacement speech."""
+    normalize = lambda text: re.sub(r"[^\w]", "", text.casefold())
+    expected = normalize(finding.get("expectedText", ""))
+    overlapping = [item for item in replacements
+                   if finding["startMs"] < item["endMs"] and finding["endMs"] > item["startMs"]
+                   and (item["selected"].get("reviewStatus") == "approved"
+                        or item["selected"].get("evaluation", {}).get("passed") is True)]
+    covered = []
+    for term in finding.get("terms", []):
+        word = normalize(term.get("term", ""))
+        if not word:
+            continue
+        count = expected.count(word)
+        replaced = sum(normalize(" ".join(w["text"] for w in item["oldWords"])).count(word) for item in overlapping)
+        if count and replaced >= count:
+            covered.append(term)
+    return covered
+
+
+def validate_replacement_approval(ready):
+    """Keep policy authorization separate from listening approval of a new take."""
+    if ready.get("policy") != "ko-inline-english-v1":
+        return "english-reading"
+    retrofit = ready.get("approvalBasis") == "approved-policy-retrofit" and bool(ready.get("authorization"))
+    all_listened = True
+    for item in ready["replacements"]:
+        selected = item["selected"]
+        if selected.get("reviewStatus") in {"rejected", "deferred"}:
+            raise ValueError("사용자가 거절하거나 보류한 후보는 적용할 수 없습니다.")
+        if selected.get("reviewStatus") == "approved":
+            continue
+        all_listened = False
+        if not retrofit or selected.get("evaluation", {}).get("passed") is not True:
+            raise ValueError("문장 후보의 청취 승인 또는 승인 정책에 따른 내용 검수가 필요합니다.")
+    return "user-listened" if all_listened else "approved-policy-auto-review"
+
+
+def source_audio_path(ready, manifest):
+    """Use the latest edited PCM when repairing an existing edit, never its ancestor."""
+    if ready.get("sourceAudioPath"):
+        path = Path(ready["sourceAudioPath"])
+        if sha256_file(path) != ready.get("sourceAudioSha256"):
+            raise ValueError("최신 편집 음성의 해시가 준비 기록과 다릅니다.")
+        return path
+    return Path(manifest["audioPath"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ready", type=Path, required=True)
@@ -169,10 +222,14 @@ def main():
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--deck", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-name", help="Optional MP4 basename for a successive edit")
     parser.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    video = args.output_dir / f"{args.video.stem} - 영어 발음 수정.mp4"
+    output_name = args.output_name or f"{args.video.stem} - 영어 발음 수정.mp4"
+    if Path(output_name).name != output_name or not output_name.endswith(".mp4"):
+        raise ValueError("출력 이름은 폴더 경로가 없는 MP4 파일명이어야 합니다.")
+    video = args.output_dir / output_name
     if video.exists():
         raise ValueError("수정 영상이 이미 있습니다. 기존 산출물을 덮어쓰지 않습니다.")
     old_report = json.loads((args.project / "validation-report.json").read_text())
@@ -181,13 +238,16 @@ def main():
     work = args.output_dir / "work"
     work.mkdir(exist_ok=True)
     ready = json.loads(args.ready.read_text())
+    policy = ready.get("policy", "english-speaker-only-v1")
+    approval = validate_replacement_approval(ready)
     for path_key, hash_key in (("sourceManifest", "sourceManifestSha256"), ("sourceTimeline", "sourceTimelineSha256")):
         if sha256_file(Path(ready[path_key])) != ready[hash_key]:
             raise ValueError("교체 음성 준비 뒤 원본 제작 기록이 변경됐습니다.")
     manifest = json.loads(Path(ready["sourceManifest"]).read_text())
     original = json.loads(Path(ready["sourceTimeline"]).read_text())
     video_hash = sha256_file(args.video)
-    samples, rate = sf.read(manifest["audioPath"], dtype="float32")
+    input_audio = source_audio_path(ready, manifest)
+    samples, rate = sf.read(input_audio, dtype="float32")
     if samples.ndim != 1 or abs(len(samples) * 1000 / rate - original["totalMs"]) > 1:
         raise ValueError("원본 음성의 형식 또는 길이가 원본 타임라인과 다릅니다.")
     replacements = copy.deepcopy(ready["replacements"])
@@ -199,7 +259,7 @@ def main():
         n, before, after = part["samples"], part["oldStartSample"], part["newStartSample"]
         if not np.array_equal(samples[before:before + n], stored[after:after + n]):
             raise ValueError("교체 밖 PCM 음성이 변경됐습니다.")
-    timeline, mapping = patch_timeline(original, replacements)
+    timeline, mapping = patch_timeline(original, replacements, policy)
     if abs(timeline["totalMs"] - len(repaired) * 1000 / rate) > 1:
         raise ValueError("실제 음성과 타임라인 길이가 다릅니다.")
     for entry in timeline["entries"]:
@@ -217,7 +277,8 @@ def main():
     subprocess.run(["node", str(runtime), str(timeline_path), str(config), str(args.output_dir)], check=True)
     captions = json.loads((args.output_dir / "captions.json").read_text())
     anchors, compact = video_anchors(original, timeline, old_captions, captions)
-    plan = {"sourceVideo": str(args.video.resolve()), "sourceVideoSha256": video_hash,
+    plan = {"policy": policy, "approvalBasis": approval, "sourceAudioPath": str(input_audio.resolve()),
+        "sourceAudioSha256": sha256_file(input_audio), "sourceVideo": str(args.video.resolve()), "sourceVideoSha256": video_hash,
         "replacements": replacements, "preservedPcmRanges": evidence, "anchors": anchors,
         "compactAnchors": compact, "videoFilter": video_filter(compact), "durationMs": timeline["totalMs"]}
     (work / "render-plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
@@ -254,24 +315,40 @@ def main():
         "sourceValidation": old_report, "englishRepair": {**plan, "audioCorrelations": correlations}})
     report.pop("lessonReview", None)
     report["review"] = {"status": "pending", "clearedFindings": []}
-    for old, finding in zip(old_report["voiceFindings"], report["voiceFindings"]):
+    report["voiceFindings"] = []
+    report["repairedFindings"] = copy.deepcopy(old_report.get("repairedFindings", []))
+    term_reasons = {"지정 발음 확인 필요", "지정 발음 불일치", "단어 발음 확인 필요", "단어 일부 누락", "단어 누락 또는 오독"}
+    for old in old_report["voiceFindings"]:
+        finding = copy.deepcopy(old)
+        covered = replaced_finding_terms(old, replacements)
+        if covered and len(covered) == len(old.get("terms", [])) and set(old.get("reasons", [])) <= term_reasons:
+            report["repairedFindings"].append({"original": copy.deepcopy(old), "reason": "reported terms replaced; listening or content review passed"})
+            continue
+        if covered:
+            finding["terms"] = [term for term in finding["terms"] if term not in covered]
         finding["startMs"], finding["endMs"] = mapping(old["startMs"]), mapping(old["endMs"])
         if f"{old['slideNumber']}:{old['startMs']}" in old_report.get("review", {}).get("clearedFindings", []):
             report["review"]["clearedFindings"].append(f"{finding['slideNumber']}:{finding['startMs']}")
         if any(old["startMs"] < r["endMs"] and old["endMs"] > r["startMs"] for r in replacements):
             finding["previousEvidence"] = copy.deepcopy(old)
             finding["recognizedText"] = ""
-            finding["evidenceStatus"] = "original-korean-finding-preserved; english-replaced"
+            finding["evidenceStatus"] = "original-finding-preserved; overlapping-speech-replaced"
+        report["voiceFindings"].append(finding)
     for item in replacements:
         chapter = next(e["chapter"] for e in original["entries"] if e["key"] == item["entryKey"])
         report["voiceFindings"].append({"chapter": chapter, "slideId": item["slideId"], "slideNumber": item["slideNumber"],
             "startMs": mapping(item["startMs"]), "endMs": mapping(item["startMs"]) + item["replacementMs"],
-            "severity": "warning", "reasons": ["영어 교체 후 청취 확인"], "terms": [],
+            "severity": "warning", "reasons": ["교체 문장 연결부 청취 확인"], "terms": [],
             "expectedText": item["text"], "recognizedText": item["selected"]["readings"][-1]})
     report["voiceFindings"].sort(key=lambda finding: finding["startMs"])
-    report["voiceQuality"] = {"ok": False, "clean": False, "needsReview": report.get("needsReview", []),
-        "listenSuggested": report.get("listenSuggested", []), "note": "기존 한국어 확인 항목 보존. 새 영어의 연결부 청취 확인 필요."}
-    labels = ["영상 전체 디코딩", "영상·음성·타임라인 길이", "영어 받아쓰기", "영어 단어 시각",
+    def pages(severity):
+        rows = {(f["chapter"], f["slideId"], f["slideNumber"]) for f in report["voiceFindings"] if f["severity"] == severity}
+        return [{"chapter": chapter, "slideId": slide, "slideNumber": number} for chapter, slide, number in sorted(rows, key=lambda row: row[2])]
+    report["needsReview"], report["listenSuggested"] = pages("failed"), pages("warning")
+    report["voiceQuality"] = {"ok": not report["needsReview"], "clean": not report["voiceFindings"], "needsReview": report["needsReview"],
+        "listenSuggested": report["listenSuggested"], "note": "교체 밖의 기존 확인 항목 보존. 새 문장의 연결부 청취 확인 필요."}
+    review_label = {"user-listened": "교체 음성 청취 승인", "approved-policy-auto-review": "승인 정책의 교체 음성 내용 검수", "english-reading": "영어 받아쓰기"}[approval]
+    labels = ["영상 전체 디코딩", "영상·음성·타임라인 길이", review_label, "교체 단어 시각",
         "자막 문구·묶음 보존", "자막·화면 경계 보정", "교체 밖 PCM 보존", "최종 영어 음성 일치", "원본 영상 보존"]
     report["checks"] = [{"label": label, "ok": True} for label in labels]
     report["summary"] = {"ok": True, "passed": len(labels), "total": len(labels), "failed": []}

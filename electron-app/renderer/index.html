@@ -418,7 +418,7 @@
                 <label class="field"><span>기본 모델</span><select id="global-model"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 설치됨</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 설치됨</option></select></label>
                 <label class="field"><span>목소리 어댑터</span><select id="global-adapter"></select></label>
                 <div class="field" id="global-scale-field"><div class="field-line"><span>내 목소리 LoRA 반영 강도</span><output id="global-scale-output">0.60</output></div><input id="global-scale" type="range" min="0.1" max="1" step="0.001" value="0.6"><div class="range-labels"><span>기본 모델에 가깝게</span><span>학습값 그대로</span></div></div>
-                <p class="setting-explain">한국어 제작 기본값은 0.60입니다. Qwen의 영어 인용문은 LoRA 없이 내 목소리 특징만 참조해 따로 읽습니다. 변경 후에는 짧은 샘플을 먼저 들어보세요.</p>
+                <p class="setting-explain">한국어 제작 기본값은 0.60입니다. 승인된 영어 용어는 한국어 문장과 함께 읽습니다. Qwen의 영어 인용문은 LoRA 없이 내 목소리 특징만 참조해 따로 읽습니다. 변경 후에는 짧은 샘플을 먼저 들어보세요.</p>
                 <label class="field"><span>동시에 만들 후보</span><select id="global-parallelism"><option value="2">2개 · 이 Mac 권장</option><option value="1">1개 · 메모리 절약</option></select></label>
                 <button class="secondary-small advanced-action" type="button" id="open-finetune-panel" aria-controls="finetune-panel" aria-expanded="false">새 파인튜닝</button>
             </div>

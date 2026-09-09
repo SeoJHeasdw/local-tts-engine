@@ -37,7 +37,7 @@ from .korean_phonetics import (
     pronunciation_distance,
 )
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
-from .pronunciation import apply_pronunciation
+from .pronunciation import comparison_pronunciation
 from .prosody import PAUSE_WARNING, confirm_pause_checks, interior_silences, pause_checks
 from .transcript_coverage import clause_omissions
 
@@ -144,7 +144,7 @@ TARGET_CHARACTERS_PER_SECOND = 4.2
 
 def comparison_text(text: str, dictionary: list[dict[str, Any]] | None = None) -> str:
     """Normalize spelling variants and retain only letters and numbers."""
-    value = apply_pronunciation(text, dictionary or [])
+    value = comparison_pronunciation(text, dictionary or [])
     value = unicodedata.normalize("NFKC", value).casefold()
     return "".join(
         character
@@ -155,7 +155,7 @@ def comparison_text(text: str, dictionary: list[dict[str, Any]] | None = None) -
 
 def pronunciation_keys(text: str, dictionary: list[dict[str, Any]] | None = None) -> tuple[str, ...]:
     """Return the pronunciation keys for text after dictionary normalization."""
-    return phonetic_variants(apply_pronunciation(text, dictionary or []))
+    return phonetic_variants(comparison_pronunciation(text, dictionary or []))
 
 
 def edit_distance(left: str, right: str) -> int:
@@ -267,8 +267,8 @@ def lexical_pronunciation_checks(
     their component words are excluded here to avoid duplicate verdicts.
     Only non-OK records are returned so manifests stay compact.
     """
-    expected_value = apply_pronunciation(expected_text, dictionary or [])
-    recognized_value = apply_pronunciation(recognized_text, dictionary or [])
+    expected_value = comparison_pronunciation(expected_text, dictionary or [])
+    recognized_value = comparison_pronunciation(recognized_text, dictionary or [])
     expected_keys = phonetic_variants(expected_value)
     recognized_keys = phonetic_variants(recognized_value) or ("",)
     # Only a single-word required pronunciation suppresses the lexical check,
@@ -280,7 +280,7 @@ def lexical_pronunciation_checks(
     excluded: set[str] = set()
     for pronunciation in excluded_pronunciations:
         words = HANGUL_WORD_PATTERN.findall(
-            apply_pronunciation(pronunciation, dictionary or [])
+            comparison_pronunciation(pronunciation, dictionary or [])
         )
         if len(words) == 1:
             excluded.add(words[0])

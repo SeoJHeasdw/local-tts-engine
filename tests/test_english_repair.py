@@ -70,3 +70,42 @@ def test_new_word_times_replace_old_english_while_korean_words_only_shift():
     assert entry['alignment']['words'][2]['endMs']==880
     assert entry['alignment']['words'][3]['startMs']==1100
     assert timeline['totalMs']==1600
+
+
+def test_only_approved_replacements_retire_all_occurrences_of_a_term_warning():
+    finding = {'startMs': 1000, 'endMs': 9000, 'expectedText': '오류는 퍼미션 디나이드입니다. 반환도 확인합니다.',
+               'terms': [{'term': '퍼미션 디나이드'}, {'term': '디나이드'}, {'term': '반환'}]}
+    edits = [{'startMs': 2000, 'endMs': 3000, 'selected': {'reviewStatus': 'pending'},
+              'oldWords': [{'text': '퍼미션'}, {'text': '디나이드입니다'}]}]
+    assert repair.replaced_finding_terms(finding, edits) == []
+    edits[0]['selected']['reviewStatus'] = 'approved'
+    assert repair.replaced_finding_terms(finding, edits) == finding['terms'][:2]
+    finding['expectedText'] += ' 다시 퍼미션 디나이드입니다.'
+    assert repair.replaced_finding_terms(finding, edits) == []
+
+
+def test_retrofit_requires_passing_content_checks_without_inventing_listening_approval():
+    selected = {'reviewStatus': 'pending', 'evaluation': {'passed': True}}
+    ready = {'policy': 'ko-inline-english-v1', 'replacements': [{'selected': selected}]}
+    with pytest.raises(ValueError):
+        repair.validate_replacement_approval(ready)
+    ready.update({'approvalBasis': 'approved-policy-retrofit', 'authorization': 'User requested existing course repairs'})
+    assert repair.validate_replacement_approval(ready) == 'approved-policy-auto-review'
+    assert selected['reviewStatus'] == 'pending'
+    selected['reviewStatus'] = 'rejected'
+    with pytest.raises(ValueError):
+        repair.validate_replacement_approval(ready)
+    selected['reviewStatus'] = 'pending'
+    selected['evaluation']['passed'] = False
+    with pytest.raises(ValueError):
+        repair.validate_replacement_approval(ready)
+
+
+def test_successive_edit_uses_verified_latest_audio_instead_of_original_manifest(tmp_path):
+    current = tmp_path / 'edited.wav'
+    sf.write(current, np.ones(100, dtype=np.float32) * .01, 48000)
+    ready = {'sourceAudioPath': str(current), 'sourceAudioSha256': sha256_file(current)}
+    assert repair.source_audio_path(ready, {'audioPath': 'ancestor.wav'}) == current
+    ready['sourceAudioSha256'] = 'wrong'
+    with pytest.raises(ValueError):
+        repair.source_audio_path(ready, {'audioPath': 'ancestor.wav'})

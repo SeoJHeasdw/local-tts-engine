@@ -178,6 +178,12 @@ def merge_pronunciation_dictionaries(
             replacement = str(item.get("to", ""))
             if not source or not replacement:
                 raise ValueError("발음 사전의 from과 to는 비어 있을 수 없습니다.")
+            if item.get("inline") and (
+                not item.get("literal") or not re.search(r"[A-Za-z]", replacement)
+                or re.search(r"[가-힣]", replacement)
+                or not re.fullmatch(r"[가-힣 ]+", str(item.get("comparisonReading", "")))
+            ):
+                raise ValueError("문장 안의 영어 용어는 literal과 영어 to, 한글 comparisonReading이 필요합니다.")
             if source not in merged:
                 order.append(source)
             merged[source] = {**item, "from": source, "to": replacement}
@@ -207,6 +213,8 @@ def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:
         if source[-1].isalnum():
             escaped = rf"{escaped}(?![A-Za-z0-9])(?!-[A-Za-z0-9])"
     flags = 0 if item.get("caseSensitive") else re.IGNORECASE
+    if item.get("inline"):
+        escaped = rf"(?<![A-Za-z0-9_])(?<![A-Za-z0-9_]-){re.escape(source)}(?![A-Za-z0-9_])(?!-[A-Za-z0-9_])"
     return re.compile(escaped, flags)
 
 
@@ -239,7 +247,7 @@ def _protect_literal_spans(
 
     output = text
     for item in dictionary:
-        if not item.get("literal"):
+        if not item.get("literal") or item.get("inline"):
             continue
         replacement = str(item["to"])
         pattern = _dictionary_pattern(item)
@@ -257,6 +265,15 @@ def _protect_literal_spans(
     if is_english_sentence(output):
         kept.append(output)
         output = chr(PROTECTED_PLACEHOLDER_START + len(kept) - 1)
+    # Keep complete English prose intact before protecting an inline term.
+    for item in dictionary:
+        if not item.get("inline"):
+            continue
+        replacement = str(item["to"])
+        pattern = _dictionary_pattern(item)
+        if matched is not None and pattern.search(output):
+            matched.append({"from": str(item["from"]), "to": replacement})
+        output = pattern.sub(swap, output)
     return output, kept
 
 
@@ -296,6 +313,20 @@ def apply_pronunciation(text: str, dictionary: list[dict[str, Any]]) -> str:
     output, protected = _apply_dictionary(text, dictionary)
     output = _restore_literal_spans(read_remaining_numbers(output), protected)
     return re.sub(r"[ \t]+", " ", output).strip()
+
+
+def comparison_pronunciation(text: str, dictionary: list[dict[str, Any]]) -> str:
+    """Normalize ASR spellings and syllable counts without changing TTS input.
+
+    Inline English can be transcribed in Latin or Hangul. The old Hangul reading
+    is only a comparison key; it is not fed to the synthesizer or used to approve
+    an accent. The same content/omission thresholds still apply.
+    """
+    output = apply_pronunciation(text, dictionary)
+    for item in merge_pronunciation_dictionaries(dictionary):
+        if item.get("inline"):
+            output = _dictionary_pattern({**item, "from": item["to"]}).sub(item["comparisonReading"], output)
+    return output
 
 
 def pronunciation_preflight(

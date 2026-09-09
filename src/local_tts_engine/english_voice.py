@@ -28,7 +28,7 @@ def speech_segments(text: str, dictionary: list[dict[str, Any]]) -> list[dict[st
         return [{"text": text, "language": "English"}]
     intervals = []
     for item in merge_pronunciation_dictionaries(dictionary):
-        if not item.get("literal"):
+        if not item.get("literal") or item.get("inline"):
             continue
         value = str(item["to"])
         if _HANGUL.search(value) or len(_WORD.findall(value)) < 2:
