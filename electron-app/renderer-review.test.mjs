@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 
+import { findingKeyOf } from './renderer/view-utils.mjs';
+
 const source = await fs.readFile(new URL('./renderer/app.js', import.meta.url), 'utf8');
 const controller = source.slice(source.indexOf('let reviewTarget ='), source.indexOf('function formatDate('));
 function fixture() {
@@ -15,21 +17,23 @@ function fixture() {
   const $ = key => {if(!elements.has(key)) elements.set(key,element());return elements.get(key);};
   const modes = ['regenerate','mute','replace'].map(mode=>Object.assign(element(),{dataset:{repairMode:mode}}));
   const calls = [];
+  const saved = [];
   const context = vm.createContext({ $, $$:key=>key==='#review-mode-tabs button'?modes:[],
     document:{createElement:element}, voiceVideo:null, latestEditTarget:null,
-    api:{startEdit:async payload=>calls.push(payload)}, setEditBusy(){}, showToast(){},
+    api:{startEdit:async payload=>calls.push(payload), setClearedFindings:async(target,keys)=>saved.push({target,keys})}, setEditBusy(){}, showToast(){},
+    findingKeyOf,
     updateVoicePageMeta(){}, formatDuration:ms=>`${ms}`, voiceFindingReason:()=>'', voiceFindingLabel:()=>'',
     summarizeVoiceFindings:()=>({total:0,title:'',tone:'warning'}), Date, Number, Math,
   });
-  vm.runInContext(controller+`;globalThis.testReview={setReviewVideo,selectReviewPage,currentReviewPage,selection:()=>reviewSelection,context:()=>pendingCandidateContext,queue:queueSelectedCandidate,save:savePendingFixes,pending:()=>pendingFixes,visible:visibleFindings,clear:clearFinding,cleared:()=>clearedFindings};`,context);
+  vm.runInContext(controller+`;globalThis.testReview={setReviewVideo,selectReviewPage,currentReviewPage,selection:()=>reviewSelection,context:()=>pendingCandidateContext,queue:queueSelectedCandidate,save:savePendingFixes,pending:()=>pendingFixes,visible:visibleFindings,clear:clearFinding,restore:restoreClearedFindings,cleared:()=>clearedFindings};`,context);
   const page1={number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'};
   const page2={number:2,slideId:'b',startMs:33750,endMs:50000,text:'다음 페이지'};
   const findings=[
     {slideNumber:1,startMs:1300,endMs:33000,severity:'failed',reasons:['단어 일부 누락']},
     {slideNumber:2,startMs:33750,endMs:50000,severity:'warning',reasons:['단어 발음 확인 필요']},
   ];
-  context.testReview.setReviewVideo({token:'original',name:'original.mp4',videoUrl:'file:///original.mp4',pages:[page1,page2],voiceFindings:findings});
-  return {context,$,modes,calls,page1,page2,findings};
+  context.testReview.setReviewVideo({token:'original',name:'original.mp4',videoUrl:'file:///original.mp4',pages:[page1,page2],voiceFindings:findings,reviewTarget:{root:'render',name:'original'}});
+  return {context,$,modes,calls,saved,page1,page2,findings};
 }
 
 test('자동 권장이 없어도 재생 위치의 페이지를 직접 선택한다', () => {
@@ -173,7 +177,45 @@ test('교체를 담으면 그 페이지의 확인 항목도 함께 내려간다'
   assert.equal(context.testReview.visible()[0].slideNumber,2);
 });
 
-test('다른 영상을 열면 확인 완료 표시가 따라가지 않는다', () => {
+test('확인 완료는 결과에 적혀 다음에 열어도 남는다', () => {
+  // 세션 안에서만 사라지면 최근 결과에는 그대로 남고, 그 버튼은 아무것도 하지
+  // 않은 것이 된다. 누르는 즉시 결과에 적는다.
+  const {context,saved,findings}=fixture();
+  context.testReview.clear(findings[0]);
+
+  assert.equal(saved.length,1,'확인 완료를 눌렀는데 저장하지 않았다');
+  assert.deepEqual(JSON.parse(JSON.stringify(saved[0].keys)),['1:1300']);
+  assert.deepEqual(JSON.parse(JSON.stringify(saved[0].target)),{root:'render',name:'original'});
+});
+
+test('되돌리면 저장된 표시도 함께 지운다', () => {
+  const {context,saved,findings}=fixture();
+  context.testReview.clear(findings[0]);
+  context.testReview.restore();
+
+  assert.equal(saved.length,2);
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.at(-1).keys)),[]);
+  assert.equal(context.testReview.cleared().size,0);
+});
+
+test('영상을 열 때 결과에 적힌 확인 표시를 불러온다', () => {
+  const {context,$}=fixture();
+  context.testReview.setReviewVideo({
+    token:'saved',name:'saved.mp4',videoUrl:'file:///saved.mp4',pages:[],
+    voiceFindings:[
+      {slideNumber:5,startMs:1000,endMs:2000,severity:'warning',reasons:[]},
+      {slideNumber:9,startMs:3000,endMs:4000,severity:'failed',reasons:[]},
+    ],
+    clearedFindings:['5:1000'],
+    reviewTarget:{root:'render',name:'saved'},
+  });
+
+  assert.equal(context.testReview.visible().length,1,'저장된 표시가 반영되지 않았다');
+  assert.equal(context.testReview.visible()[0].slideNumber,9);
+  assert.equal($('#review-finding-count').textContent,'1');
+});
+
+test('다른 영상을 열면 앞 영상의 표시가 따라가지 않는다', () => {
   const {context,findings}=fixture();
   context.testReview.clear(findings[0]);
   assert.equal(context.testReview.cleared().size,1);

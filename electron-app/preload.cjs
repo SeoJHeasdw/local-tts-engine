@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("ttsStudio", {
   startFinetune: (options) => ipcRenderer.invoke("studio:start-finetune", options),
   listOutputs: () => ipcRenderer.invoke("studio:list-outputs"),
   setOutputReview: (target, status) => ipcRenderer.invoke("studio:set-output-review", target, status),
+  setClearedFindings: (target, keys) => ipcRenderer.invoke("studio:set-cleared-findings", target, keys),
   pickVideos: (multiple) => ipcRenderer.invoke("studio:pick-videos", Boolean(multiple)),
   pickAudio: () => ipcRenderer.invoke("studio:pick-audio"),
   registerDroppedFiles: (files, kind) => {

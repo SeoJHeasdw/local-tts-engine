@@ -28,7 +28,9 @@ import {
   concatTimelines,
   normalizeComposeClips,
   pageVoicePatchesPlan,
+  clearedFindingKeys,
   pendingUnits,
+  withClearedFindings,
   timeRangeForPages,
   assertPageReplaceable,
   pageRangeFromTimeline,
@@ -867,12 +869,15 @@ async function registerSelected(paths, kind, extras = []) {
         const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
         if (report?.videoPath && path.resolve(report.videoPath) === value.path) {
           value.voiceFindings = report.voiceFindings || [];
+          // 확인 완료 표시는 결과에 적혀 있다. 다시 열어도 그대로 남아야 한다.
+          value.clearedFindings = clearedFindingKeys(report);
+          value.reviewTarget = report.target || null;
           break;
         }
       }
     }
     selectedFiles.set(token, value);
-    return { token, kind, name: value.name, path: value.path, pageRange: value.pageRange, audioUrl: kind === "audio" ? pathToFileURL(value.path).href : null, pages: value.pages || [], voiceFindings: value.voiceFindings || [], videoUrl: kind === "video" ? pathToFileURL(value.path).href : null };
+    return { token, kind, name: value.name, path: value.path, pageRange: value.pageRange, audioUrl: kind === "audio" ? pathToFileURL(value.path).href : null, pages: value.pages || [], voiceFindings: value.voiceFindings || [], clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null, videoUrl: kind === "video" ? pathToFileURL(value.path).href : null };
   }));
 }
 
@@ -1744,6 +1749,18 @@ async function setOutputReview(target, status, studio) {
   return reviewed.review;
 }
 
+async function setClearedFindings(target, keys, studio) {
+  const directory = resolveOutputTarget(target, studio);
+  const reportPath = path.join(directory, "validation-report.json");
+  const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
+  if (!report) throw new Error("자동 검증 기록이 있는 결과만 확인 표시를 남길 수 있습니다.");
+  const saved = withClearedFindings(report, keys);
+  const temporary = `${reportPath}.cleared-${process.pid}.tmp`;
+  await fs.writeFile(temporary, `${JSON.stringify(saved, null, 2)}\n`, "utf8");
+  await fs.rename(temporary, reportPath);
+  return clearedFindingKeys(saved);
+}
+
 function registerIpc() {
   ipcMain.handle("studio:get-status", async (event) => {
     guard(event);
@@ -1807,6 +1824,12 @@ function registerIpc() {
     guard(event);
     const settings = await readAppSettings();
     return listOutputs(runtimePaths(settings.paths));
+  });
+
+  ipcMain.handle("studio:set-cleared-findings", async (event, target, keys) => {
+    guard(event);
+    const settings = await readAppSettings();
+    return setClearedFindings(target, Array.isArray(keys) ? keys : [], runtimePaths(settings.paths));
   });
 
   ipcMain.handle("studio:set-output-review", async (event, target, status) => {

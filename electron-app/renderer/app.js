@@ -3,6 +3,7 @@ import {
   buildChapterRanges,
   chapterEtaLabel,
   createViewHistory,
+  findingKeyOf,
   etaLabel,
   filterOutputItems,
   outputKind,
@@ -12,6 +13,7 @@ import {
   unitLabel,
   voiceFindingLabel,
   voiceFindingReason,
+  visibleVoiceFindings,
   voiceFindingSummaryLine,
 } from "./view-utils.mjs";
 
@@ -537,7 +539,15 @@ function renderCompleteVoiceFindings(findings = [], target = null) {
 const clearedFindings = new Set();
 
 function findingKey(finding) {
-  return `${finding?.slideNumber ?? ''}:${finding?.startMs ?? ''}`;
+  return findingKeyOf(finding);
+}
+
+// 표시는 결과에 적힌다. 그래야 앱을 다시 켜도, 최근 결과에서 봐도 같은 상태다.
+async function persistClearedFindings() {
+  const target = voiceVideo?.reviewTarget;
+  if (!target) return;
+  try { await api.setClearedFindings(target, [...clearedFindings]); }
+  catch (error) { showToast(`확인 표시를 저장하지 못했습니다. ${error.message}`, 'error'); }
 }
 
 function visibleFindings() {
@@ -559,7 +569,7 @@ function renderFindings() {
     const undo = document.createElement('button');
     undo.type = 'button';
     undo.textContent = '되돌리기';
-    undo.addEventListener('click', () => { clearedFindings.clear(); renderFindings(); });
+    undo.addEventListener('click', restoreClearedFindings);
     note.append(mark, label, undo);
     rows.push(note);
   }
@@ -574,6 +584,13 @@ function renderFindings() {
 function clearFinding(finding) {
   clearedFindings.add(findingKey(finding));
   renderFindings();
+  persistClearedFindings();
+}
+
+function restoreClearedFindings() {
+  clearedFindings.clear();
+  renderFindings();
+  persistClearedFindings();
 }
 
 // 사유는 길고 대본 문장은 더 길다. 셋을 한 줄에 나란히 두면 문장이 잘리거나
@@ -667,6 +684,7 @@ function setReviewVideo(video, target = null) {
   reviewPlayer.src = video.videoUrl;
   reviewFindings = video.voiceFindings || [];
   clearedFindings.clear();
+  for (const key of video.clearedFindings || []) clearedFindings.add(String(key));
   renderFindings();
   $('#review-pages').replaceChildren(...(video.pages || []).map(page => {
     const button = document.createElement('button'); button.type = 'button';
@@ -1362,7 +1380,9 @@ function renderOutputs() {
           </details>
         </div>`;
       row.querySelector("strong").textContent = item.displayName || item.name;
-      const findings = item.voiceFindings || [];
+      // 다듬기에서 내린 항목은 여기서도 사라져야 한다. 한 화면에서만
+      // 처리되면 그 버튼이 무엇을 한 것인지 알 수 없다.
+      const findings = visibleVoiceFindings(item.voiceFindings, item.review?.clearedFindings);
       const voiceSummary = summarizeVoiceFindings(findings);
       row.querySelector("small").textContent = [
         outputLabel(item),

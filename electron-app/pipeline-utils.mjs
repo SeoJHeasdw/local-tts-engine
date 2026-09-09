@@ -733,3 +733,25 @@ export function pendingUnits(units = [], finishedNames = []) {
   const finished = new Set(finishedNames.map(String));
   return units.filter((unit) => !finished.has(String(unit?.name)));
 }
+
+// 확인 완료 표시는 세션이 아니라 결과에 붙어야 한다. 눌러도 최근 결과에 그대로
+// 남는다면 그 버튼은 아무것도 하지 않는 것과 같다. 청취 승인과 같은 자리에
+// 적어, 결과가 옮겨 다녀도 표시가 따라간다.
+export function voiceFindingKey(finding = {}) {
+  return `${finding.slideNumber ?? ""}:${finding.startMs ?? ""}`;
+}
+
+export function withClearedFindings(report, keys = [], now = new Date()) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    throw new Error("확인 표시를 저장할 결과가 없습니다.");
+  }
+  const cleared = [...new Set(keys.map(String).filter(Boolean))];
+  return {
+    ...report,
+    review: { ...(report.review || {}), clearedFindings: cleared, updatedAt: now.toISOString() },
+  };
+}
+
+export function clearedFindingKeys(report) {
+  return (report?.review?.clearedFindings || []).map(String);
+}

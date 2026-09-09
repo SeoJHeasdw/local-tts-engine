@@ -27,6 +27,9 @@ import {
   composeTotalMs,
   normalizeComposeClips,
   pendingUnits,
+  clearedFindingKeys,
+  voiceFindingKey,
+  withClearedFindings,
 } from "./pipeline-utils.mjs";
 
 test("기본 작업은 제작 LoRA v1 0.6과 레슨 전체 제작이다", () => {
@@ -501,4 +504,23 @@ test("이어하기는 이미 끝난 편만 건너뛴다", () => {
   assert.deepEqual(pendingUnits(units, ["ch02-l03", "ch02-l01"]).map((unit) => unit.name), ["ch02-l02"]);
   assert.deepEqual(pendingUnits(units, []).length, 3);
   assert.deepEqual(pendingUnits(units, ["ch02-l01", "ch02-l02", "ch02-l03"]).length, 0);
+});
+
+test("확인 완료 표시는 결과에 적혀 다음에 열어도 남는다", () => {
+  const report = { name: "ch02-l03", voiceFindings: [], review: { status: "approved" } };
+  const saved = withClearedFindings(report, ["36:501200", "41:724000", "36:501200"]);
+
+  assert.deepEqual(saved.review.clearedFindings, ["36:501200", "41:724000"], "같은 항목을 두 번 세지 않는다");
+  assert.equal(saved.review.status, "approved", "청취 승인을 덮어쓰지 않는다");
+  assert.deepEqual(clearedFindingKeys(saved), ["36:501200", "41:724000"]);
+  assert.deepEqual(clearedFindingKeys({}), []);
+});
+
+test("확인 표시의 키는 페이지와 시각으로 만든다", () => {
+  assert.equal(voiceFindingKey({ slideNumber: 36, startMs: 501200 }), "36:501200");
+  // 같은 페이지에 두 구간이 걸려도 서로 다른 항목으로 남아야 한다.
+  assert.notEqual(
+    voiceFindingKey({ slideNumber: 36, startMs: 501200 }),
+    voiceFindingKey({ slideNumber: 36, startMs: 660000 }),
+  );
 });

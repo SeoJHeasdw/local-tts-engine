@@ -176,3 +176,16 @@ export function chapterEtaLabel({
   const label = formatRemaining(currentRemaining + perPage * Number(pendingPages));
   return label ? `전체 약 ${label} 남음` : "";
 }
+
+// 확인 완료로 내린 항목은 다듬기에서만이 아니라 최근 결과에서도 사라져야 한다.
+// 한 화면에서는 처리했는데 다른 화면에는 그대로 남으면, 그 버튼이 무엇을 한
+// 것인지 알 수 없다.
+export function findingKeyOf(finding = {}) {
+  return `${finding.slideNumber ?? ""}:${finding.startMs ?? ""}`;
+}
+
+export function visibleVoiceFindings(findings = [], clearedKeys = []) {
+  if (!clearedKeys?.length) return findings || [];
+  const cleared = new Set(clearedKeys.map(String));
+  return (findings || []).filter((finding) => !cleared.has(findingKeyOf(finding)));
+}

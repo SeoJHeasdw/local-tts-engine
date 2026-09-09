@@ -93,7 +93,9 @@ test("결과를 편집으로 넘기는 통로가 preload와 main 양쪽에 있�
 
 test("최근 영상 결과는 전용 검수 화면에서 열린다", async () => {
   const script = await fs.readFile(path.join(renderer, "app.js"), "utf8");
-  assert.match(script, /const findings = item\.voiceFindings \|\| \[\]/);
+  // 확인 완료로 내린 항목은 최근 결과에서도 빠져야 한다. 한 화면에서만
+  // 처리되면 그 버튼이 무엇을 한 것인지 알 수 없다.
+  assert.match(script, /visibleVoiceFindings\(item\.voiceFindings, item\.review\?\.clearedFindings\)/);
   assert.match(script, /openReview\(target\)/);
   assert.doesNotMatch(script, /findingsPanel\.className = "output-findings"/);
 });
