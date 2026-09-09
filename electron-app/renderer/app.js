@@ -45,6 +45,7 @@ let candidatePurpose = "edit";
 let catalogChapters = [];
 let outputItems = [];
 let outputFilter = "all";
+let creationState = "idle";
 
 function showToast(message, kind = "success") {
   const toast = document.createElement("div");
@@ -299,6 +300,9 @@ function showJobView(view) {
 function setBusy(busy) {
   $("#start-button").disabled = busy;
   $("#job-form").querySelectorAll("input, select, .segmented button").forEach((element) => { element.disabled = busy; });
+  $("#cancel-button").classList.toggle("hidden", !busy);
+  $("#active-progress .spinner").classList.toggle("hidden", !busy);
+  if (!busy) $$(".stage-list li").forEach(item => item.classList.remove("running"));
 }
 
 function resetCancelButton(button) {
@@ -308,10 +312,13 @@ function resetCancelButton(button) {
 }
 
 async function requestJobCancellation(button, kind) {
+  if (kind === "create" && creationState !== "running") return;
+  const previousLabel = kind === "create" ? $("#current-stage").textContent : $("#edit-running-label").textContent;
   button.disabled = true;
   button.textContent = "중지 요청 중…";
   button.setAttribute("aria-busy", "true");
   if (kind === "create") {
+    creationState = "cancelling";
     setJobState("중지 요청 중", "running");
     $("#current-stage").textContent = "실행 중인 작업을 종료하고 있습니다.";
   } else {
@@ -321,10 +328,21 @@ async function requestJobCancellation(button, kind) {
     const accepted = await api.cancel();
     if (!accepted) {
       resetCancelButton(button);
-      showToast("현재 중지할 작업이 없습니다.", "error");
+      if (kind === "create" && creationState === "cancelling") {
+        creationState = "idle";
+        setBusy(false);
+        setJobState("종료됨", "idle");
+        $("#current-stage").textContent = "이미 종료된 작업입니다. 새로 제작할 수 있습니다.";
+      }
+      showToast("현재 중지할 작업이 없습니다.");
     }
   } catch (error) {
     resetCancelButton(button);
+    if (kind === "create" && creationState === "cancelling") {
+      creationState = "running";
+      setJobState("실행 중", "running");
+      $("#current-stage").textContent = previousLabel;
+    }
     showToast(`중지 요청 실패: ${error.message}`, "error");
   }
 }
@@ -1125,6 +1143,7 @@ function renderJobEvent(event) {
     return;
   }
   if (event.type === "started") {
+    creationState = "running";
     latestTarget = { root: "render", name: event.options.name };
     $("#open-latest").textContent = "영상 열기";
     $("#job-log").textContent = "";
@@ -1135,23 +1154,28 @@ function renderJobEvent(event) {
     resetCancelButton($("#cancel-button"));
     updateStages("starting");
   } else if (event.type === "stage") {
+    if (creationState !== "running") return;
     updateStages(event.stage, event.state === "done" && event.stage === "verify");
   } else if (event.type === "log") {
     appendLog(event.text);
   } else if (event.type === "cancelling") {
+    creationState = "cancelling";
     setJobState("중지 중", "running");
     $("#current-stage").textContent = "안전하게 중지 중";
     $("#cancel-button").disabled = true;
     $("#cancel-button").textContent = "중지 중…";
   } else if (event.type === "failed") {
+    creationState = event.cancelled ? "cancelled" : "failed";
     setBusy(false);
     resetCancelButton($("#cancel-button"));
     showJobView("active");
     setJobState(event.cancelled ? "중지됨" : "오류", event.cancelled ? "idle" : "failed");
     $("#current-stage").textContent = event.message;
     appendLog(`\n[중단] ${event.message}\n`);
+    $("#job-log").closest("details").open = true;
     loadOutputs();
   } else if (event.type === "complete") {
+    creationState = "done";
     setBusy(false);
     resetCancelButton($("#cancel-button"));
     showJobView("complete");
@@ -1214,7 +1238,8 @@ async function initialize() {
   $("#runtime-label").textContent = runtimeLabel;
   $("#open-model-settings").dataset.tooltip = runtimeLabel;
   for (const issue of status.setupIssues || []) appendLog(`[환경] ${issue}\n`);
-  if (status.activeJob?.state === "running") {
+  setBusy(false);
+  if (["running", "cancelling"].includes(status.activeJob?.state)) {
     if (status.activeJob.kind === "edit") {
       openJobDialog("영상 편집 중");
       setEditBusy(true);
@@ -1225,11 +1250,16 @@ async function initialize() {
       openJobDialog("텍스트 목소리 후보 생성 중");
       $("#start-text-voices").disabled = true;
     } else {
+      creationState = status.activeJob.state;
       showJobView("active");
       setBusy(true);
       setJobState("실행 중", "running");
       updateStages(status.activeJob.stage);
+      if (creationState === "cancelling") handleJobEvent({ type: "cancelling", jobKind: "create" });
     }
+  }
+  if (status.activeJob?.kind === "create" && ["failed", "cancelled"].includes(status.activeJob.state)) {
+    handleJobEvent({ type: "failed", cancelled: status.activeJob.state === "cancelled", message: status.activeJob.error || "이전 작업이 종료됐습니다." });
   }
   await loadOutputs();
   const initialView = new URLSearchParams(window.location.search).get("view");
@@ -1271,9 +1301,16 @@ $("#deliverable").addEventListener("change", (event) => {
 $("#burn-captions").addEventListener("change", updateProductionBrief);
 $("#job-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if ($("#start-button").disabled) return;
+  setBusy(true);
   try {
     await api.start(optionPayload());
   } catch (error) {
+    creationState = "failed";
+    setBusy(false);
+    showJobView("active");
+    $("#current-stage").textContent = error.message;
+    $("#job-log").closest("details").open = true;
     $("#job-form").classList.add("shake");
     setTimeout(() => $("#job-form").classList.remove("shake"), 600);
     appendLog(`[오류] ${error.message}\n`);

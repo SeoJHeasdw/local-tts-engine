@@ -334,9 +334,10 @@ def split_forced_pause_segments(text: str) -> list[tuple[str, int]]:
     pause_before_ms = 0
     for match in matches:
         spoken = text[cursor : match.start()].strip()
-        if not spoken:
+        if not spoken and cursor != 0:
             raise ValueError("강제 무음 앞에는 읽을 문장이 있어야 합니다.")
-        segments.append((spoken, pause_before_ms))
+        if spoken:
+            segments.append((spoken, pause_before_ms))
         pause_before_ms = forced_pause_milliseconds(match.group(0)) or 0
         cursor = match.end()
     spoken = text[cursor:].strip()
@@ -665,7 +666,12 @@ def course_entries(
                 text = text[:marker.start()].strip()
                 if not text:
                     raise ValueError("강제 무음 앞에는 읽을 문장이 있어야 합니다.")
-            segments = split_forced_pause_segments(text)
+            try:
+                segments = split_forced_pause_segments(text)
+            except ValueError as error:
+                raise ValueError(
+                    f"{chapter} {slide_number}페이지 {slide_id} {step}스텝: {error}"
+                ) from error
             for part_index, (source_text, pause_before_ms) in enumerate(segments):
                 if part_index == 0:
                     pause_before_ms += pending_step_pause
@@ -1328,6 +1334,7 @@ def synthesize_excerpt(
         raise ValueError(f"한국어 자연스러움 사전검사 실패: {details}")
     report_unresolved_terms(entries)
     chunks = group_course_entries(entries)
+    initial_pad_ms = START_PAD_MS + entries[0].pause_before_ms
     pronunciation = course_pronunciation_dictionary(source_project)
     reference_text = reference_text_path.read_text(encoding="utf-8").strip()
     reference_hash = sha256_file(reference_path)
@@ -1593,7 +1600,7 @@ def synthesize_excerpt(
         if native_rate is None:
             native_rate = rate
             target_samples = round(target_seconds * native_rate)
-            cursor_samples = milliseconds_to_samples(START_PAD_MS, native_rate)
+            cursor_samples = milliseconds_to_samples(initial_pad_ms, native_rate)
         if rate != native_rate:
             raise RuntimeError("캐시된 클립의 샘플레이트가 서로 다릅니다.")
         assert cursor_samples is not None and target_samples is not None
@@ -1692,7 +1699,7 @@ def synthesize_excerpt(
 
     # Candidate selection can change duration. Rebuild every absolute clip position
     # before alignment, subtitles, and capture consume the timeline.
-    cursor_samples = milliseconds_to_samples(START_PAD_MS, native_rate)
+    cursor_samples = milliseconds_to_samples(initial_pad_ms, native_rate)
     for index, item in enumerate(selected_chunks):
         item["startSample"] = cursor_samples
         item["endSample"] = cursor_samples + int(item["frames"])
@@ -1744,7 +1751,7 @@ def synthesize_excerpt(
     # 오프닝 무음 → 클립1 → 갭 → 클립2 → 갭 → ... → 엔딩 무음
     assert native_rate is not None
     pieces: list[np.ndarray] = [
-        np.zeros(milliseconds_to_samples(START_PAD_MS, native_rate), dtype=np.float32)
+        np.zeros(milliseconds_to_samples(initial_pad_ms, native_rate), dtype=np.float32)
     ]
     for index, item in enumerate(selected_chunks):
         audio, rate = sf.read(item["audioPath"], dtype="float32")
@@ -1963,6 +1970,7 @@ def synthesize_excerpt(
         },
         "timing": {
             "startPadMs": START_PAD_MS,
+            "initialPauseMs": entries[0].pause_before_ms,
             "stepGapMs": STEP_GAP_MS,
             "slideGapMs": SLIDE_GAP_MS,
             "endPadMs": END_PAD_MS,

@@ -37,6 +37,8 @@ import {
   resolveRuntimeTools,
 } from "./runtime-config.mjs";
 
+import { cancelJobProcesses, runJobProcess } from "./job-process.mjs";
+
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(APP_DIR);
 const RENDERER_DIR = path.join(APP_DIR, "renderer");
@@ -197,6 +199,9 @@ function guard(event) {
 }
 
 function emit(payload) {
+  if (payload.type === "log") {
+    (payload.stream === "stderr" ? process.stderr : process.stdout).write(payload.text);
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("studio:job-event", {
       jobKind: activeJob?.kind || "create",
@@ -214,6 +219,7 @@ function jobSnapshot() {
     stage: activeJob.stage,
     startedAt: activeJob.startedAt,
     kind: activeJob.kind,
+    error: activeJob.error || null,
   };
 }
 
@@ -263,70 +269,12 @@ async function assertRuntime(options, studio = runtimePaths(options.paths), requ
   }
 }
 
-function stopActiveProcess(signal = "SIGTERM") {
-  const children = activeJob?.children || new Set(activeJob?.child ? [activeJob.child] : []);
-  let signalled = 0;
-  for (const child of children) {
-    if (!child?.pid) continue;
-    try {
-      process.kill(-child.pid, signal);
-      signalled += 1;
-    } catch {
-      try {
-        if (child.kill(signal)) signalled += 1;
-      } catch { /* already finished */ }
-    }
-  }
-  return signalled;
-}
-
-function forceStopIfNeeded(job) {
-  const timer = setTimeout(() => {
-    if (activeJob !== job || job.state !== "cancelling") return;
-    const signalled = stopActiveProcess("SIGKILL");
-    if (signalled > 0) {
-      emit({ type: "log", stream: "stderr", text: "중지되지 않은 작업을 강제로 종료했습니다.\n" });
-    }
-  }, 3_000);
-  timer.unref?.();
-}
-
 function runProcess(stage, executable, args, { cwd = ROOT, capture = false } = {}) {
-  if (!activeJob) throw new Error("실행 중인 작업이 없습니다.");
-  if (activeJob.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
-  activeJob.stage = stage;
-  emit({ type: "stage", stage, state: "running" });
-
-  return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, {
-      cwd,
-      env: { ...process.env, PYTHONPATH: path.join(ROOT, "src"), PYTHONUNBUFFERED: "1" },
-      detached: true,
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    activeJob.children ||= new Set();
-    activeJob.children.add(child);
-    let output = "";
-    const forward = (stream, chunk) => {
-      const text = chunk.toString();
-      if (capture) output += text;
-      emit({ type: "log", stream, text });
-    };
-    child.stdout.on("data", (chunk) => forward("stdout", chunk));
-    child.stderr.on("data", (chunk) => forward("stderr", chunk));
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (activeJob) activeJob.children?.delete(child);
-      if (activeJob?.cancelled) {
-        reject(new Error("사용자가 작업을 중지했습니다."));
-      } else if (code === 0) {
-        emit({ type: "stage", stage, state: "done" });
-        resolve(output);
-      } else {
-        reject(new Error(`${stage} 단계가 실패했습니다. (종료 ${signal || code})`));
-      }
-    });
+  const job = activeJob;
+  return runJobProcess(job, stage, executable, args, {
+    cwd, capture,
+    env: { ...process.env, PYTHONPATH: path.join(ROOT, "src"), PYTHONUNBUFFERED: "1" },
+    emit: payload => { if (activeJob === job) emit(payload); },
   });
 }
 
@@ -350,9 +298,12 @@ function runUtility(executable, args, { cwd = ROOT } = {}) {
   });
 }
 
-async function loadCatalog(studio) {
+async function loadCatalog(studio, { tracked = false } = {}) {
   if (catalogCache && catalogCacheRoot === studio.sourceProjectRoot) return catalogCache;
-  const raw = await runUtility(requireRuntimeTool("basePython", "강의 도구 Python"), [
+  const execute = tracked
+    ? (executable, args) => runProcess("snapshot", executable, args, { capture: true })
+    : runUtility;
+  const raw = await execute(requireRuntimeTool("basePython", "강의 도구 Python"), [
     "-m", "local_tts_engine.course_catalog",
     "--source-project", studio.sourceProjectRoot,
   ]);
@@ -672,21 +623,26 @@ async function runPipeline(options) {
   const originalStudio = runtimePaths(options.paths);
   // 한 챕터를 여러 편으로 만들 때도 모든 편이 같은 입력을 사용한다.
   // 작업 트리의 대본·장표와 narration.config를 제작 중 다시 읽거나 고치지 않는다.
-  const { createProductionInput } = await import(pathToFileURL(path.join(originalStudio.deckRoot, "tools/production.mjs")).href);
-  const input = await createProductionInput({ root: originalStudio.deckRoot,
-    destination: path.join(originalStudio.captionOutputRoot, options.name, ".production-input"),
-    from: options.startPage, to: options.endPage,
-    expectedStartId: options.inputStartId, expectedEndId: options.inputEndId,
-    build: options.deliverable === "video",
-    run: (stage, ...args) => runProcess(stage === "preflight" ? "snapshot" : stage, ...args),
-    node: requireRuntimeTool("node", "Node.js") });
-  job.productionInputDir = input.project;
+  const project = path.join(originalStudio.captionOutputRoot, options.name, ".production-input");
+  // Own the directory before starting, including cancellation during the copy.
+  // A pre-existing directory belongs to a previous run and must not be removed.
+  if (await safeStat(project)) throw new Error(`제작 입력 폴더가 이미 있습니다: ${project}`);
+  job.productionInputDir = project;
+  await runProcess("snapshot", requireRuntimeTool("node", "Node.js"), [
+    path.join(ROOT, "scripts/prepare-production-input.mjs"),
+    JSON.stringify({ root: originalStudio.deckRoot, destination: project,
+      from: options.startPage, to: options.endPage ?? undefined,
+      expectedStartId: options.inputStartId, expectedEndId: options.inputEndId,
+      build: options.deliverable === "video", node: requireRuntimeTool("node", "Node.js") }),
+  ]);
+  const input = { project, deck: path.join(project, "deck"),
+    site: options.deliverable === "video" ? path.join(project, "site") : null };
   const studio = { ...originalStudio, sourceProjectRoot: input.project, deckRoot: input.deck,
     configPath: path.join(input.deck, "narration.config.json") };
   emit({ type: "log", stream: "stdout",
     text: "화면·대본·장표 순서를 함께 고정하고 제작 전 검사를 마쳤습니다. 이번 제작은 이 입력을 사용합니다.\n" });
   const catalog = options.mode === "chapter" && options.chapterMode === "lesson"
-    ? await loadCatalog(studio)
+    ? await loadCatalog(studio, { tracked: true })
     : null;
   const units = chapterUnits(options, catalog);
   const reports = [];
@@ -706,6 +662,8 @@ async function runPipeline(options) {
   if (activeJob !== job) return;
   if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
   const report = units.length > 1 ? combineChapterReports(options, reports) : reports[0];
+  await cleanupCaptureSite(job);
+  if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
   job.state = "done";
   job.stage = "done";
   emit({ type: "complete", report });
@@ -1808,9 +1766,11 @@ function registerIpc() {
     const snapshot = jobSnapshot();
     emit({ type: "started", job: snapshot, options });
     const job = activeJob;
-    runPipeline(options).catch((error) => {
+    runPipeline(options).catch(async (error) => {
+      await cleanupCaptureSite(job);
       if (activeJob !== job) return;
       job.state = job.cancelled ? "cancelled" : "failed";
+      job.error = error.message;
       emit({ type: "failed", cancelled: job.cancelled, message: error.message });
     }).finally(() => cleanupCaptureSite(job));
     return snapshot;
@@ -1821,12 +1781,11 @@ function registerIpc() {
     if (!activeJob || !["running", "cancelling"].includes(activeJob.state)) return false;
     if (activeJob.state === "cancelling") return true;
     const job = activeJob;
-    activeJob.cancelled = true;
-    activeJob.state = "cancelling";
-    emit({ type: "cancelling" });
-    stopActiveProcess("SIGTERM");
-    forceStopIfNeeded(job);
-    return true;
+    const accepted = cancelJobProcesses(job, {
+      onForce: () => emit({ type: "log", stream: "stderr", text: "중지되지 않은 작업을 강제로 종료했습니다.\n" }),
+    });
+    if (accepted) emit({ type: "cancelling" });
+    return accepted;
   });
 
   ipcMain.handle("studio:reveal", async (event, target) => {

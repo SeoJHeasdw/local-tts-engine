@@ -121,6 +121,25 @@ def test_a_trailing_pause_without_a_following_step_still_stops_before_tts(studio
     assert not lecture.tts.calls
 
 
+@pytest.mark.parametrize("first_step", [False, True])
+def test_a_leading_pause_waits_before_speech_in_the_actual_track(studio, first_step) -> None:
+    question = "" if first_step else "### 0\n몇 개일까요?\n"
+    lecture = studio(slides={"ch00": ["count"]}, scripts={"ch00":
+        f"## count\n{question}### 1\n[1.6s]\n여든일곱 개입니다.\n"})
+    manifest = lecture.run(start_page=1, end_page=1)
+    answer = manifest["chunks"][-1]
+    before = 1300 if first_step else manifest["chunks"][0]["endMs"]
+    assert answer["startMs"] - before == 1600
+    audio, rate = sf.read(manifest["audioPath"])
+    silence = audio[round((before + 100) * rate / 1000):round((answer["startMs"] - 100) * rate / 1000)]
+    assert np.max(np.abs(silence)) < 1e-6
+    assert all("[" not in call["text"] for call in lecture.tts.calls)
+    assert all("[" not in entry["source_text"] for entry in manifest["entries"])
+    if not first_step:
+        assert manifest["entries"][0]["forcedPauses"] == [{"durationMs": 1600,
+            "nextSpeechStartMs": manifest["entries"][1]["speechStartMs"]}]
+
+
 def test_a_misread_chunk_is_retried_until_it_reads_correctly(studio) -> None:
     lecture = studio(
         **THREE_SLIDES,

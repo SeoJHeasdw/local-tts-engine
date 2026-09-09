@@ -137,7 +137,7 @@ li[data-severity="failed"] .voice-finding > span { color:#ff9d88; }
 .voice-finding strong,.voice-finding small { display:block; }.voice-finding strong { font-size:10px; }.voice-finding small { margin-top:3px; color:#8d9188; font-size:9px; }
 .active-progress { flex: 1; padding-top: 26px; }
 .now-making { padding: 15px; display: flex; align-items: center; gap: 12px; border: 1px solid rgba(201,255,91,.2); border-radius: 12px; background: rgba(201,255,91,.04); }
-.now-making small,.now-making strong { display:block; }.now-making small { color:#858d80; font-size:10px; }.now-making strong { margin-top:4px; font-size:14px; }
+.now-making small,.now-making strong { display:block; }.now-making small { color:#858d80; font-size:10px; }.now-making strong { margin-top:4px; font-size:14px; white-space:pre-wrap; overflow-wrap:anywhere; }.now-making > div { min-width:0; }
 .spinner { width: 22px; height: 22px; border: 2px solid #343a30; border-top-color: var(--lime); border-radius: 50%; animation: spin .8s linear infinite; }
 .stage-list { list-style: none; margin: 20px 0; padding: 0; }
 .stage-list li { position: relative; min-height: 64px; display: grid; grid-template-columns: 28px 1fr 13px; align-items: start; gap: 11px; opacity: .4; }
