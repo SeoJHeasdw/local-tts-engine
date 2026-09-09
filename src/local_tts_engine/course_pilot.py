@@ -25,26 +25,87 @@ from __future__ import annotations
 
 import argparse
 import gc
-import hashlib
 import json
+import numpy as np
 import platform
-import re
+import soundfile as sf
 import subprocess
 import sys
 import tempfile
 import time
-import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from .transcript_coverage import COVERAGE_POLICY, omission_recovery_parts, repeated_omissions, saved_omissions
-from .english_voice import EnglishVoiceRouter, LANGUAGE_GAP_MS, speech_segments, read_routed_transcript, read_routed_timings, match_english_level
-
-import numpy as np
-import soundfile as sf
-
+from .course.alignment import (
+    alignment_tokens,
+    clean_alignment_token,
+    entry_alignment_slices,
+    load_or_create_alignment,
+    merge_step_record_parts,
+)
+from .course.audio import (
+    chunk_gap_after,
+    gap_after,
+    milliseconds_to_samples,
+    trim_and_fade_audio,
+)
+from .course.script import (
+    chapter_lesson_files,
+    chapter_slide_order,
+    course_entries,
+    course_lesson_catalog,
+    course_page_catalog,
+    course_pronunciation_dictionary,
+    forced_pause_milliseconds,
+    group_course_entries,
+    is_narration_direction,
+    lesson_title_from_source,
+    normalize_script_text,
+    parse_script,
+    production_pronunciation,
+    report_unresolved_terms,
+    slide_ids_from_source,
+    split_forced_pause_segments,
+    strip_markdown,
+)
+from .course.serialization import stable_digest, write_json
+from .course.settings import (
+    ALIGNER_REPOSITORY,
+    AUDIO_TRIM_STAT_KEYS,
+    COURSE_SETTING_OVERRIDES,
+    DEFAULT_SOURCE_PROJECT,
+    EDGE_FADE_MS,
+    EDGE_PAD_MS,
+    END_PAD_MS,
+    FORCED_PAUSE_LINE_PATTERN,
+    FORCED_PAUSE_TOKEN_PATTERN,
+    LESSON_FILE_PATTERN,
+    LOCAL_PRONUNCIATION_PATH,
+    LOCAL_QUALITY_ASR_PATH,
+    MAX_CHUNK_CHARS,
+    MAX_CHUNK_ENTRIES,
+    MAX_FORCED_PAUSE_MS,
+    MAX_INTERNAL_SILENCE_MS,
+    MIN_FORCED_PAUSE_MS,
+    SLIDE_GAP_MS,
+    SLIDE_VISUAL_LEAD_MS,
+    START_PAD_MS,
+    STEP_GAP_MS,
+    STEP_VISUAL_LEAD_MS,
+    TARGET_INTERNAL_SILENCE_MS,
+    UNTRIMMED_AUDIO_STATS,
+)
+from .course.types import CourseChunk, CourseEntry
+from .english_voice import (
+    EnglishVoiceRouter,
+    LANGUAGE_GAP_MS,
+    match_english_level,
+    read_routed_timings,
+    read_routed_transcript,
+    speech_segments,
+)
 from .pilot import (
     DEFAULT_SEED,
     MODEL_SPECS,
@@ -55,11 +116,9 @@ from .pilot import (
     sha256_text,
     snapshot_revision,
 )
-from .pronunciation import (
-    apply_pronunciation,
-    merge_pronunciation_dictionaries,
-    pronunciation_preflight,
-)
+from .pronunciation import apply_pronunciation
+from .prosody import MIN_INTERNAL_PAUSE_MS, PROSODY_POLICY, WORD_EDGE_GUARD_MS
+from .restarts import RESTART_POLICY
 from .speech_quality import (
     ASR_LICENSE,
     ASR_REPOSITORY,
@@ -76,173 +135,14 @@ from .speech_quality import (
     read_timed_words,
     review_candidate_prosody,
 )
-from .restarts import RESTART_POLICY
-from .prosody import MIN_INTERNAL_PAUSE_MS, PROSODY_POLICY, WORD_EDGE_GUARD_MS
-
-
-# ─── 프로젝트 경로 ────────────────────────────────────────────────────────────
-# 기본값은 udemy-agent 저장소 절대 경로. CLI로 재정의 가능.
-DEFAULT_SOURCE_PROJECT = Path("/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent")
-
-# 로컬 발음 교체 사전 위치. 존재하지 않으면 빈 목록으로 처리.
-LOCAL_PRONUNCIATION_PATH = Path(__file__).parents[2] / "config/production-pronunciation.ko.json"
-LOCAL_QUALITY_ASR_PATH = (
-    Path(__file__).parents[2] / "artifacts/models/whisper-large-v3-turbo-asr-fp16"
+from .transcript_coverage import (
+    COVERAGE_POLICY,
+    omission_recovery_parts,
+    repeated_omissions,
+    saved_omissions,
 )
 
-# MLX 포팅된 8비트 양자화 강제 정렬 모델 (TTS와 별도 Metal 페이즈에서 실행)
-ALIGNER_REPOSITORY = "mlx-community/Qwen3-ForcedAligner-0.6B-8bit"
-
-
-# ─── 타이밍 상수 (ms) ─────────────────────────────────────────────────────────
-# 오프닝 패드: 비디오 플레이어가 첫 프레임을 렌더링하기 전에 발화가 잘리는 것을 방지.
-START_PAD_MS = 1300
-# 같은 슬라이드 내 스텝 전환 갭: 자연스러운 문장 간 호흡.
-STEP_GAP_MS = 200
-# 슬라이드 간 갭: 시각적 전환 애니메이션을 덮을 만큼 충분히 길게.
-SLIDE_GAP_MS = 750
-# 마지막 클립 이후 오디오 꼬리 패드.
-END_PAD_MS = 600
-# trim_and_fade_audio 가 유성음 경계에서 유지하는 최소 여백.
-EDGE_PAD_MS = 65
-# 클립 앞뒤에 적용하는 sin²/cos² 페이드 길이.
-EDGE_FADE_MS = 24
-# 이 값보다 긴 내부 무음 구간은 강제 단축 대상이 된다.
-MAX_INTERNAL_SILENCE_MS = 700
-# 단축 대상 무음 구간을 이 길이로 줄인다.
-TARGET_INTERNAL_SILENCE_MS = 480
-# 같은 슬라이드 내 다음 스텝의 첫 단어 몇 ms 전에 화면 전환할지.
-STEP_VISUAL_LEAD_MS = 120
-# 슬라이드 전환 시 첫 단어보다 더 이른 전환 시점 (슬라이드 빌드 애니메이션 고려).
-SLIDE_VISUAL_LEAD_MS = 650
-# 한 청크에 담을 최대 문자 수 (TTS 컨텍스트 한계 및 자연스러운 호흡 길이).
-MAX_CHUNK_CHARS = 300
-# 한 청크에 담을 최대 CourseEntry 수.
-MAX_CHUNK_ENTRIES = 4
-# 대본의 단독 줄 [2s], [1.5s] 같은 강제 무음 마커 허용 범위.
-MIN_FORCED_PAUSE_MS = 100
-MAX_FORCED_PAUSE_MS = 10_000
-FORCED_PAUSE_LINE_PATTERN = re.compile(r"^\s*\[(\d+(?:\.\d+)?)s]\s*$", re.IGNORECASE)
-FORCED_PAUSE_TOKEN_PATTERN = re.compile(r"\[(\d+(?:\.\d+)?)s]", re.IGNORECASE)
-
-# Every clip carries the same trim statistics, including the degenerate clips
-# that are too short or too quiet to trim. Manifest assembly and the clip cache
-# both read all four keys, so a partial record is a crash and a poisoned cache
-# entry rather than a missing detail.
-AUDIO_TRIM_STAT_KEYS = (
-    "trimmedHeadMs",
-    "trimmedTailMs",
-    "shortenedSilenceCount",
-    "shortenedSilenceMs",
-)
-UNTRIMMED_AUDIO_STATS: dict[str, int] = {key: 0 for key in AUDIO_TRIM_STAT_KEYS}
-
-
-# ─── 강의 생성 전용 파라미터 오버라이드 ──────────────────────────────────────
-# A/B 비교(pilot.py)보다 temperature·top_p를 낮춰 발화 안정성을 높인다.
-COURSE_SETTING_OVERRIDES: dict[str, Any] = {
-    "temperature": 0.75,
-    "top_p": 0.95,
-}
-
-
-# ─── 데이터 모델 ──────────────────────────────────────────────────────────────
-
-@dataclass(frozen=True)
-class CourseEntry:
-    """대본의 한 스텝(챕터·슬라이드·스텝 번호 + 원문 + TTS 텍스트)을 나타낸다.
-
-    source_text: 자막용 원문 (발음 치환 전)
-    tts_text:    TTS 입력용 텍스트 (발음 치환 후)
-    naturalness_checks: 생성 전에 고유어/한자어 읽기를 결정한 기록
-    """
-
-    chapter: str        # 예: "ch00"
-    slide_id: str       # 예: "intro-why-tts"
-    slide_number: int   # 전체 슬라이드 목록 내 1-based 순번
-    step: int           # 슬라이드 내 스텝 번호 (대본 ### N 헤더)
-    source_text: str    # 원문 (자막, 검색, 교정용)
-    tts_text: str       # 발음 치환이 적용된 TTS 입력 텍스트
-    part_index: int = 0       # 한 스텝이 강제 무음으로 나뉜 경우의 0-based 조각 번호
-    part_count: int = 1       # 같은 스텝 안의 전체 음성 조각 수
-    pause_before_ms: int = 0  # 이 조각 직전에 삽입할 강제 무음
-    pronunciation_matches: tuple[str, ...] = ()
-    naturalness_checks: tuple[str, ...] = ()
-    naturalness_warnings: tuple[str, ...] = ()
-    required_pronunciations: tuple[str, ...] = ()
-    unresolved_tokens: tuple[str, ...] = ()
-
-    @property
-    def key(self) -> str:
-        """챕터·슬라이드·스텝을 조합한 고유 식별자 문자열."""
-        base = f"{self.chapter}--{self.slide_id}--{self.step}"
-        return f"{base}--part-{self.part_index + 1}" if self.part_count > 1 else base
-
-
-@dataclass(frozen=True)
-class CourseChunk:
-    """TTS 한 번 호출에 합성되는 연속 CourseEntry 묶음.
-
-    같은 슬라이드 내의 짧은 스텝들을 하나의 자연스러운 호흡으로 묶는다.
-    청킹 조건: MAX_CHUNK_CHARS 이하 & MAX_CHUNK_ENTRIES 이하 & 같은 슬라이드.
-    """
-
-    entries: tuple[CourseEntry, ...]
-
-    @property
-    def key(self) -> str:
-        """첫 스텝~마지막 스텝 범위를 나타내는 청크 식별자."""
-        first = self.entries[0]
-        last = self.entries[-1]
-        first_key = (
-            f"{first.step}-part-{first.part_index + 1}"
-            if first.part_count > 1
-            else str(first.step)
-        )
-        last_key = (
-            f"{last.step}-part-{last.part_index + 1}"
-            if last.part_count > 1
-            else str(last.step)
-        )
-        return f"{first.chapter}--{first.slide_id}--{first_key}-to-{last_key}"
-
-    @property
-    def source_text(self) -> str:
-        """청크 내 모든 스텝의 원문을 공백으로 이어 붙인 문자열."""
-        return " ".join(entry.source_text for entry in self.entries)
-
-    @property
-    def tts_text(self) -> str:
-        """청크 내 모든 스텝의 TTS 텍스트를 공백으로 이어 붙인 문자열."""
-        return " ".join(entry.tts_text for entry in self.entries)
-
-    @property
-    def required_pronunciations(self) -> tuple[str, ...]:
-        """Pronunciations that independent ASR must hear in this chunk."""
-        return tuple(
-            dict.fromkeys(
-                pronunciation
-                for entry in self.entries
-                for pronunciation in entry.required_pronunciations
-            )
-        )
-
-
-# ─── 해시·텍스트 유틸리티 ─────────────────────────────────────────────────────
-
-def stable_digest(value: Any) -> str:
-    """임의 JSON 직렬화 가능 값을 결정적 SHA-256 해시로 변환한다.
-
-    sort_keys=True 로 딕셔너리 키 순서를 고정해 Python 버전과 관계없이
-    동일한 입력에 동일한 해시를 보장한다. 클립 캐시 키 계산에 사용된다.
-    """
-    payload = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+# Existing CLI scripts import these helpers here; implementation lives in course/.
 
 
 def adapter_identity(adapter_path: Path | None, adapter_scale: float) -> dict[str, Any] | None:
@@ -276,566 +176,6 @@ def apply_adapter_scale(model: Any, adapter_scale: float) -> int:
     return scaled_modules
 
 
-def strip_markdown(text: str) -> str:
-    """마크다운 이미지 구문을 alt 텍스트로 치환하고 줄바꿈을 공백으로 평탄화한다.
-
-    슬라이드 타이틀 등 짧은 문자열에서 불필요한 서식을 제거할 때 사용한다.
-    """
-    return (
-        re.sub(r"!\[([^]]*)]\([^)]*\)", r"\1", text)
-        .replace("\n", " ")
-        .strip()
-    )
-
-
-def normalize_script_text(text: str) -> str:
-    """대본 마크다운을 TTS에 적합한 평문으로 변환한다.
-
-    처리 항목:
-        - [링크 텍스트](URL) → 링크 텍스트만 남김
-        - *강조*, _밑줄_, `코드`, ~취소선~ 등 인라인 마커 제거
-        - 불릿 포인트(-, +) 앞 마커 제거
-        - 연속 공백 정규화
-    """
-    text = re.sub(r"\[([^]]+)]\([^)]*\)", r"\1", text)
-    text = re.sub(r"[*_`~]", "", text)
-    text = re.sub(r"^\s*[-+]\s+", "", text, flags=re.MULTILINE)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def is_narration_direction(line: str) -> bool:
-    """Return whether a whole line is a parenthesized production direction.
-
-    Inline parentheses remain narration. Only a line whose entire Markdown-stripped
-    content is wrapped in round parentheses is treated as a non-spoken direction.
-    """
-    normalized = re.sub(r"^[*_`~\s]+|[*_`~\s]+$", "", line)
-    return any(
-        normalized.startswith(opening) and normalized.endswith(closing)
-        for opening, closing in (("(", ")"), ("（", "）"))
-    )
-
-
-def forced_pause_milliseconds(line: str) -> int | None:
-    """Parse a standalone ``[Ns]`` marker and validate its duration."""
-    match = FORCED_PAUSE_LINE_PATTERN.fullmatch(line)
-    if not match:
-        return None
-    milliseconds = round(float(match.group(1)) * 1000)
-    if not MIN_FORCED_PAUSE_MS <= milliseconds <= MAX_FORCED_PAUSE_MS:
-        raise ValueError("강제 무음은 0.1초 이상 10초 이하로 입력해 주세요.")
-    return milliseconds
-
-
-def split_forced_pause_segments(text: str) -> list[tuple[str, int]]:
-    """Split normalized script text into spoken segments and pause-before values."""
-    matches = list(FORCED_PAUSE_TOKEN_PATTERN.finditer(text))
-    if not matches:
-        return [(text, 0)]
-    segments: list[tuple[str, int]] = []
-    cursor = 0
-    pause_before_ms = 0
-    for match in matches:
-        spoken = text[cursor : match.start()].strip()
-        if not spoken and cursor != 0:
-            raise ValueError("강제 무음 앞에는 읽을 문장이 있어야 합니다.")
-        if spoken:
-            segments.append((spoken, pause_before_ms))
-        pause_before_ms = forced_pause_milliseconds(match.group(0)) or 0
-        cursor = match.end()
-    spoken = text[cursor:].strip()
-    if not spoken:
-        raise ValueError("강제 무음 뒤에는 이어서 읽을 문장이 있어야 합니다.")
-    segments.append((spoken, pause_before_ms))
-    return segments
-
-
-def parse_script(path: Path) -> dict[str, dict[int, str]]:
-    """마크다운 대본 파일을 {슬라이드ID: {스텝번호: 텍스트}} 구조로 파싱한다.
-
-    대본 형식 (deck/script/course/<ch>.md):
-        ## <슬라이드ID>   ← ## 헤더로 슬라이드 구분
-        ### 1             ← ### 숫자로 스텝 구분
-        ...본문...
-        ### 2
-        ...본문...
-
-    > 인용구, --- 구분선과 줄 전체가 괄호인 제작 지시문은 내레이션에서 제외한다.
-      문장 안의 괄호 표현은 그대로 읽는다.
-    """
-    result: dict[str, dict[int, str]] = {}
-    slide_id: str | None = None
-    step: int | None = None
-    buffer: list[str] = []
-
-    def flush() -> None:
-        """현재 버퍼의 텍스트를 result에 저장하고 버퍼를 초기화한다."""
-        nonlocal buffer
-        if slide_id is not None and step is not None:
-            text = normalize_script_text("\n".join(buffer))
-            if text:
-                result.setdefault(slide_id, {})[step] = text
-        buffer = []
-
-    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        slide_match = re.match(r"^##\s+(.+?)\s*$", raw)
-        step_match = re.match(r"^###\s+(\d+)\s*$", raw)
-        if step_match:
-            flush()
-            step = int(step_match.group(1))
-            continue
-        if slide_match:
-            flush()
-            slide_id = slide_match.group(1).strip()
-            step = None  # 슬라이드가 바뀌면 스텝 번호도 초기화
-            continue
-        pause_ms = forced_pause_milliseconds(raw)
-        if step is not None and pause_ms is not None:
-            buffer.append(f"[{pause_ms / 1000:g}s]")
-            continue
-        if step is not None and FORCED_PAUSE_TOKEN_PATTERN.search(raw):
-            raise ValueError(
-                f"{path}:{line_number} 강제 무음 [Ns]는 다른 문장 없이 단독 줄에 두세요."
-            )
-        # 구분선, 인용구와 한 줄짜리 괄호 제작 지시문은 내레이션에서 제외
-        if (
-            step is not None
-            and not re.match(r"^---+\s*$", raw)
-            and not raw.startswith(">")
-            and not is_narration_direction(raw)
-        ):
-            buffer.append(raw)
-    flush()
-    return result
-
-
-def production_pronunciation() -> list[dict[str, str]]:
-    """로컬 프로덕션 발음 사전을 읽어 반환한다.
-
-    config/production-pronunciation.ko.json 이 없으면 빈 목록을 반환해
-    파일 부재가 오류가 아닌 '사전 없음'으로 처리된다.
-    """
-    if not LOCAL_PRONUNCIATION_PATH.is_file():
-        return []
-    return json.loads(LOCAL_PRONUNCIATION_PATH.read_text(encoding="utf-8"))
-
-
-def course_pronunciation_dictionary(source_project: Path) -> list[dict[str, Any]]:
-    """Load the deck dictionary and apply local production overrides."""
-    deck_dictionary = json.loads(
-        (source_project / "deck/narration/pronunciation.ko.json").read_text(encoding="utf-8")
-    )
-    return merge_pronunciation_dictionaries(
-        deck_dictionary,
-        production_pronunciation(),
-    )
-
-
-# ─── 슬라이드 순서 결정 ───────────────────────────────────────────────────────
-
-def slide_ids_from_source(source: str) -> list[str]:
-    """TypeScript 파일에서 가장 바깥 레벨의 슬라이드 ID만 순서대로 읽는다."""
-    matches = re.findall(
-        r'^(\s+)id:\s*"([a-z0-9-]+)"',
-        source,
-        flags=re.MULTILINE,
-    )
-    if not matches:
-        return []
-    minimum_indent = min(len(indent.expandtabs(4)) for indent, _ in matches)
-    return [
-        slide_id
-        for indent, slide_id in matches
-        if len(indent.expandtabs(4)) == minimum_indent
-    ]
-
-
-def chapter_slide_order(deck_root: Path) -> list[tuple[str, str]]:
-    """챕터 TypeScript 파일에서 슬라이드 ID를 순서대로 추출한다.
-
-    deck/src/production/chapters/ch<NN>-*.ts 파일을 정렬된 순으로 읽고,
-    각 파일에서 `id: "슬라이드ID"` 패턴을 찾아 (챕터, 슬라이드ID) 튜플 목록을 반환한다.
-    이 순서가 전체 강의 슬라이드 번호의 기준이 된다.
-    """
-    chapters_dir = deck_root / "src/production/chapters"
-    order: list[tuple[str, str]] = []
-    for path in sorted(chapters_dir.glob("ch[0-9][0-9]-*.ts")):
-        chapter = path.name[:4]  # 예: "ch00"
-        source = path.read_text(encoding="utf-8")
-        # 기존 단일 파일 챕터는 여기서 직접 읽는다. CH01처럼 레슨 파일로
-        # 분리된 챕터는 상위 파일의 import/spread 순서와 같은 파일명 정렬로 읽는다.
-        slide_ids = slide_ids_from_source(source)
-        if not slide_ids:
-            split_dir = chapters_dir / chapter
-            for split_path in sorted(split_dir.glob("*.ts")):
-                slide_ids.extend(
-                    slide_ids_from_source(split_path.read_text(encoding="utf-8"))
-                )
-        if not slide_ids:
-            raise ValueError(f"{path.name}에서 화면 ID를 찾지 못했습니다.")
-        order.extend((chapter, slide_id) for slide_id in slide_ids)
-    return order
-
-
-def course_page_catalog(source_project: Path) -> list[dict[str, Any]]:
-    """Return the canonical 1-based page list with each page's step range."""
-    deck_root = source_project / "deck"
-    order = chapter_slide_order(deck_root)
-    script_cache: dict[str, dict[str, dict[int, str]]] = {}
-    pages: list[dict[str, Any]] = []
-    for page, (chapter, slide_id) in enumerate(order, start=1):
-        if chapter not in script_cache:
-            script_cache[chapter] = parse_script(deck_root / f"script/course/{chapter}.md")
-        steps = script_cache[chapter].get(slide_id)
-        if not steps:
-            raise ValueError(f"{chapter}/{slide_id}의 대본이 없습니다.")
-        ordered_steps = sorted(steps)
-        pages.append(
-            {
-                "page": page,
-                "chapter": chapter,
-                "slideId": slide_id,
-                "firstStep": ordered_steps[0],
-                "lastStep": ordered_steps[-1],
-                "stepCount": len(ordered_steps),
-            }
-        )
-    return pages
-
-
-# ─── 레슨(영상 한 편) 카탈로그 ────────────────────────────────────────────────
-# 레슨의 정본은 deck 의 레슨 파일 하나다 (chapters/<ch>/NN-LNN-<slug>.ts).
-# 파일 하나가 영상 한 편이고, 파일 머리 주석 둘째 줄이 제목, 파일명의 NN 이
-# 강의 순서다. 챕터 여는·닫는 화면처럼 단독으로 영상이 못 되는 조각은 deck
-# 쪽에서 이미 앞뒤 레슨 파일 안에 들어가 있으므로 여기서 다시 묶지 않는다.
-
-LESSON_FILE_PATTERN = re.compile(r"^(\d+)-L(\d+)(?:\.(\d+))?-")
-
-
-def lesson_title_from_source(source: str) -> str:
-    """레슨 파일 머리 주석에서 제목 한 줄을 읽는다.
-
-    `* CH01 · L05 · 기업들이 RAG를 도입하는 이유  (12장)` 처럼 쓰여 있으면
-    장수 꼬리를 떼고 `CH01 L05 · 기업들이 RAG를 도입하는 이유` 로 만든다.
-    읽을 줄이 없으면 빈 문자열을 반환한다.
-    """
-    for raw in source.splitlines()[:6]:
-        line = raw.strip().lstrip("*").strip()
-        if not line.upper().startswith("CH"):
-            continue
-        line = re.sub(r"\s*\(\d+장\)\s*$", "", line)
-        parts = [part.strip() for part in line.split("·") if part.strip()]
-        if len(parts) >= 3 and re.fullmatch(r"L\d+(?:\.\d+)?", parts[1]):
-            return f"{parts[0]} {parts[1]} · " + " · ".join(parts[2:])
-        return " · ".join(parts)
-    return ""
-
-
-def chapter_lesson_files(deck_root: Path) -> list[dict[str, Any]]:
-    """레슨 파일로 쪼개 둔 챕터의 레슨 파일을 강의 순서대로 반환한다.
-
-    단일 파일로 남아 있는 챕터(ch00 등)는 레슨 경계가 없으므로 건너뛴다.
-    그런 챕터는 narration.config.json 의 preset 이 계속 담당한다.
-    """
-    chapters_dir = deck_root / "src/production/chapters"
-    lessons: list[dict[str, Any]] = []
-    for path in sorted(chapters_dir.glob("ch[0-9][0-9]-*.ts")):
-        chapter = path.name[:4]
-        if slide_ids_from_source(path.read_text(encoding="utf-8")):
-            continue  # 레슨으로 쪼개지 않은 챕터
-        for split_path in sorted((chapters_dir / chapter).glob("*.ts")):
-            source = split_path.read_text(encoding="utf-8")
-            slide_ids = slide_ids_from_source(source)
-            if not slide_ids:
-                continue
-            match = LESSON_FILE_PATTERN.match(split_path.name)
-            if not match:
-                raise ValueError(
-                    f"{chapter}/{split_path.name} 에 레슨 번호가 없습니다. "
-                    "레슨 파일 이름은 NN-LNN[.N]-<슬러그>.ts 여야 합니다."
-                )
-            lesson = f"l{int(match.group(2)):02d}"
-            if match.group(3) is not None:
-                lesson += f"-{match.group(3)}"
-            lessons.append(
-                {
-                    "chapter": chapter,
-                    "file": split_path.name,
-                    "lesson": lesson,
-                    "title": lesson_title_from_source(source),
-                    "slideIds": slide_ids,
-                }
-            )
-    return lessons
-
-
-def course_lesson_catalog(
-    deck_root: Path,
-    pages: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """영상 한 편 단위의 레슨 목록을 페이지·스텝 수와 함께 반환한다."""
-    page_of = {(page["chapter"], page["slideId"]): page for page in pages}
-    lessons: list[dict[str, Any]] = []
-    used_ids: set[str] = set()
-    for entry in chapter_lesson_files(deck_root):
-        chapter = entry["chapter"]
-        selected = [
-            page_of[(chapter, slide_id)]
-            for slide_id in entry["slideIds"]
-            if (chapter, slide_id) in page_of
-        ]
-        if not selected:
-            continue
-        lesson_id = f"{chapter}-{entry['lesson']}"
-        if lesson_id in used_ids:
-            raise ValueError(
-                f"레슨 ID가 겹칩니다: {lesson_id} ({chapter}/{entry['file']}). "
-                "한 챕터 안에서 L 번호는 한 번씩만 씁니다."
-            )
-        used_ids.add(lesson_id)
-        lessons.append(
-            {
-                "id": lesson_id,
-                "title": entry["title"] or lesson_id,
-                "chapter": chapter,
-                "file": entry["file"],
-                "startPage": selected[0]["page"],
-                "endPage": selected[-1]["page"],
-                "pageCount": len(selected),
-                "stepCount": sum(int(page["stepCount"]) for page in selected),
-            }
-        )
-    return lessons
-
-
-# ─── CourseEntry 수집 ─────────────────────────────────────────────────────────
-
-def course_entries(
-    source_project: Path,
-    start_chapter: str,
-    start_slide: str | None = None,
-    end_slide_number: int | None = None,
-) -> list[CourseEntry]:
-    """지정한 챕터·슬라이드부터 강의 끝까지의 CourseEntry 목록을 반환한다.
-
-    발음 사전은 deck 저장소 내장 사전과 로컬 프로덕션 사전을 합쳐 적용한다.
-    슬라이드 번호(slide_number)는 전체 강의 슬라이드 순서 기반 1-based 값이다.
-
-    Args:
-        source_project: udemy-agent 저장소 루트 경로.
-        start_chapter:  생성을 시작할 챕터 (예: "ch00").
-        start_slide:    None이면 챕터의 첫 슬라이드부터 시작.
-    """
-    deck_root = source_project / "deck"
-    # deck 내장 발음 사전 로드 (영어 약어, 숫자 읽기 등)
-    pronunciation = course_pronunciation_dictionary(source_project)
-    order = chapter_slide_order(deck_root)
-    # 슬라이드 전체 순서 → 1-based 번호 매핑
-    global_numbers = {pair: index + 1 for index, pair in enumerate(order)}
-    script_cache: dict[str, dict[str, dict[int, str]]] = {}
-    entries: list[CourseEntry] = []
-    started = False
-
-    for chapter, slide_id in order:
-        slide_number = global_numbers[(chapter, slide_id)]
-        if end_slide_number is not None and slide_number > end_slide_number:
-            break
-        # 시작 지점에 도달할 때까지 건너뜀
-        if not started:
-            chapter_matches = chapter == start_chapter
-            slide_matches = start_slide is None or slide_id == start_slide
-            started = chapter_matches and slide_matches
-        if not started:
-            continue
-        # 챕터 대본은 처음 접근 시 파싱해 캐시 (같은 챕터의 슬라이드를 반복 파싱 방지)
-        if chapter not in script_cache:
-            script_cache[chapter] = parse_script(deck_root / f"script/course/{chapter}.md")
-        steps = script_cache[chapter].get(slide_id)
-        if not steps:
-            raise ValueError(f"{chapter}/{slide_id}의 대본이 없습니다.")
-        ordered_steps = sorted(steps)
-        pending_step_pause = 0
-        for step_index, step in enumerate(ordered_steps):
-            text = steps[step]
-            trailing_pause = 0
-            markers = list(FORCED_PAUSE_TOKEN_PATTERN.finditer(text))
-            if markers and not text[markers[-1].end():].strip() and step_index + 1 < len(ordered_steps):
-                # A recall question may end with [2s], with the answer in the
-                # next visual step. Keep the wait outside TTS and attach it to
-                # that next step; a marker without any following speech still
-                # follows the existing validation error.
-                marker = markers[-1]
-                trailing_pause = forced_pause_milliseconds(marker.group(0)) or 0
-                text = text[:marker.start()].strip()
-                if not text:
-                    raise ValueError("강제 무음 앞에는 읽을 문장이 있어야 합니다.")
-            try:
-                segments = split_forced_pause_segments(text)
-            except ValueError as error:
-                raise ValueError(
-                    f"{chapter} {slide_number}페이지 {slide_id} {step}스텝: {error}"
-                ) from error
-            for part_index, (source_text, pause_before_ms) in enumerate(segments):
-                if part_index == 0:
-                    pause_before_ms += pending_step_pause
-                preflight = pronunciation_preflight(source_text, pronunciation)
-                entries.append(
-                    CourseEntry(
-                        chapter=chapter,
-                        slide_id=slide_id,
-                        slide_number=slide_number,
-                        step=step,
-                        source_text=source_text,
-                        tts_text=preflight["ttsText"],
-                        part_index=part_index,
-                        part_count=len(segments),
-                        pause_before_ms=pause_before_ms,
-                        pronunciation_matches=tuple(
-                            f"{item['from']} → {item['to']}"
-                            for item in preflight["dictionaryMatches"]
-                        ),
-                        naturalness_checks=tuple(
-                            f"{item['source']} → {item['reading']}"
-                            for item in preflight["naturalnessChecks"]
-                        ),
-                        naturalness_warnings=tuple(preflight["naturalnessWarnings"]),
-                        required_pronunciations=tuple(preflight["requiredPronunciations"]),
-                        unresolved_tokens=tuple(
-                            [*preflight["unresolvedAscii"], *preflight["unresolvedNumbers"]]
-                        ),
-                    )
-                )
-            pending_step_pause = trailing_pause
-
-    if not started:
-        marker = f"{start_chapter}/{start_slide or '<first>'}"
-        raise ValueError(f"시작 화면 {marker}을 찾지 못했습니다.")
-    if not entries:
-        raise ValueError("선택한 페이지 범위에 대본이 없습니다.")
-    return entries
-
-
-# ─── 청킹 ────────────────────────────────────────────────────────────────────
-
-def report_unresolved_terms(entries: list[CourseEntry]) -> list[dict[str, Any]]:
-    """Announce every term still spelled in Latin letters before generating.
-
-    A term the dictionary never answered is read however the model feels that
-    seed. That is what produced 런팀 and 과드레일, and it is invisible in the
-    finished audio until someone listens to all seven hours. The reading is a
-    decision, so it belongs in config/production-pronunciation.ko.json — printed
-    here, and recorded in the manifest's pronunciation.unresolved, so it can be
-    answered instead of discovered.
-
-    Deliberately English spans are marked ``"literal": true`` in the dictionary
-    and never reach this list.  This warns rather than stops: an unread term is
-    a term read badly, while a mixed identifier (A-2041 → 에이 이천사십일) is a
-    term read as something else entirely, which is why only that one raises.
-    """
-    unresolved = [
-        {
-            "chapter": entry.chapter,
-            "slideNumber": entry.slide_number,
-            "step": entry.step,
-            "tokens": list(entry.unresolved_tokens),
-        }
-        for entry in entries
-        if entry.unresolved_tokens
-    ]
-    if not unresolved:
-        return unresolved
-    tokens = sorted(
-        {token for item in unresolved for token in item["tokens"]}, key=str.casefold
-    )
-    pages = sorted({int(item["slideNumber"]) for item in unresolved})
-    print(
-        f"[발음 미지정] {len(tokens)}종이 영문·숫자 그대로 합성됩니다. "
-        f"읽는 법을 config/production-pronunciation.ko.json 에 지정하세요."
-    )
-    print(f"[발음 미지정] 용어: {', '.join(tokens[:24])}"
-          + (f" 외 {len(tokens) - 24}종" if len(tokens) > 24 else ""))
-    print(f"[발음 미지정] 페이지: {', '.join(str(page) for page in pages[:24])}"
-          + (f" 외 {len(pages) - 24}장" if len(pages) > 24 else ""))
-    return unresolved
-
-
-def group_course_entries(entries: list[CourseEntry]) -> list[CourseChunk]:
-    """Join nearby visual steps into one natural TTS breath.
-
-    같은 슬라이드 안의 짧은 연속 스텝들을 하나의 청크로 묶어
-    TTS 호출 횟수를 줄이고 문장 간 자연스러운 연결을 만든다.
-
-    청킹 조건 (모두 만족해야 같은 청크에 추가):
-        - 같은 챕터 + 같은 슬라이드
-        - 현재 청크 항목 수가 MAX_CHUNK_ENTRIES 미만
-        - 추가 후 누적 문자 수가 MAX_CHUNK_CHARS 이하
-    """
-    chunks: list[CourseChunk] = []
-    current: list[CourseEntry] = []
-    current_chars = 0
-
-    for entry in entries:
-        # 현재 청크와 같은 슬라이드인지 확인
-        same_slide = bool(current) and (
-            current[0].chapter == entry.chapter and current[0].slide_id == entry.slide_id
-        )
-        # 공백 1자 포함 추가 문자 수 계산
-        added_chars = len(entry.tts_text) + (1 if current else 0)
-        fits = (
-            same_slide
-            and entry.pause_before_ms == 0
-            and len(current) < MAX_CHUNK_ENTRIES
-            and current_chars + added_chars <= MAX_CHUNK_CHARS
-        )
-        if current and not fits:
-            # 현재 청크를 확정하고 새 청크 시작
-            chunks.append(CourseChunk(tuple(current)))
-            current = []
-            current_chars = 0
-        current.append(entry)
-        current_chars += len(entry.tts_text) + (1 if len(current) > 1 else 0)
-
-    if current:
-        chunks.append(CourseChunk(tuple(current)))
-    return chunks
-
-
-# ─── 오디오 타이밍 계산 ───────────────────────────────────────────────────────
-
-def milliseconds_to_samples(milliseconds: int, sample_rate: int) -> int:
-    """밀리초를 샘플 수로 변환한다 (반올림)."""
-    return round(milliseconds * sample_rate / 1000)
-
-
-def gap_after(current: CourseEntry, following: CourseEntry) -> int:
-    """두 연속 엔트리 사이에 삽입할 무음 갭(ms)을 결정한다.
-
-    같은 슬라이드 내 전환은 짧게(STEP_GAP_MS),
-    슬라이드 간 전환은 길게(SLIDE_GAP_MS) 설정한다.
-    """
-    if following.pause_before_ms:
-        return following.pause_before_ms
-    if current.chapter == following.chapter and current.slide_id == following.slide_id:
-        return STEP_GAP_MS
-    return SLIDE_GAP_MS
-
-
-def chunk_gap_after(current: CourseChunk, following: CourseChunk) -> int:
-    """두 연속 청크 사이에 삽입할 갭(ms)을 결정한다.
-
-    청크의 마지막·첫 번째 엔트리를 기준으로 gap_after를 위임한다.
-    """
-    return gap_after(current.entries[-1], following.entries[0])
-
-
-# ─── 파일 I/O ────────────────────────────────────────────────────────────────
-
-def write_json(path: Path, value: Any) -> None:
-    """부모 디렉터리를 자동 생성하고 JSON을 UTF-8로 저장한다."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
 def create_preview(source: Path, destination: Path) -> None:
     """WAV를 AAC 192kbps M4A로 변환해 미리듣기 파일을 생성한다.
 
@@ -862,106 +202,6 @@ def create_preview(source: Path, destination: Path) -> None:
     )
 
 
-# ─── 오디오 후처리 ────────────────────────────────────────────────────────────
-
-def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray, dict[str, int]]:
-    """Remove generated edge silence while preserving a short natural breath.
-
-    처리 단계:
-        1. RMS 기반 유성음 구간 감지 → 앞뒤 무음 트리밍 (EDGE_PAD_MS 여백 보존)
-        2. 내부 과도 무음 압축: MAX_INTERNAL_SILENCE_MS 초과 구간을
-           TARGET_INTERNAL_SILENCE_MS 로 줄임 (엣지 근처는 보호)
-        3. 앞뒤 sin²/cos² 페이드 적용으로 클릭 노이즈 방지
-
-    Returns:
-        (처리된 오디오 배열, 처리 통계 딕셔너리)
-        통계: trimmedHeadMs, trimmedTailMs, shortenedSilenceCount, shortenedSilenceMs
-    """
-    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
-    # 20ms 프레임, 10ms 홉으로 RMS 계산
-    frame = max(1, milliseconds_to_samples(20, sample_rate))
-    hop = max(1, milliseconds_to_samples(10, sample_rate))
-    if len(samples) < frame:
-        return samples, dict(UNTRIMMED_AUDIO_STATS)
-
-    starts = np.arange(0, len(samples) - frame + 1, hop)
-    rms = np.sqrt(
-        np.array([np.mean(samples[start : start + frame] ** 2) for start in starts])
-        + 1e-12  # 수치 안정성을 위한 epsilon
-    )
-    # 임계값: RMS 최대값의 1.25% 또는 고정 하한(5e-4) 중 큰 값
-    threshold = max(5e-4, float(rms.max()) * 0.0125)
-    voiced = np.flatnonzero(rms >= threshold)
-    if not len(voiced):
-        return samples, dict(UNTRIMMED_AUDIO_STATS)
-
-    # 유성음 구간 앞뒤로 EDGE_PAD_MS 여백을 두고 트리밍
-    pad = milliseconds_to_samples(EDGE_PAD_MS, sample_rate)
-    start = max(0, int(starts[voiced[0]]) - pad)
-    end = min(len(samples), int(starts[voiced[-1]]) + frame + pad)
-    trimmed = samples[start:end].copy()
-
-    # Qwen occasionally inserts a second-long pause between otherwise adjacent
-    # sentences. Keep normal rhetorical pauses, but compact the rare outliers.
-    # 트리밍 후 배열에서 다시 RMS를 계산해 내부 과도 무음 구간을 찾는다.
-    starts = np.arange(0, max(0, len(trimmed) - frame + 1), hop)
-    rms = np.sqrt(
-        np.array([np.mean(trimmed[at : at + frame] ** 2) for at in starts])
-        + 1e-12
-    )
-    silent = rms < threshold
-    # 연속 무음 프레임의 시작/종료 인덱스를 런-렝스 인코딩 방식으로 수집
-    runs: list[tuple[int, int]] = []
-    run_start: int | None = None
-    for index, is_silent in enumerate(silent):
-        if is_silent and run_start is None:
-            run_start = index
-        if run_start is not None and (not is_silent or index == len(silent) - 1):
-            run_end = index if not is_silent else index + 1
-            silence_start = int(starts[run_start])
-            silence_end = min(len(trimmed), int(starts[run_end - 1]) + frame)
-            duration_ms = round((silence_end - silence_start) * 1000 / sample_rate)
-            # 조건: 엣지 보호 구간 안쪽 & 길이가 임계값 초과인 구간만 압축 대상
-            if (
-                silence_start > milliseconds_to_samples(EDGE_PAD_MS, sample_rate)
-                and silence_end < len(trimmed) - milliseconds_to_samples(EDGE_PAD_MS, sample_rate)
-                and duration_ms > MAX_INTERNAL_SILENCE_MS
-            ):
-                runs.append((silence_start, silence_end))
-            run_start = None
-
-    shortened_ms = 0
-    if runs:
-        # 압축 대상 구간들을 TARGET_INTERNAL_SILENCE_MS 로 줄여 이어 붙인다.
-        compacted: list[np.ndarray] = []
-        cursor = 0
-        target_silence = milliseconds_to_samples(TARGET_INTERNAL_SILENCE_MS, sample_rate)
-        for silence_start, silence_end in runs:
-            compacted.append(trimmed[cursor:silence_start])
-            keep = min(target_silence, silence_end - silence_start)
-            compacted.append(trimmed[silence_start : silence_start + keep])
-            shortened_ms += round((silence_end - silence_start - keep) * 1000 / sample_rate)
-            cursor = silence_end
-        compacted.append(trimmed[cursor:])
-        trimmed = np.concatenate(compacted)
-
-    # sin²(0→π/2) 페이드인, cos²(0→π/2) 페이드아웃 적용
-    fade = min(milliseconds_to_samples(EDGE_FADE_MS, sample_rate), len(trimmed) // 2)
-    if fade:
-        phase = np.linspace(0.0, np.pi / 2.0, fade, endpoint=True, dtype=np.float32)
-        trimmed[:fade] *= np.sin(phase) ** 2
-        trimmed[-fade:] *= np.cos(phase) ** 2
-
-    return trimmed, {
-        "trimmedHeadMs": round(start * 1000 / sample_rate),
-        "trimmedTailMs": round((len(samples) - end) * 1000 / sample_rate),
-        "shortenedSilenceCount": len(runs),
-        "shortenedSilenceMs": shortened_ms,
-    }
-
-
-# ─── 강제 정렬 ────────────────────────────────────────────────────────────────
-
 def metal_peak_memory_gb(mx: Any) -> float:
     """Report the peak Metal allocation across every model this run loaded.
 
@@ -982,173 +222,6 @@ def metal_peak_memory_gb(mx: Any) -> float:
         except Exception:  # noqa: BLE001 - a diagnostic must never end a run
             continue
     return 0.0
-
-
-def clean_alignment_token(token: str) -> str:
-    """정렬 토큰에서 문자·숫자·아포스트로피만 남기고 구두점을 제거한다.
-
-    ForcedAligner의 어휘에 없는 특수문자를 포함한 토큰을 정규화해
-    텍스트와 정렬 결과의 토큰 수를 일치시킨다.
-    유니코드 카테고리 L(문자), N(숫자)과 아포스트로피(')만 허용한다.
-    """
-    return "".join(
-        char
-        for char in token
-        if char == "'" or unicodedata.category(char).startswith(("L", "N"))
-    )
-
-
-def alignment_tokens(text: str) -> list[str]:
-    """텍스트를 공백으로 분리한 뒤 각 토큰을 clean_alignment_token으로 정규화한다.
-
-    빈 문자열이 된 토큰은 제외한다 (순수 구두점 토큰 등).
-    """
-    return [cleaned for token in text.split() if (cleaned := clean_alignment_token(token))]
-
-
-def entry_alignment_slices(
-    chunk: CourseChunk,
-    words: list[dict[str, Any]],
-) -> list[list[dict[str, Any]]]:
-    """청크 전체 단어 정렬 결과를 엔트리별로 분할한다.
-
-    각 엔트리의 토큰 수를 세어 words 리스트를 순서대로 슬라이싱한다.
-    토큰 수 불일치는 텍스트 전처리와 정렬 결과가 어긋난 것이므로 즉시 오류를 낸다.
-
-    Returns:
-        엔트리별 단어 정렬 딕셔너리 목록 (청크 엔트리 순서와 동일)
-    """
-    counts = [len(alignment_tokens(entry.tts_text)) for entry in chunk.entries]
-    if sum(counts) != len(words):
-        raise RuntimeError(
-            f"{chunk.key} 정렬 토큰 수가 다릅니다: expected={sum(counts)}, actual={len(words)}"
-        )
-    result: list[list[dict[str, Any]]] = []
-    cursor = 0
-    for count in counts:
-        result.append(words[cursor : cursor + count])
-        cursor += count
-    return result
-
-
-def merge_step_record_parts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge forced-pause speech parts back into one visual-step record."""
-    merged: list[dict[str, Any]] = []
-    for record in records:
-        identity = (record["chapter"], record["slide_id"], int(record["step"]))
-        previous_identity = (
-            (merged[-1]["chapter"], merged[-1]["slide_id"], int(merged[-1]["step"]))
-            if merged
-            else None
-        )
-        if identity != previous_identity:
-            if merged and int(record.get("pause_before_ms", 0)) > 0:
-                merged[-1]["forcedPauses"].append({
-                    "durationMs": int(record["pause_before_ms"]),
-                    "nextSpeechStartMs": int(record["speechStartMs"]),
-                })
-            merged.append(
-                {
-                    **record,
-                    "key": f"{record['chapter']}--{record['slide_id']}--{record['step']}",
-                    "alignment": {"words": list(record["alignment"]["words"])},
-                    "chunkKeys": [record["chunkKey"]],
-                    "audioPaths": [record["audioPath"]],
-                    "forcedPauses": [],
-                }
-            )
-            continue
-
-        previous = merged[-1]
-        pause_ms = int(record.get("pause_before_ms", 0))
-        if pause_ms <= 0:
-            raise RuntimeError(f"{record['key']}의 분할 음성에 강제 무음이 없습니다.")
-        previous["source_text"] = f"{previous['source_text']} {record['source_text']}"
-        previous["tts_text"] = f"{previous['tts_text']} {record['tts_text']}"
-        for field in (
-            "pronunciation_matches",
-            "naturalness_checks",
-            "naturalness_warnings",
-            "required_pronunciations",
-            "unresolved_tokens",
-        ):
-            previous[field] = tuple(
-                dict.fromkeys([*previous.get(field, ()), *record.get(field, ())])
-            )
-        previous["speechEndMs"] = int(record["speechEndMs"])
-        previous["alignment"]["words"].extend(record["alignment"]["words"])
-        previous["chunkKeys"].append(record["chunkKey"])
-        previous["audioPaths"].append(record["audioPath"])
-        previous["forcedPauses"].append(
-            {
-                "durationMs": pause_ms,
-                "nextSpeechStartMs": int(record["speechStartMs"]),
-            }
-        )
-        previous["part_count"] = max(
-            int(previous.get("part_count", 1)), int(record.get("part_count", 1))
-        )
-        previous["hash"] = stable_digest(
-            [previous["hash"], record["hash"], pause_ms]
-        )
-    return merged
-
-
-def load_or_create_alignment(
-    chunk: CourseChunk,
-    clip: dict[str, Any],
-    aligner: Any,
-    alignment_path: Path,
-    use_cache: bool = True,
-) -> list[dict[str, Any]]:
-    """정렬 캐시가 있으면 읽고, 없으면 ForcedAligner로 생성한 뒤 저장한다.
-
-    정렬은 계산 비용이 크므로 clip 해시가 포함된 파일명으로 캐싱한다.
-    aligner=None 이면 캐시 파일이 반드시 존재해야 한다
-    (TTS 완료 후 aligner를 로드하지 않은 상태에서 재실행할 때).
-
-    Args:
-        chunk:          정렬할 CourseChunk.
-        clip:           오디오 경로와 해시를 담은 딕셔너리.
-        aligner:        mlx_audio STT 모델 인스턴스 (캐시 히트 시 None 가능).
-        alignment_path: 캐시 파일 경로.
-
-    Returns:
-        단어별 {"text", "startMs", "endMs"} 딕셔너리 목록.
-    """
-    if use_cache and alignment_path.is_file():
-        return json.loads(alignment_path.read_text(encoding="utf-8"))["words"]
-    if aligner is None:
-        raise RuntimeError(f"{chunk.key} 정렬 캐시가 없지만 aligner가 로드되지 않았습니다.")
-
-    result = aligner.generate(
-        audio=clip["audioPath"],
-        text=chunk.tts_text,
-        # Space tokenization is deterministic for mixed Korean/English. This
-        # forced-aligner API does not feed a separate language token to the model.
-        # 공백 기반 토크나이저는 한국어/영어 혼합에서도 결정적이므로 "English" 고정.
-        language="English",
-    )
-    words = [
-        {
-            "text": item.text,
-            "startMs": round(item.start_time * 1000),
-            "endMs": round(item.end_time * 1000),
-        }
-        for item in result.items
-    ]
-    # 토큰 수 일관성 검증 후 캐시 저장
-    entry_alignment_slices(chunk, words)
-    write_json(
-        alignment_path,
-        {
-            "schemaVersion": 1,
-            "chunkKey": chunk.key,
-            "hash": clip["hash"],
-            "words": words,
-        },
-    )
-    return words
 
 
 def read_independent_word_times(audio_path: Path, text: str) -> list[dict[str, Any]]:
@@ -1308,8 +381,6 @@ def resolve_chunk_take(
         },
     }
 
-
-# ─── 핵심 생성 로직 ───────────────────────────────────────────────────────────
 
 def synthesize_excerpt(
     source_project: Path,
@@ -2155,8 +1226,6 @@ def entries_for_item(item: dict[str, Any]) -> CourseEntry:
         tts_text=item["tts_text"],
     )
 
-
-# ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)

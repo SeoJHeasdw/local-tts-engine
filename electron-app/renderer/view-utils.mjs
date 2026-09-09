@@ -1,5 +1,5 @@
-import { omissionEvidence, textWords } from './transcript-evidence.mjs';
-export { findingStatus } from './transcript-evidence.mjs';
+import { omissionEvidence, textWords } from "../shared/transcript-evidence.mjs";
+export { findingStatus } from '../shared/transcript-evidence.mjs';
 
 export function buildChapterRanges(pages = []) {
   const chapters = new Map();

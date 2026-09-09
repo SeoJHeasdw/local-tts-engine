@@ -10,9 +10,10 @@
     "app": "electron electron-app/main.mjs",
     "doctor": "node scripts/doctor.mjs",
     "test": "npm run test:app && npm run test:python",
-    "test:app": "node --test electron-app/*.test.mjs",
+    "test:app": "node --test tests/electron/*.test.mjs",
     "test:python": ".venv/bin/python -m pytest -q",
-    "check": "npm run doctor -- --strict && npm test"
+    "check": "npm run doctor -- --strict && npm run check:architecture && npm test",
+    "check:architecture": "node scripts/check_architecture.mjs"
   },
   "engines": {
     "node": ">=22"

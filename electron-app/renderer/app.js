@@ -1,31 +1,9 @@
+import { createOutputsController } from "./controllers/outputs.mjs";
+import { createEditorController } from "./controllers/editor.mjs";
+import { createReviewController } from "./controllers/review.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
-import {parseRegionTime,formatRegionTime,regionIssue,regionImpact,regionWindow,timeAtFraction} from './region-utils.mjs';
-import {
-  buildChapterRanges,
-  chapterEtaLabel,
-  createViewHistory,
-  completionFindings,
-  completionSummary,
-  findingExcerpt,
-  findingKeyOf,
-  findingSeek,
-  findingStatus,
-  groupOutputs,
-  etaLabel,
-  filterOutputItems,
-  outputKind,
-  shouldOpenMenuUpward,
-  summarizePageRange,
-  summarizeVoiceFindings,
-  unitLabel,
-  voiceFindingLabel,
-  voiceFindingReason,
-  outputRowTitle,
-  outputGroupTitle,
-  outputState,
-  visibleVoiceFindings,
-  voiceFindingSummaryLine,
-} from "./view-utils.mjs";
+
+import { buildChapterRanges, chapterEtaLabel, createViewHistory, completionFindings, completionSummary, etaLabel, summarizePageRange, summarizeVoiceFindings, unitLabel, voiceFindingReason } from "./view-utils.mjs";
 
 const api = window.ttsStudio;
 const $ = (selector) => document.querySelector(selector);
@@ -47,15 +25,12 @@ let catalogPages = [];
 let catalogLessons = [];
 let totalPages = 715;
 let latestTarget = null;
-let latestEditTarget = null;
-let voiceVideo = null;
+const mediaState = { latestEditTarget: null, voiceVideo: null };
 let appSettings = null;
 let voiceCandidates = [];
 let selectedCandidateToken = null;
 let candidatePurpose = "edit";
 let catalogChapters = [];
-let outputItems = [];
-let outputFilter = "all";
 let creationState = "idle";
 
 function showToast(message, kind = "success") {
@@ -393,631 +368,7 @@ function formatDuration(ms) {
   return `${minutes}:${seconds}`;
 }
 
-let reviewTarget = null;
-let reviewFindings = [];
-let reviewSelection = null;
-let reviewMode = 'regenerate';
-let regionAudio = null;
-let reviewStopAt = null;
-let reviewRequest = 0;
-let reviewBusy = false;
-let latestCompleteReview = null;
-let pendingCandidateContext = null;
-let reviewResumeMs = 0;
-const reviewPlayer = $('#review-player');
-let reviewRangeEdited=false, reviewWaveWindow={start:0,end:10}, reviewWaveRequest=0;
-let regionPreviewRequest=0, regionPreviewBusy=false;
-
-function readReviewRegion() {
-  return {start:parseRegionTime($('#review-mute-start').value),end:parseRegionTime($('#review-mute-end').value),
-    duration:Number(voiceVideo?.durationMs)/1000 || Number(reviewPlayer.duration) || Number(voiceVideo?.pages?.at(-1)?.endMs)/1000 || 0,
-    mode:reviewMode,audioDuration:regionAudio ? Number(regionAudio.durationMs)/1000 : null,
-    fit:$('#review-region-fit').value || 'match-audio'};
-}
-function invalidateRegionPreview() {
-  regionPreviewRequest++; regionPreviewBusy=false;
-  $('#review-preview-player').pause(); $('#review-preview-player').removeAttribute('src');
-  $('#review-preview-player').classList.add('hidden'); $('#review-preview-note').textContent='';
-}
-function setReviewRegion(start,end,{edited=true}={}) {
-  $('#review-mute-start').value=formatRegionTime(start); $('#review-mute-end').value=formatRegionTime(end);
-  reviewRangeEdited=edited; invalidateRegionPreview(); updateReviewAction(); drawReviewWaveSelection();
-}
-function drawReviewWaveSelection() {
-  const r=readReviewRegion(),width=reviewWaveWindow.end-reviewWaveWindow.start;
-  if(!(width>0))return;
-  const position=t=>Math.max(0,Math.min(100,(t-reviewWaveWindow.start)/width*100));
-  if(Number.isFinite(r.start)&&Number.isFinite(r.end)){
-    const from=position(r.start),to=position(r.end);
-    $('#review-wave-selection-band').style.left=`${from}%`; $('#review-wave-selection-band').style.width=`${Math.max(0,to-from)}%`;
-    for(const side of ['start','end']){
-      $('#review-wave-'+side).style.left=`${position(r[side])}%`;
-      $('#review-wave-'+side).setAttribute('aria-label',`선택 ${side==='start'?'시작':'끝'} ${formatRegionTime(r[side])}, 방향키로 0.01초 이동`);
-    }
-  }
-  $('#review-wave-cursor').style.left=`${position(reviewPlayer.currentTime)}%`;
-}
-async function showReviewWave(center,span=10) {
-  const duration=readReviewRegion().duration;
-  if(!voiceVideo||!(duration>0))return;
-  reviewWaveWindow=regionWindow(Number.isFinite(center)?center:reviewPlayer.currentTime,Number.isFinite(span)?span:10,duration);
-  $('#review-wave-window').textContent=`${formatRegionTime(reviewWaveWindow.start)}–${formatRegionTime(reviewWaveWindow.end)}`;
-  drawReviewWaveSelection(); $('#review-wave-path').setAttribute('d','');
-  const request=++reviewWaveRequest,token=voiceVideo.token;
-  if(!api.reviewWaveform){$('#review-wave-note').textContent='앱을 다시 열면 파형을 불러올 수 있습니다.';return;}
-  $('#review-wave-note').textContent='파형을 불러오고 있습니다.';
-  try{
-    const wave=await api.reviewWaveform({videoToken:token,...reviewWaveWindow});
-    if(request!==reviewWaveRequest||token!==voiceVideo?.token)return;
-    const peak=Math.max(.001,...wave.peaks);
-    $('#review-wave-path').setAttribute('d',wave.peaks.map((value,i)=>{
-      const x=((i+.5)*1000/wave.peaks.length).toFixed(2),height=value/peak*46;
-      return `M${x},${(50-height).toFixed(2)}V${(50+height).toFixed(2)}`;
-    }).join(''));
-    $('#review-wave-note').textContent='시작·끝 손잡이를 끌어 선택하세요. 방향키와 시간 입력으로 미세 조정할 수 있습니다.';
-  }catch(error){if(request===reviewWaveRequest)$('#review-wave-note').textContent=error.message;}
-}
-function changeRegionBoundary(side,value) {
-  const r=readReviewRegion();
-  if(!Number.isFinite(value))return;
-  $('#review-mute-'+side).value=formatRegionTime(Math.max(0,Math.min(r.duration,value)));
-  reviewRangeEdited=true; invalidateRegionPreview(); updateReviewAction(); drawReviewWaveSelection();
-}
-async function previewReviewRegion(after=false,context=.6) {
-  const r=readReviewRegion(),problem=regionIssue(after?r:{...r,mode:'replace',audioDuration:null});
-  if(problem||regionPreviewBusy||!voiceVideo||(after&&reviewMode==='replace'&&!regionAudio))return;
-  if(!api.reviewPreview){showToast('앱을 다시 열어 미리듣기를 사용하세요.','error');return;}
-  reviewPlayer.pause(); $('#region-audio-preview').pause(); $('#review-preview-player').pause();
-  const request=++regionPreviewRequest,token=voiceVideo.token;
-  regionPreviewBusy=true; $('#review-preview-note').textContent='미리듣기를 준비하고 있습니다.'; updateReviewAction();
-  try{
-    const preview=await api.reviewPreview({videoToken:token,audioToken:regionAudio?.token,start:r.start,end:r.end,
-      mode:after?reviewMode:'original',durationPolicy:r.fit,context});
-    if(request!==regionPreviewRequest||token!==voiceVideo?.token)return;
-    const player=$('#review-preview-player');player.src=preview.audioUrl;player.playbackRate=Number($('#review-speed').value)||1;player.classList.remove('hidden');
-    $('#review-preview-note').textContent=after?'수정 후 미리듣기 · 아직 저장하지 않았습니다.':context?'선택 구간 앞뒤 각 0.6초를 포함합니다.':'선택한 시작·끝으로 정확히 잘라 듣습니다.';
-    await player.play();
-  }catch(error){if(request===regionPreviewRequest)$('#review-preview-note').textContent=error.message;}
-  finally{if(request===regionPreviewRequest){regionPreviewBusy=false;updateReviewAction();}}
-}
-
-// 고른 교체는 바로 파일로 굽지 않고 여기 모인다. 예전에는 한 곳을 고칠 때마다
-// 영상 전체를 다시 굽고 새 파일을 남긴 뒤 그 파일을 처음부터 다시 열었다.
-// 확인할 곳이 넷이면 그 값을 네 번 치렀다. 모아 두었다가 한 번에 적용하면
-// 재인코딩도 결과 파일도 하나로 끝난다.
-const pendingFixes = new Map();
-
-function pendingFixList() {
-  return Array.from(pendingFixes.values()).sort((left, right) => left.startPage - right.startPage);
-}
-
-function renderPendingFixes() {
-  const fixes = pendingFixList();
-  const badge = $('#polish-count');
-  badge.textContent = String(fixes.length);
-  badge.classList.toggle('hidden', fixes.length === 0);
-  $('#polish-pending').classList.toggle('hidden', fixes.length === 0);
-  $('#polish-pending-count').textContent = fixes.length ? `${fixes.length}곳 교체 대기` : '교체 대기 없음';
-  $('#polish-save').disabled = reviewBusy || fixes.length === 0;
-  $('#polish-pending-list').replaceChildren(...fixes.map((fix) => {
-    const item = document.createElement('li');
-    const label = document.createElement('strong');
-    label.textContent = `${fix.startPage}페이지`;
-    const detail = document.createElement('small');
-    detail.textContent = fix.label;
-    const drop = document.createElement('button');
-    drop.type = 'button';
-    drop.className = 'polish-drop';
-    drop.textContent = '취소';
-    drop.setAttribute('aria-label', `${fix.startPage}페이지 교체 취소`);
-    drop.addEventListener('click', () => { pendingFixes.delete(fix.startPage); renderPendingFixes(); });
-    item.append(label, detail, drop);
-    return item;
-  }));
-}
-
-// The strip is not a mode. One lesson is a line; a chapter grows the same line
-// into rows. What was produced decides, not a setting the user has to pick.
-function renderPolishStrip(video) {
-  const strip = $('#polish-strip');
-  if (!video) { strip.classList.add('hidden'); return; }
-  const findings = video.voiceFindings || [];
-  const pages = video.pages || [];
-  strip.classList.remove('hidden');
-  $('#polish-strip-name').textContent = video.name || '';
-  const facts = [
-    ['페이지', String(pages.length || '—')],
-    ['확인 필요', String(findings.length)],
-  ];
-  $('#polish-facts').replaceChildren(...facts.map(([key, value]) => {
-    const span = document.createElement('span');
-    const label = document.createElement('i');
-    label.textContent = key;
-    const strong = document.createElement('b');
-    strong.textContent = value;
-    span.append(label, strong);
-    return span;
-  }));
-  const flagged = new Set(findings.map((finding) => Number(finding.slideNumber)));
-  $('#polish-spark').replaceChildren(...pages.slice(0, 120).map((page) => {
-    const cell = document.createElement('i');
-    if (flagged.has(Number(page.number))) cell.className = 'flagged';
-    return cell;
-  }));
-}
-
-// Why it was flagged is the whole basis for the judgement, so it sits next to
-// the video rather than behind a disclosure.
-function showFindingDiff(finding) {
-  const panel = $('#polish-diff');
-  const expected = String(finding?.expectedText || '');
-  const recognized = String(finding?.recognizedText || '');
-  if (!expected && !recognized) { panel.classList.add('hidden'); return; }
-  panel.classList.remove('hidden');
-  $('#polish-expected').textContent = expected || '(원문 없음)';
-  $('#polish-recognized').textContent = recognized || '(받아쓰기 없음)';
-  $('#polish-diff-note').textContent = `${findingStatus(finding)} · ${voiceFindingReason(finding)}. 받아쓰기는 판독 근거이며, 실제 음성을 함께 확인하세요.`;
-}
-
-function queueSelectedCandidate(token, name) {
-  if (!pendingCandidateContext || !token) return false;
-  const startPage = Number(pendingCandidateContext.startPage);
-  const endPage = Number(pendingCandidateContext.endPage ?? startPage);
-  if (!Number.isFinite(startPage)) return false;
-  pendingFixes.set(startPage, {
-    startPage,
-    endPage,
-    audioToken: token,
-    label: name || '고른 목소리',
-  });
-  pendingCandidateContext = null;
-  $('#review-candidates-host').classList.add('hidden');
-  // 교체를 담았다면 그 페이지는 처리된 것이므로 목록에서도 내린다.
-  reviewFindings
-    .filter((finding) => Number(finding.slideNumber) === startPage)
-    .forEach((finding) => clearedFindings.add(findingKey(finding)));
-  renderFindings();
-  renderPendingFixes();
-  showToast(`${startPage}페이지 교체를 대기 목록에 담았습니다. 저장할 때 한 번에 적용됩니다.`);
-  return true;
-}
-
-async function savePendingFixes() {
-  const fixes = pendingFixList();
-  if (!voiceVideo || !fixes.length || reviewBusy) return;
-  const payload = {
-    operation: 'voice-pages',
-    name: `polish-${Date.now()}`,
-    videoToken: voiceVideo.token,
-    durationPolicy: $('#voice-duration-policy').value,
-    patches: fixes.map((fix) => ({ startPage: fix.startPage, endPage: fix.endPage, audioToken: fix.audioToken })),
-  };
-  reviewPlayer.pause();
-  try { setEditBusy(true); await api.startEdit(payload); }
-  catch (error) { setEditBusy(false); showToast(error.message, 'error'); }
-}
-
-$('#polish-save').addEventListener('click', savePendingFixes);
-$('#polish-discard').addEventListener('click', () => { pendingFixes.clear(); renderPendingFixes(); });
-
-
-function renderCompleteVoiceFindings(findings = [], target = null) {
-  latestCompleteReview = target;
-  const summary = summarizeVoiceFindings(findings);
-  $('#voice-quality-panel').classList.toggle('hidden', summary.total === 0);
-  $('#voice-quality-panel').dataset.tone = summary.tone;
-  $('#voice-quality-title').textContent = summary.title;
-  $('#review-latest').classList.toggle('hidden', !target);
-  $('#voice-quality-list').classList.toggle('hidden', Boolean(target));
-  $('#voice-quality-list').replaceChildren(...(target ? [] : findings.map(finding => {
-    const item = document.createElement('li');
-    const label = `${finding.displayName ? `${finding.displayName} · ` : ''}${voiceFindingLabel(finding)} · ${finding.slideNumber}페이지 · ${voiceFindingReason(finding)}`;
-    if (finding.target) {
-      const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
-      button.addEventListener('click', () => openReview(finding.target)); item.append(button);
-    } else item.textContent = label;
-    return item;
-  })));
-}
-
-// 목록에 남아 있는 것이 곧 남은 일이다. 들어 보고 문제 없다고 판단했거나
-// 교체를 담은 항목은 그 자리에서 지워야, 무엇이 남았는지가 목록만 봐도 읽힌다.
-// 판정 자체를 바꾸는 것이 아니라 이 영상을 보는 동안의 표시일 뿐이라, 다른
-// 영상을 열면 초기화된다.
-const clearedFindings = new Set();
-
-function findingKey(finding) {
-  return findingKeyOf(finding);
-}
-
-// 표시는 결과에 적힌다. 그래야 앱을 다시 켜도, 최근 결과에서 봐도 같은 상태다.
-async function persistClearedFindings() {
-  const target = voiceVideo?.reviewTarget;
-  if (!target) return;
-  try { await api.setClearedFindings(target, [...clearedFindings]); }
-  catch (error) { showToast(`확인 표시를 저장하지 못했습니다. ${error.message}`, 'error'); }
-}
-
-function visibleFindings() {
-  return reviewFindings.filter((finding) => !clearedFindings.has(findingKey(finding)));
-}
-
-function renderFindings() {
-  const remaining = visibleFindings();
-  const cleared = reviewFindings.length - remaining.length;
-  $('#review-finding-count').textContent = String(remaining.length);
-  const rows = remaining.map(renderVoiceFindingRow);
-  if (cleared > 0) {
-    const note = document.createElement('li');
-    note.className = 'findings-cleared';
-    const mark = document.createElement('b');
-    mark.textContent = '✓';
-    const label = document.createElement('span');
-    label.textContent = `${cleared}곳 확인함`;
-    const undo = document.createElement('button');
-    undo.type = 'button';
-    undo.textContent = '되돌리기';
-    undo.addEventListener('click', restoreClearedFindings);
-    note.append(mark, label, undo);
-    rows.push(note);
-  }
-  $('#review-findings-list').replaceChildren(...rows);
-  $('#review-findings-note').textContent = reviewFindings.length === 0
-    ? '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
-    : remaining.length === 0
-      ? '확인할 항목을 모두 정리했습니다. 담아 둔 교체가 있으면 저장하세요.'
-      : '자동 검수 권장 구간입니다. 눌러서 직접 확인하세요.';
-}
-
-function clearFinding(finding) {
-  clearedFindings.add(findingKey(finding));
-  renderFindings();
-  persistClearedFindings();
-}
-
-function restoreClearedFindings() {
-  clearedFindings.clear();
-  renderFindings();
-  persistClearedFindings();
-}
-
-// 사유는 길고 대본 문장은 더 길다. 셋을 한 줄에 나란히 두면 문장이 잘리거나
-// 줄이 무너지므로, 짧은 것(페이지·시각)만 윗줄에 두고 문장은 아래 한 줄을
-// 통째로 쓴다. 사유는 아이콘 툴팁으로 접는다.
-function renderVoiceFindingRow(finding) {
-  const row = document.createElement('li');
-  row.dataset.severity = finding.severity;
-
-  const button = document.createElement('button');
-  button.type = 'button'; button.className = 'voice-finding';
-
-  const head = document.createElement('div');
-  head.className = 'finding-head';
-  const title = document.createElement('strong'); title.textContent = `${finding.slideNumber}페이지`;
-  const time = document.createElement('span');
-  time.className = 'finding-time';
-  const page = voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
-    const at = findingSeek(finding, page);
-  time.textContent = voiceFindingLabel(at);
-  head.append(title, time);
-
-  // 대본을 통째로 말면 어느 낱말을 들어야 하는지가 오히려 묻힌다. 걸린 낱말과
-  // 그 앞뒤만 짧게 보여 준다.
-  const line = document.createElement('p');
-  line.className = 'finding-line';
-  const excerpt = findingExcerpt(finding);
-  const paintExcerpt = () => {
-    line.replaceChildren();
-    if (excerpt?.term) {
-      const before = document.createElement('span'); before.textContent = excerpt.before;
-      const term = document.createElement('mark'); term.className = 'finding-term'; term.textContent = excerpt.term;
-      const after = document.createElement('span'); after.textContent = excerpt.after;
-      line.append(before, term, after);
-    } else {
-      line.textContent = excerpt?.after || voiceFindingReason(finding);
-    }
-  };
-  paintExcerpt();
-
-  const status = document.createElement('p'); status.className = 'finding-status';
-  status.textContent = findingStatus(finding);
-  button.append(head, status, line);
-
-  const tools = document.createElement('div');
-  tools.className = 'finding-tools';
-  // 발췌는 걸린 낱말을 짚으려고 앞뒤를 잘랐다. 잘린 데가 궁금할 때를 위해
-  // 펼칠 수 있게 둔다. 항목 버튼 안에 버튼을 넣을 수는 없으므로 옆에 세운다.
-  const full = String(finding.expectedText || '').trim();
-  const more = document.createElement('button');
-  more.type = 'button';
-  more.className = 'finding-more';
-  more.textContent = '⋯';
-  more.setAttribute('aria-expanded', 'false');
-  more.title = '대본 전체 보기';
-  more.setAttribute('aria-label', `${finding.slideNumber}페이지 대본 전체 보기`);
-  more.disabled = !full;
-  more.addEventListener('click', () => {
-    const open = more.getAttribute('aria-expanded') !== 'true';
-    more.setAttribute('aria-expanded', String(open));
-    more.title = open ? '발췌만 보기' : '대본 전체 보기';
-    line.classList.toggle('full', open);
-    if (open) { line.replaceChildren(); line.textContent = full; }
-    else paintExcerpt();
-  });
-  const why = document.createElement('span');
-  why.className = 'finding-why';
-  why.setAttribute('tabindex', '0');
-  why.setAttribute('role', 'note');
-  // 툴팁과 스크린리더가 같은 문구를 읽도록 한 값에서 낸다.
-  why.dataset.tooltip = voiceFindingReason(finding);
-  why.setAttribute('aria-label', `확인 사유: ${voiceFindingReason(finding)}`);
-  why.textContent = 'ⓘ';
-  const done = document.createElement('button');
-  done.type = 'button'; done.className = 'finding-done';
-  done.textContent = '확인';
-  done.title = '확인 완료로 표시';
-  done.setAttribute('aria-label', `${finding.slideNumber}페이지 확인 완료로 표시`);
-  done.addEventListener('click', () => clearFinding(finding));
-  // 확인 항목의 대부분은 결국 그 페이지를 다시 읽히는 것으로 끝난다. 화면을
-  // 옮겨 페이지를 다시 고르는 두 걸음을 지우고 그 자리에 버튼을 둔다.
-  const again = document.createElement('button');
-  again.type = 'button'; again.className = 'finding-regenerate';
-  again.textContent = '재생성';
-  again.title = '이 페이지의 목소리를 새로 만듭니다';
-  again.setAttribute('aria-label', `${finding.slideNumber}페이지 목소리 재생성`);
-  again.disabled = !page;
-  again.addEventListener('click', () => regenerateFinding(finding, page));
-  tools.append(why, more, done, again);
-
-  row.append(button, tools);
-  button.addEventListener('click', () => {
-    selectReviewPage(page, voiceFindingReason(finding));
-    showFindingDiff(finding);
-    // 항목의 구간은 청크 전체다. 그대로 옮기면 문단 첫머리에 떨어져 문제가 된
-    // 낱말을 다시 찾아야 한다. 낱말 시각이 있으면 그 자리로 간다.
-    seekReview(at.startMs / 1000, at.endMs / 1000);
-    setReviewRegion(at.startMs/1000,at.endMs/1000);
-    if(reviewMode!=='regenerate')showReviewWave((at.startMs+at.endMs)/2000,(at.endMs-at.startMs)/1000+2);
-  });
-  return row;
-}
-
-async function openReview(target, finding = null) {
-  const request = ++reviewRequest;
-  try {
-    const video = await api.adoptResultVideo(target);
-    if (request !== reviewRequest || reviewBusy) return false;
-    setReviewVideo(video, target);
-    $("[data-view='review']").click();
-    if (finding) {
-      selectReviewPage(video.pages?.find(p => p.number === Number(finding.slideNumber)), voiceFindingReason(finding));
-      seekReview(Number(finding.startMs) / 1000, Number(finding.endMs) / 1000);
-    }
-    return true;
-  } catch (error) { showToast(error.message, 'error'); return false; }
-}
-
-// 검수 중인 파일도 이름은 그 자리에서 고친다. 결과 목록을 거치지 않고 고른
-// 영상이어도 이름은 그 파일에 붙은 것이므로 같은 방법으로 바꿀 수 있다.
-function paintReviewFileName(name) {
-  const element = $('#voice-video-name');
-  element.replaceChildren();
-  element.textContent = name;
-  element.classList.toggle('renamable', Boolean(voiceVideo));
-  element.title = voiceVideo ? `${name} · 더블클릭해서 이름 바꾸기` : '';
-}
-
-function setReviewVideo(video, target = null) {
-  if (!video || reviewBusy) return;
-  $$('audio,video').forEach(media => media.pause());
-  voiceVideo = video; reviewTarget = target; reviewSelection = null; reviewStopAt = null;
-  reviewMode = 'regenerate';
-  reviewWaveRequest++; invalidateRegionPreview(); reviewRangeEdited=false;
-  $('#review-region-wave').classList.add('hidden');
-  $$('#review-mode-tabs button').forEach(button => button.classList.toggle('selected', button.dataset.repairMode === reviewMode));
-  $('#edit-voice-panel').classList.remove('hidden');
-  $('#review-mute-panel').classList.add('hidden');
-  $('#review-mute-start').value = '0:00.000'; $('#review-mute-end').value = '0:00.200';
-  $('#review-region-fit').value='match-audio';
-  regionAudio = null;
-  $('#region-audio-preview').removeAttribute('src');
-  $('#region-audio-preview').classList.add('hidden');
-  $('#region-audio-name').textContent = 'WAV·M4A·MP3 파일을 선택하세요.';
-  pendingCandidateContext = null;
-  $('#review-candidates-host').classList.add('hidden');
-  $('#review-saved').classList.add('hidden');
-  pendingFixes.clear();
-  renderPendingFixes();
-  $('#polish-diff').classList.add('hidden');
-  renderPolishStrip(video);
-  paintReviewFileName(video.name);
-  reviewPlayer.src = video.videoUrl;
-  reviewFindings = video.voiceFindings || [];
-  clearedFindings.clear();
-  for (const key of video.clearedFindings || []) clearedFindings.add(String(key));
-  renderFindings();
-  $('#review-pages').replaceChildren(...(video.pages || []).map(page => {
-    const button = document.createElement('button'); button.type = 'button';
-    button.textContent = `${page.number}p`; button.dataset.page = page.number;
-    button.title = `${formatDuration(page.startMs)} · ${page.text.slice(0, 70)}`;
-    button.addEventListener('click', () => { selectReviewPage(page); seekReview(page.startMs / 1000); });
-    return button;
-  }));
-  $('#review-selection-title').textContent = '수정할 부분을 선택하세요';
-  $('#review-selection-reason').textContent = '영상을 멈추고 ‘이 페이지 수정’을 누르세요.';
-  $('#review-player-status').textContent = video.pages?.length ? '재생 중에도 페이지를 선택해 수정할 수 있습니다.' : '페이지 정보가 없어 재생성은 사용할 수 없습니다. 구간 무음 처리는 가능합니다.';
-  updateReviewPosition(); updateReviewAction();
-}
-
-function currentReviewPage() {
-  const pages = voiceVideo?.pages || [];
-  const ms = reviewPlayer.currentTime * 1000;
-  return pages.find((page, index) => ms >= (index ? page.startMs : 0) && ms < (pages[index + 1]?.startMs ?? Infinity)) || null;
-}
-function updateReviewPosition() {
-  const page = currentReviewPage();
-  $('#review-current-page').textContent = page ? `${page.number}페이지 · ${Math.floor(reviewPlayer.currentTime / 60)}:${(reviewPlayer.currentTime % 60).toFixed(2).padStart(5, '0')}` : '페이지 정보 없음';
-  $('#review-script').textContent = page?.text || '페이지 타임라인이 없는 영상입니다.';
-  $('#review-select-page').disabled = reviewBusy || !page;
-  $$('#review-pages button').forEach(button => button.setAttribute('aria-current', String(Number(button.dataset.page) === page?.number)));
-  if(reviewMode!=='regenerate')drawReviewWaveSelection();
-}
-function selectReviewPage(page, reason = '') {
-  if (!page || reviewBusy) return;
-  reviewPlayer.pause(); reviewSelection = page;
-  $('#voice-start-page').value = $('#voice-end-page').value = String(page.number);
-  $('#review-selection-title').textContent = `${page.number}페이지 수정`;
-  $('#review-selection-reason').textContent = reason || `${formatDuration(page.startMs)}–${formatDuration(page.endMs)} · 직접 선택한 페이지`;
-  updateVoicePageMeta(); updateReviewAction();
-}
-function updateReviewAction() {
-  const r=readReviewRegion(),problem=reviewMode==='regenerate'?'':regionIssue(r);
-  $('#review-region-error').textContent=problem;
-  $('#review-region-duration').textContent=Number.isFinite(r.end-r.start)&&r.end>r.start?`선택 길이 ${(r.end-r.start).toFixed(3)}초`:'';
-  $('#review-region-impact').textContent=regionImpact(r.start,r.end,r.audioDuration,r.fit);
-  const valid=Boolean(voiceVideo)&&!problem&&!reviewBusy&&!regionPreviewBusy;
-  $('#start-review-button').disabled = !valid || (reviewMode === 'regenerate' && !reviewSelection) || (reviewMode === 'replace' && !regionAudio);
-  const canListen=Boolean(voiceVideo)&&!regionIssue({...r,mode:'replace',audioDuration:null})&&!reviewBusy&&!regionPreviewBusy;
-  for(const id of ['review-range-exact','review-range-play'])$('#'+id).disabled=!canListen;
-  $('#review-result-play').disabled=!valid||(reviewMode==='replace'&&!regionAudio);
-  $('#review-result-play').textContent=reviewMode==='mute'?'무음 처리 후 듣기':'교체 후 앞뒤 듣기';
-  $('#review-range-page').disabled=!voiceVideo?.pages?.length||reviewBusy;
-  $('#review-original').disabled = !reviewSelection || reviewBusy;
-  $('#start-review-label').textContent = reviewMode === 'mute' ? '선택 구간을 무음 처리한 새 버전 저장' : reviewMode === 'replace' ? '선택 구간의 음성을 교체한 새 버전 저장' : '새 목소리 후보 만들기';
-  $('#review-form .review-save-note').textContent = reviewMode !== 'regenerate'
-    ? '원본을 보관하고 수정본을 새 버전으로 저장합니다.' : '후보를 듣고 선택한 뒤 새 버전으로 저장합니다. 원본은 보관됩니다.';
-}
-function seekReview(start, end = null) {
-  reviewPlayer.pause(); reviewStopAt = end;
-  const seek = () => { reviewPlayer.currentTime = Math.max(0, start); updateReviewPosition(); };
-  if (reviewPlayer.readyState >= 1) seek();
-  else reviewPlayer.addEventListener('loadedmetadata', seek, {once:true});
-}
-async function playReviewRange(start, end) {
-  seekReview(start, end);
-  try { await reviewPlayer.play(); } catch { showToast('영상의 재생 버튼을 눌러 주세요.', 'error'); }
-}
-reviewPlayer.addEventListener('timeupdate', () => {
-  updateReviewPosition();
-  if (reviewStopAt != null && reviewPlayer.currentTime >= reviewStopAt) { reviewPlayer.pause(); reviewStopAt = null; }
-});
-reviewPlayer.addEventListener('loadedmetadata', () => {
-  reviewPlayer.playbackRate = Number($('#review-speed').value)||1;
-  if(reviewMode!=='regenerate'&&!reviewRangeEdited){const start=Math.min(reviewPlayer.currentTime,Math.max(0,readReviewRegion().duration-.2));setReviewRegion(start,Math.min(readReviewRegion().duration,start+.2),{edited:false});}
-  updateReviewPosition();updateReviewAction();
-});
-reviewPlayer.addEventListener('error', () => { $('#review-player-status').textContent = '영상을 열지 못했습니다. 원본 파일 위치를 확인해 주세요.'; });
-$('#review-select-page').addEventListener('click', () => selectReviewPage(currentReviewPage()));
-$('#review-back').addEventListener('click', () => seekReview(Math.max(0, reviewPlayer.currentTime - 5)));
-$('#review-fine-back').addEventListener('click', () => seekReview(Math.max(0, reviewPlayer.currentTime - .01)));
-$('#review-fine-next').addEventListener('click', () => seekReview(Math.min(readReviewRegion().duration, reviewPlayer.currentTime + .01)));
-$('#review-speed').addEventListener('change', () => {
-  for(const player of [reviewPlayer,$('#review-preview-player'),$('#region-audio-preview')])player.playbackRate=Number($('#review-speed').value)||1;
-});
-$('#review-original').addEventListener('click', () => reviewSelection && playReviewRange(reviewSelection.startMs / 1000, reviewSelection.endMs / 1000));
-$('#review-latest').addEventListener('click', () => latestCompleteReview && openReview(latestCompleteReview));
-function setReviewMode(mode) {
-  reviewMode = mode;
-  $$('#review-mode-tabs button').forEach(b => b.classList.toggle('selected', b.dataset.repairMode === mode));
-  $('#edit-voice-panel').classList.toggle('hidden', reviewMode !== 'regenerate');
-  $('#review-mute-panel').classList.toggle('hidden', reviewMode === 'regenerate');
-  $('#review-replacement-panel').classList.toggle('hidden', reviewMode !== 'replace');
-  $('#review-region-wave').classList.toggle('hidden',reviewMode==='regenerate');
-  $('#review-region-description').textContent = reviewMode === 'replace' ? '단어·구절의 음성을 준비한 파일로 교체합니다. 길이가 달라지면 화면·자막도 함께 조정할 수 있습니다.' : '불필요한 소리만 무음으로 바꿉니다. 영상 길이와 자막 시각은 유지됩니다.';
-  $('#review-region-limit').textContent = reviewMode === 'replace' ? '0.05~120초를 선택하세요. 누락을 복원할 때는 앞뒤 문맥을 포함한 같은 원문의 음성을 준비하세요.' : '0.05~2초를 선택하세요. 정상 발화가 포함되지 않았는지 앞뒤를 들어 보세요.';
-  invalidateRegionPreview();
-  if(reviewMode!=='regenerate'){
-    const duration=readReviewRegion().duration;
-    if(!reviewRangeEdited){const start=Math.min(reviewPlayer.currentTime,Math.max(0,duration-.2));setReviewRegion(start,Math.min(duration,start+(reviewMode==='mute'?.2:2)),{edited:false});}
-    const r=readReviewRegion();showReviewWave((r.start+r.end)/2,Math.max(5,r.end-r.start+2));
-  }
-  updateReviewAction();
-}
-$$('#review-mode-tabs button').forEach(button => button.addEventListener('click', () => setReviewMode(button.dataset.repairMode)));
-$('#pick-region-audio').addEventListener('click', async () => {
-  try {
-    const videoToken = voiceVideo?.token;
-    const [audio] = await api.pickAudio();
-    if (!audio || reviewBusy || videoToken !== voiceVideo?.token) return;
-    regionAudio = audio;
-    invalidateRegionPreview();
-    $('#region-audio-name').textContent = `${audio.name}${audio.durationMs?` · ${(audio.durationMs/1000).toFixed(3)}초`:''}`;
-    $('#region-audio-preview').src = audio.audioUrl;
-    $('#region-audio-preview').classList.remove('hidden');
-    updateReviewAction();
-  } catch (error) { showToast(error.message, 'error'); }
-});
-for(const side of ['start','end']){
-  const field=$('#review-mute-'+side);
-  field.addEventListener('input',()=>{reviewRangeEdited=true;invalidateRegionPreview();updateReviewAction();drawReviewWaveSelection();});
-  field.addEventListener('blur',()=>{const value=parseRegionTime(field.value);if(Number.isFinite(value))field.value=formatRegionTime(value);});
-  field.addEventListener('keydown',event=>{if(!['ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();changeRegionBoundary(side,readReviewRegion()[side]+(event.key==='ArrowUp'?1:-1)*(event.shiftKey?.1:.01));});
-  $('#review-mark-'+side).addEventListener('click',()=>{reviewPlayer.pause();changeRegionBoundary(side,reviewPlayer.currentTime);});
-  for(const [suffix,delta] of [['back',-.01],['next',.01]])$('#review-'+side+'-'+suffix).addEventListener('click',()=>changeRegionBoundary(side,readReviewRegion()[side]+delta));
-  const handle=$('#review-wave-'+side);
-  handle.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight'].includes(event.key))return;event.preventDefault();changeRegionBoundary(side,readReviewRegion()[side]+(event.key==='ArrowRight'?1:-1)*(event.shiftKey?.1:.01));});
-  let pointer=null;
-  handle.addEventListener('pointerdown',event=>{if(reviewBusy)return;pointer=event.pointerId;handle.setPointerCapture(pointer);reviewPlayer.pause();});
-  handle.addEventListener('pointermove',event=>{
-    if(pointer!==event.pointerId||reviewBusy)return;
-    const rect=$('#review-wave-track').getBoundingClientRect(),r=readReviewRegion();
-    let value=timeAtFraction((event.clientX-rect.left)/rect.width,reviewWaveWindow);
-    value=side==='start'?Math.min(value,r.end-.05):Math.max(value,r.start+.05);
-    changeRegionBoundary(side,value);
-  });
-  for(const type of ['pointerup','pointercancel','lostpointercapture'])handle.addEventListener(type,()=>{pointer=null;});
-}
-$('#review-range-exact').addEventListener('click',()=>previewReviewRegion(false,0));
-$('#review-range-play').addEventListener('click',()=>previewReviewRegion(false,.6));
-$('#review-result-play').addEventListener('click',()=>previewReviewRegion(true,.6));
-$('#review-region-fit').addEventListener('change',()=>{invalidateRegionPreview();updateReviewAction();});
-$('#review-range-page').addEventListener('click',()=>{const page=currentReviewPage();if(!page)return;setReviewRegion(page.startMs/1000,page.endMs/1000);showReviewWave((page.startMs+page.endMs)/2000,(page.endMs-page.startMs)/1000+2);});
-for(const [id,factor] of [['review-wave-in',.5],['review-wave-out',2]])$('#'+id).addEventListener('click',()=>showReviewWave((reviewWaveWindow.start+reviewWaveWindow.end)/2,(reviewWaveWindow.end-reviewWaveWindow.start)*factor));
-$('#review-wave-selection').addEventListener('click',()=>{const r=readReviewRegion();if(Number.isFinite(r.start+r.end))showReviewWave((r.start+r.end)/2,r.end-r.start+.5);});
-$('#review-wave-current').addEventListener('click',()=>showReviewWave(reviewPlayer.currentTime));
-$('#review-wave-track').addEventListener('click',event=>{if(event.target.closest?.('.wave-handle'))return;const rect=$('#review-wave-track').getBoundingClientRect();seekReview(timeAtFraction((event.clientX-rect.left)/rect.width,reviewWaveWindow));});
-reviewPlayer.addEventListener('play',()=>{ $('#review-preview-player').pause();$('#region-audio-preview').pause(); });
-$('#review-form').addEventListener('submit', event => { event.preventDefault(); return startReviewRepair(); });
-
-async function startReviewRepair() {
-  if (!voiceVideo || reviewBusy) return;
-  if (reviewMode === 'regenerate' && !reviewSelection) return;
-  const name = `review-${Date.now()}`;
-  if (reviewMode === 'replace' && !regionAudio) return;
-  const region=readReviewRegion();
-  if(reviewMode!=='regenerate'&&regionIssue(region)){updateReviewAction();return;}
-  const payload = reviewMode !== 'regenerate'
-    ? {operation:reviewMode === 'replace' ? 'replace-region' : 'mute-region', name, videoToken:voiceVideo.token, audioToken:regionAudio?.token, muteStart:region.start, muteEnd:region.end, durationPolicy:region.fit}
-    : {operation:'voice-candidates', name, videoToken:voiceVideo.token, audioSource:'generate', originalStartMs:reviewSelection.startMs, originalEndMs:reviewSelection.endMs, sourceDisplayName:voiceVideo.name, startPage:reviewSelection.number, endPage:reviewSelection.number,
-      candidateCount:Number($('#voice-candidate-count').value), durationPolicy:$('#voice-duration-policy').value};
-  reviewResumeMs = reviewMode !== 'regenerate' ? Math.max(0, payload.muteStart * 1000 - 1000) : reviewSelection.startMs;
-  pendingCandidateContext = {...payload};
-  $("#review-candidates-host").classList.add("hidden");
-  $("#review-saved").classList.add("hidden");
-  reviewPlayer.pause();
-  try { setEditBusy(true); await api.startEdit(payload); }
-  catch (error) { setEditBusy(false); showToast(error.message, 'error'); }
-}
-
-// 확인 항목에서 바로 다시 읽히기. 마음에 들 때까지 몇 번이고 누르는 버튼이라
-// 한 번 쓰고 사라지지 않는다 — 후보가 별로면 그 자리에서 또 누르면 된다.
-function regenerateFinding(finding, page) {
-  if (!page) { showToast('이 항목은 페이지 정보가 없어 재생성할 수 없습니다.', 'error'); return; }
-  if (reviewBusy) { showToast('앞선 작업이 끝난 뒤에 다시 눌러 주세요.'); return; }
-  if (reviewMode !== 'regenerate') setReviewMode('regenerate');
-  selectReviewPage(page, voiceFindingReason(finding));
-  startReviewRepair();
-}
-$('#review-candidate-original').addEventListener('click', () => {
-  if (pendingCandidateContext) playReviewRange(pendingCandidateContext.originalStartMs / 1000, pendingCandidateContext.originalEndMs / 1000);
-});
-$('#review-continue').addEventListener('click', async () => {
-  if (!latestEditTarget) return;
-  const resume = reviewResumeMs;
-  if (!await openReview(latestEditTarget)) return;
-  seekReview(resume / 1000);
-  $('#review-version').textContent = '수정본 검수 중 · 이전 버전 보관됨';
-});
+const review = createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState });
 
 function formatDate(value) {
   if (!value) return "";
@@ -1105,10 +456,6 @@ function optionPayload() {
 }
 
 
-
-
-
-
 function updateVoicePageMeta() {
   const start = Number($("#voice-start-page").value || 1);
   const end = Number($("#voice-end-page").value || start);
@@ -1124,225 +471,18 @@ function updateVoicePageMeta() {
 // 영상 편집은 클립 목록 하나다. 구간을 준 클립 하나가 자르기, 구간 없는 클립
 // 여럿이 합치기, 섞으면 예전 두 탭으로는 만들 수 없던 편집이 된다. 화면이 하는
 // 일은 그 목록을 보여 주고 고치게 하는 것뿐이고, 렌더는 compose 하나로 간다.
-let editorClips = [];
-let editorActive = -1;
-const editorPlayer = $("#editor-player");
-
-function editorClip() { return editorClips[editorActive] || null; }
-function clipLengthMs(clip) { return Math.max(0, Number(clip.outMs) - Number(clip.inMs)); }
-
-function formatTimecode(ms) {
-  const total = Math.max(0, Number(ms) || 0);
-  const hours = Math.floor(total / 3_600_000);
-  const minutes = Math.floor((total % 3_600_000) / 60_000);
-  const seconds = Math.floor((total % 60_000) / 1000);
-  const millis = Math.round(total % 1000);
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:`
-    + `${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
-}
-
-// 초만 적어도, 분:초로 적어도, 시:분:초까지 적어도 받는다. 편집 중에 시간을
-// 손으로 고치는 일은 잦고, 형식을 틀렸다고 막아 세울 일이 아니다.
-function parseTimecodeMs(text) {
-  const value = String(text ?? "").trim();
-  if (!value) return null;
-  const parts = value.split(":");
-  if (parts.length > 3 || parts.some((part) => part !== "" && !/^\d*\.?\d*$/.test(part))) return null;
-  let seconds = 0;
-  for (const part of parts) seconds = seconds * 60 + (Number(part) || 0);
-  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : null;
-}
-
-function renderEditorOutput() {
-  const total = editorClips.reduce((sum, clip) => sum + clipLengthMs(clip), 0);
-  $("#editor-total").textContent = editorClips.length ? formatDuration(total) : "0:00";
-  const trimmed = editorClips.filter((clip) => clip.inMs > 0 || clip.outMs < clip.durationMs).length;
-  // 다시 굽는 비용은 클립마다 갈린다. 실행 전에 알려 주면 기다릴지 말지 고를 수 있다.
-  $("#editor-quality").textContent = editorClips.length === 0
-    ? "클립을 담으면 다시 구울지 그대로 쓸지 알려드립니다."
-    : trimmed === 0
-      ? "구간을 자른 클립이 없어 다시 굽지 않고 그대로 이어 붙입니다. 금방 끝납니다."
-      : `${trimmed}개 클립만 다시 굽습니다. 나머지는 원본을 그대로 씁니다.`;
-  $("#start-edit-label").textContent = editorClips.length > 1 ? "이어서 만들기" : "이대로 만들기";
-}
-
-function renderEditorClipFields() {
-  const clip = editorClip();
-  $("#editor-clip-name").textContent = clip ? clip.name : "담은 영상이 없습니다";
-  $("#editor-clip-time").textContent = clip
-    ? `${formatDuration(clip.inMs)}–${formatDuration(clip.outMs)} · 원본 ${formatDuration(clip.durationMs)}`
-    : "—";
-  $("#editor-in").value = clip ? formatTimecode(clip.inMs) : "00:00:00.000";
-  $("#editor-out").value = clip ? formatTimecode(clip.outMs) : "00:00:00.000";
-  for (const id of ["#editor-mark-in", "#editor-mark-out", "#editor-play-clip", "#editor-reset-clip", "#editor-in", "#editor-out"]) {
-    $(id).disabled = !clip || reviewBusy;
-  }
-}
-
-function renderEditorTrack() {
-  $("#editor-count").textContent = String(editorClips.length);
-  $("#editor-empty").classList.toggle("hidden", editorClips.length > 0);
-  $("#start-edit-button").disabled = editorClips.length === 0 || reviewBusy;
-  $("#editor-clips").replaceChildren(...editorClips.map((clip, index) => {
-    const item = document.createElement("li");
-    item.className = "track-clip";
-    item.draggable = true;
-    if (index === editorActive) item.classList.add("active");
-    if (clip.inMs > 0 || clip.outMs < clip.durationMs) item.classList.add("trimmed");
-
-    const order = document.createElement("b");
-    order.textContent = String(index + 1);
-    const copy = document.createElement("div");
-    const title = document.createElement("strong");
-    title.textContent = clip.name;
-    const meta = document.createElement("small");
-    meta.textContent = clip.inMs > 0 || clip.outMs < clip.durationMs
-      ? `${formatDuration(clip.inMs)}–${formatDuration(clip.outMs)} · ${formatDuration(clipLengthMs(clip))}`
-      : `전체 · ${formatDuration(clipLengthMs(clip))}`;
-    copy.append(title, meta);
-
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "track-remove";
-    remove.textContent = "×";
-    remove.title = "이 클립 빼기";
-    remove.setAttribute("aria-label", `${clip.name} 빼기`);
-    remove.addEventListener("click", (event) => {
-      event.stopPropagation();
-      editorClips.splice(index, 1);
-      selectEditorClip(Math.min(editorActive, editorClips.length - 1));
-    });
-
-    item.append(order, copy, remove);
-    item.addEventListener("click", () => selectEditorClip(index));
-    item.addEventListener("dragstart", (event) => {
-      item.classList.add("dragging");
-      event.dataTransfer.setData("text/plain", String(index));
-      event.dataTransfer.effectAllowed = "move";
-    });
-    item.addEventListener("dragend", () => item.classList.remove("dragging"));
-    item.addEventListener("dragover", (event) => event.preventDefault());
-    item.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const from = Number(event.dataTransfer.getData("text/plain"));
-      if (!Number.isInteger(from) || from === index) return;
-      const [moved] = editorClips.splice(from, 1);
-      editorClips.splice(index, 0, moved);
-      selectEditorClip(index);
-    });
-    return item;
-  }));
-  renderEditorOutput();
-}
-
-function selectEditorClip(index) {
-  editorActive = index >= 0 && index < editorClips.length ? index : -1;
-  const clip = editorClip();
-  if (clip && editorPlayer.dataset.token !== clip.token) {
-    editorPlayer.dataset.token = clip.token;
-    editorPlayer.src = clip.videoUrl;
-  }
-  if (!clip) {
-    editorPlayer.removeAttribute("src");
-    editorPlayer.dataset.token = "";
-  }
-  renderEditorTrack();
-  renderEditorClipFields();
-}
-
-function addEditorClips(videos = []) {
-  const added = (videos || []).filter(Boolean).map((video) => {
-    const durationMs = Math.max(1, Math.round(Number(video.durationMs) || 0));
-    return { token: video.token, name: video.name, videoUrl: video.videoUrl, durationMs, inMs: 0, outMs: durationMs };
-  });
-  if (!added.length) return;
-  editorClips = [...editorClips, ...added];
-  if (!$("#edit-name").value.trim()) {
-    $("#edit-name").value = `${added.length > 1 || editorClips.length > 1 ? "이어붙임" : "편집"}-${Date.now()}`;
-  }
-  selectEditorClip(editorClips.length - added.length);
-  setIconStatus("#edit-top-status", `클립 ${editorClips.length}개를 담았습니다`);
-}
-
-async function pickEditorVideos() {
-  try { addEditorClips(await api.pickVideos(true)); }
-  catch (error) { showToast(error.message, "error"); }
-}
-
-function moveClipEdge(field, ms) {
-  const clip = editorClip();
-  if (!clip) return;
-  const bounded = Math.max(0, Math.min(clip.durationMs, ms));
-  if (field === "inMs") clip.inMs = Math.min(bounded, clip.outMs - 1);
-  else clip.outMs = Math.max(bounded, clip.inMs + 1);
-  renderEditorTrack();
-  renderEditorClipFields();
-}
-
-$("#editor-pick").addEventListener("click", pickEditorVideos);
-$("#editor-drop").addEventListener("click", (event) => { if (!event.target.closest("button")) pickEditorVideos(); });
-$("#editor-mark-in").addEventListener("click", () => moveClipEdge("inMs", Math.round(editorPlayer.currentTime * 1000)));
-$("#editor-mark-out").addEventListener("click", () => moveClipEdge("outMs", Math.round(editorPlayer.currentTime * 1000)));
-$("#editor-reset-clip").addEventListener("click", () => {
-  const clip = editorClip();
-  if (!clip) return;
-  clip.inMs = 0;
-  clip.outMs = clip.durationMs;
-  renderEditorTrack();
-  renderEditorClipFields();
-});
-$("#editor-play-clip").addEventListener("click", () => {
-  const clip = editorClip();
-  if (!clip) return;
-  editorPlayer.currentTime = clip.inMs / 1000;
-  editorPlayer.play().catch(() => showToast("미리보기의 재생 버튼을 눌러 주세요.", "error"));
-});
-editorPlayer.addEventListener("timeupdate", () => {
-  const clip = editorClip();
-  if (clip && editorPlayer.currentTime * 1000 >= clip.outMs) editorPlayer.pause();
-});
-for (const [id, field] of [["#editor-in", "inMs"], ["#editor-out", "outMs"]]) {
-  $(id).addEventListener("change", () => {
-    const ms = parseTimecodeMs($(id).value);
-    if (ms == null) {
-      renderEditorClipFields();
-      showToast("시간은 5, 1:30, 00:01:23.400 처럼 적어 주세요.", "error");
-      return;
-    }
-    moveClipEdge(field, ms);
-  });
-}
-$("#start-edit-button").addEventListener("click", async () => {
-  if (!editorClips.length || reviewBusy) return;
-  try {
-    setEditBusy(true);
-    openJobDialog("영상 만드는 중");
-    await api.startEdit({
-      operation: "compose",
-      name: $("#edit-name").value.trim() || `편집-${Date.now()}`,
-      clips: editorClips.map((clip) => ({ videoToken: clip.token, inMs: clip.inMs, outMs: clip.outMs })),
-    });
-  } catch (error) {
-    setEditBusy(false);
-    openJobDialog("입력 확인 필요");
-    $("#edit-dialog-spinner").classList.add("hidden");
-    $("#edit-dialog-error").classList.remove("hidden");
-    $("#edit-error-message").textContent = error.message;
-    $("#cancel-edit-button").classList.add("hidden");
-    $("#close-edit-dialog").classList.remove("hidden");
-  }
-});
+const editor = createEditorController({ $, formatDuration, review, setIconStatus, api, showToast, setEditBusy, openJobDialog });
 
 function setEditBusy(busy) {
-  reviewBusy = busy;
+  review.reviewBusy = busy;
   $("#review-form").querySelectorAll("input,select,button").forEach(el => { el.disabled = busy; });
   $("#pick-voice-video").disabled = busy;
   $$('#review-region-wave button').forEach(button=>{button.disabled=busy;});
-  updateReviewAction();
-  updateReviewPosition();
+  review.updateReviewAction();
+  review.updateReviewPosition();
   $("#start-edit-button").disabled = busy;
   $$("#view-edit input, #view-edit select, #view-edit button").forEach((element) => { element.disabled = busy; });
-  if (!busy) renderEditorTrack();
+  if (!busy) editor.renderEditorTrack();
   setIconStatus("#edit-top-status", busy ? "영상 만드는 중" : "편집할 영상을 담으세요", busy ? "running" : "idle");
 }
 
@@ -1443,9 +583,9 @@ function handleEditEvent(event) {
     setEditBusy(false);
     setIconStatus("#edit-top-status", "생성된 목소리 후보를 비교하고 있습니다");
     renderVoiceCandidates(event.candidates);
-    if (event.options) pendingCandidateContext = { ...event.options };
+    if (event.options) review.pendingCandidateContext = { ...event.options };
     $('#review-candidates-host').classList.remove('hidden');
-    $('#review-candidate-scope').textContent = `${pendingCandidateContext?.sourceDisplayName || ''} · ${pendingCandidateContext?.startPage || ''}페이지 전체 음성을 교체합니다.`;
+    $('#review-candidate-scope').textContent = `${review.pendingCandidateContext?.sourceDisplayName || ''} · ${review.pendingCandidateContext?.startPage || ''}페이지 전체 음성을 교체합니다.`;
     $('#review-candidates-host').insertBefore($('#candidate-gallery'), $('#review-candidate-actions'));
     $('#review-candidate-actions').append($('#apply-voice-candidate'));
     $('#edit-job-dialog').close();
@@ -1474,8 +614,8 @@ function handleEditEvent(event) {
   } else if (event.type === "edit-complete") {
     setEditBusy(false);
     setIconStatus("#edit-top-status", "영상 편집과 검증이 완료됐습니다", "complete");
-    latestEditTarget = event.report.target;
-    if (event.report.operation === 'voice-pages') { pendingFixes.clear(); renderPendingFixes(); }
+    mediaState.latestEditTarget = event.report.target;
+    if (event.report.operation === 'voice-pages') { review.pendingFixes.clear(); review.renderPendingFixes(); }
     if (['mute-region', 'replace-region', 'voice-page', 'voice-batch', 'voice-pages'].includes(event.report.operation)) {
       $('#review-saved').classList.remove('hidden');
       $('#review-candidates-host').classList.add('hidden');
@@ -1492,7 +632,7 @@ function handleEditEvent(event) {
       $('#edit-job-dialog').close();
       $('#review-saved').scrollIntoView({behavior:'smooth',block:'nearest'});
     }
-    loadOutputs();
+    outputs.loadOutputs();
   }
 }
 
@@ -1535,7 +675,7 @@ function handleTextVoiceEvent(event) {
     $("#cancel-edit-button").classList.add("hidden");
     $("#close-edit-dialog").classList.remove("hidden");
   } else if (event.type === "text-voice-selected") {
-    latestEditTarget = event.report.target;
+    mediaState.latestEditTarget = event.report.target;
     setIconStatus("#voice-top-status", "목소리 선택과 저장이 완료됐습니다", "complete");
     $("#candidate-gallery").classList.add("hidden");
     $("#edit-dialog-success").classList.remove("hidden");
@@ -1544,234 +684,11 @@ function handleTextVoiceEvent(event) {
     $("#open-edit-result").classList.remove("hidden");
     $("#reveal-edit-result").classList.remove("hidden");
     $("#text-voice-name").value = suggestedTextVoiceName();
-    loadOutputs();
+    outputs.loadOutputs();
   }
 }
 
-function outputLabel(item) {
-  if (item.root === "voice") return "텍스트 목소리";
-  if (item.root === "edit") {
-    return { merge: "합친 영상", trim: "자른 영상", voice: "목소리 교체", "voice-page": "페이지 목소리 교체", "voice-batch": "목소리 교체" }[item.operation] || "편집 영상";
-  }
-  if (item.root === "pilot") return "강의 음성";
-  return item.video ? "완성 강의 영상" : "강의 자막·음성";
-}
-
-function renderOutputSummary() {
-  $("#results-count").textContent = String(outputItems.length);
-  $("#result-count-summary").textContent = `${outputItems.length}개`;
-}
-
-function closeResultMenus({ restoreFocus = false } = {}) {
-  const opened = $$(".result-menu[open]");
-  for (const menu of opened) menu.removeAttribute("open");
-  if (restoreFocus) opened.at(-1)?.querySelector("summary")?.focus();
-}
-
-// 이름은 그 자리에서 고치는 것이 가장 짧다. 대화상자를 띄우면 어느 줄을
-// 고치는 중인지 눈에서 놓치고, 고친 결과도 뒤에 가려 보이지 않는다.
-function editOutputName(element, item, target) {
-  if (!item.fileName || element.querySelector("input")) return;
-  const previous = element.textContent;
-  const field = document.createElement("input");
-  field.type = "text";
-  field.className = "rename-field";
-  field.value = item.fileName;
-  field.setAttribute("aria-label", "파일 이름");
-  element.replaceChildren(field);
-  const dot = item.fileName.lastIndexOf(".");
-  field.focus();
-  field.setSelectionRange(0, dot > 0 ? dot : item.fileName.length);
-  let settled = false;
-  const restore = () => { element.replaceChildren(); element.textContent = previous; };
-  const commit = async () => {
-    if (settled) return;
-    settled = true;
-    const value = field.value.trim();
-    if (!value || value === item.fileName) return restore();
-    try {
-      const renamed = await api.renameOutput(target, value);
-      showToast(`이름을 ${renamed.fileName}(으)로 바꿨습니다.`);
-      await loadOutputs();
-    } catch (error) { showToast(error.message, "error"); restore(); }
-  };
-  field.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") { event.preventDefault(); commit(); }
-    if (event.key === "Escape") { event.preventDefault(); settled = true; restore(); }
-  });
-  field.addEventListener("blur", commit);
-}
-
-function renderOutputs() {
-  return animateLayout($("#output-list"), () => {
-    const list = filterOutputItems(outputItems, $("#result-search").value, outputFilter);
-    const container = $("#output-list");
-    if (!list.length) {
-      container.innerHTML = `<div class="empty-output">${outputItems.length ? "조건에 맞는 결과가 없습니다." : "아직 완성된 결과가 없습니다."}</div>`;
-      return;
-    }
-    // 결과를 나열하는 것과, 남은 일을 보여 주는 것은 다르다. 상태를 한 마디로
-    // 적고, 레슨으로 나눈 작업은 하나로 묶어 어디에 할 일이 남았는지 먼저
-    // 읽히게 한다.
-    const findingsOf = (item) => visibleVoiceFindings(item.voiceFindings, item.review?.clearedFindings);
-
-    function buildRow(item, { compact = false } = {}) {
-      const kind = outputKind(item);
-      const findings = findingsOf(item);
-      const state = outputState(item, findings);
-      const approved = item.review?.status === "approved";
-      const target = { root: item.root, name: item.name, day: item.day, store: item.store };
-
-      const row = document.createElement("article");
-      row.className = "output-item";
-      row.dataset.state = state.key;
-      row.innerHTML = `
-        <div class="output-type ${kind}">${kind === "edit" ? "✂" : item.video ? "▶" : "♪"}</div>
-        <div class="output-copy"><strong></strong><small></small></div>
-        <div class="output-status" aria-label="결과 상태"><span class="state-pill ${state.tone}"></span></div>
-        <div class="item-actions">
-          <button class="open-button" type="button">열기</button>
-          <details class="result-menu">
-            <summary aria-label="결과 작업 더 보기">•••</summary>
-            <div>
-              <button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "청취 승인 취소" : "청취 승인으로 표시"}</button>
-              <button class="rename-button" type="button">이름 바꾸기</button>
-              <button class="reveal-button" type="button">Finder에서 보기</button>
-              <button class="delete-button" type="button">휴지통으로 보내기</button>
-            </div>
-          </details>
-        </div>`;
-
-      const title = row.querySelector("strong");
-      title.textContent = outputRowTitle(item, { compact });
-      if (item.fileName) {
-        title.title = `${item.fileName} · 더블클릭해서 이름 바꾸기`;
-        title.classList.add("renamable");
-        title.addEventListener("dblclick", () => editOutputName(title, item, target));
-      }
-      row.querySelector("small").textContent = [
-        compact ? "" : outputLabel(item),
-        formatDuration(item.durationMs),
-        compact ? "" : formatDate(item.updatedAt),
-        findings.length ? voiceFindingSummaryLine(findings) : "",
-      ].filter(Boolean).join(" · ");
-
-      const pill = row.querySelector(".state-pill");
-      pill.textContent = state.label;
-      pill.tabIndex = 0;
-      const detail = state.key === "failed"
-        ? "자동 검증에 실패했거나 기록이 없습니다."
-        : state.key === "attention"
-          ? `${voiceFindingSummaryLine(findings)} · 다듬기에서 처리하세요`
-          : state.key === "approved"
-            ? "직접 듣고 승인한 결과입니다."
-            : "자동 검수에서 걸린 곳이 없습니다. 직접 들어 보고 승인할 수 있습니다.";
-      pill.dataset.tooltip = detail;
-      pill.setAttribute("aria-label", `${state.label} · ${detail}`);
-
-      const resultMenu = row.querySelector(".result-menu");
-      resultMenu.addEventListener("toggle", () => {
-        if (!resultMenu.open) { resultMenu.classList.remove("open-upward"); return; }
-        $$(".result-menu[open]").forEach((other) => { if (other !== resultMenu) other.removeAttribute("open"); });
-        const popover = resultMenu.querySelector(":scope > div");
-        const availableBelow = window.innerHeight - resultMenu.getBoundingClientRect().bottom;
-        resultMenu.classList.toggle("open-upward", shouldOpenMenuUpward(availableBelow, popover.offsetHeight));
-      });
-      row.querySelector(".review-button").addEventListener("click", async () => {
-        try {
-          item.review = await api.setOutputReview(target, approved ? "pending" : "approved");
-          renderOutputSummary();
-          renderOutputs();
-          showToast(approved ? "청취 승인을 취소했습니다." : "직접 들은 결과로 표시했습니다.");
-        } catch (error) { showToast(error.message, "error"); }
-      });
-      if (item.video) {
-        row.querySelector(".open-button").textContent = findings.length ? "다듬기" : "열기";
-        row.querySelector(".open-button").addEventListener("click", () => openReview(target));
-      } else {
-        row.querySelector(".open-button").addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
-      }
-      row.querySelector(".rename-button").addEventListener("click", () => {
-        resultMenu.removeAttribute("open");
-        editOutputName(row.querySelector("strong"), item, target);
-      });
-      row.querySelector(".rename-button").disabled = !item.fileName;
-      row.querySelector(".reveal-button").addEventListener("click", () => {
-        resultMenu.removeAttribute("open");
-        api.reveal(target).catch((error) => showToast(error.message, "error"));
-      });
-      row.querySelector(".delete-button").addEventListener("click", async () => {
-        resultMenu.removeAttribute("open");
-        try {
-          if (!await api.deleteOutput(target)) return;
-          showToast("휴지통으로 보냈습니다. Finder에서 되돌릴 수 있습니다.");
-          await loadOutputs();
-        } catch (error) { showToast(error.message, "error"); }
-      });
-      return row;
-    }
-
-    function buildGroup(group) {
-      const box = document.createElement("section");
-      box.className = "output-group";
-      const head = document.createElement("header");
-      head.className = "output-group-head";
-      const title = document.createElement("strong");
-      title.textContent = outputGroupTitle(group);
-      const meta = document.createElement("small");
-      meta.textContent = `레슨 ${group.items.length}편 · ${formatDate(group.updatedAt)}`;
-      const state = document.createElement("span");
-      state.className = `state-pill ${group.attention ? "attention" : "ready"}`;
-      state.textContent = group.attention
-        ? `${group.attention}편에 확인 ${group.findings}곳`
-        : "모두 확인 끝";
-      const copy = document.createElement("div");
-      copy.append(title, meta);
-      head.append(copy, state);
-
-      const body = document.createElement("div");
-      body.className = "output-group-body";
-      body.append(...group.items.map((item) => buildRow(item, { compact: true })));
-
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "output-group-toggle";
-      // 할 일이 남은 묶음은 펼쳐 둔다. 다 끝난 묶음까지 열어 두면 남은 일이 묻힌다.
-      let open = group.attention > 0;
-      const paint = () => {
-        body.classList.toggle("hidden", !open);
-        toggle.textContent = open ? "접기" : `${group.items.length}편 보기`;
-        toggle.setAttribute("aria-expanded", String(open));
-      };
-      toggle.addEventListener("click", () => { open = !open; paint(); });
-      paint();
-      head.append(toggle);
-
-      box.append(head, body);
-      return box;
-    }
-
-    container.replaceChildren(...groupOutputs(list, findingsOf).map((row) =>
-      row.type === "group" ? buildGroup(row) : buildRow(row.item)));
-  });
-}
-
-async function loadOutputs() {
-  const refresh = $("#refresh-outputs");
-  refresh.disabled = true;
-  refresh.textContent = "불러오는 중";
-  try {
-    outputItems = await api.listOutputs();
-    renderOutputSummary();
-    renderOutputs();
-  } catch (error) {
-    $("#output-list").innerHTML = '<div class="empty-output">결과를 불러오지 못했습니다.</div>';
-    showToast(error.message, "error");
-  } finally {
-    refresh.disabled = false;
-    refresh.textContent = "새로고침";
-  }
-}
+const outputs = createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review });
 
 function renderSettings(settings) {
   appSettings = settings;
@@ -1894,7 +811,7 @@ function renderJobEvent(event) {
     latestTarget = { root: "render", name: event.options.name };
     $("#open-latest").textContent = "영상 열기";
     $("#job-log").textContent = "";
-    renderCompleteVoiceFindings([]);
+    review.renderCompleteVoiceFindings([]);
     showJobView("active");
     setBusy(true);
     setJobState("실행 중", "running");
@@ -1957,7 +874,7 @@ function renderJobEvent(event) {
     $("#current-stage").textContent = event.message;
     appendLog(`\n[중단] ${event.message}\n`);
     $("#job-log").closest("details").open = true;
-    loadOutputs();
+    outputs.loadOutputs();
   } else if (event.type === "complete") {
     refreshResumable();
     creationState = "done";
@@ -1973,8 +890,8 @@ function renderJobEvent(event) {
     $("#complete-summary").textContent = completionSummary(report, formatDuration(report.durationMs));
     if (findings.length) setJobState('제작 완료 · 확인 필요', 'idle');
     $("#open-latest").textContent = unitCount > 1 ? "첫 영상 열기" : "영상 열기";
-    renderCompleteVoiceFindings(findings, report.videoPath ? report.target : null);
-    loadOutputs();
+    review.renderCompleteVoiceFindings(findings, report.videoPath ? report.target : null);
+    outputs.loadOutputs();
     $("#job-name").value = suggestedName();
     updateProductionBrief();
   }
@@ -2134,7 +1051,7 @@ async function initialize() {
   if (status.activeJob?.kind === "create" && ["failed", "cancelled"].includes(status.activeJob.state)) {
     handleJobEvent({ type: "failed", cancelled: status.activeJob.state === "cancelled", message: status.activeJob.error || "이전 작업이 종료됐습니다." });
   }
-  await loadOutputs();
+  await outputs.loadOutputs();
   const initialView = new URLSearchParams(window.location.search).get("view");
   if (["voice", "review", "edit", "results"].includes(initialView)) {
     $(`[data-view='${initialView}']`).click();
@@ -2224,27 +1141,27 @@ $("#text-voice-form").addEventListener("submit", async (event) => {
   }
 });
 $("#cancel-button").addEventListener("click", (event) => requestJobCancellation(event.currentTarget, "create"));
-$("#open-latest").addEventListener("click", () => latestCompleteReview ? openReview(latestCompleteReview) : latestTarget && api.open(latestTarget));
+$("#open-latest").addEventListener("click", () => review.latestCompleteReview ? review.openReview(review.latestCompleteReview) : latestTarget && api.open(latestTarget));
 $("#reveal-latest").addEventListener("click", () => latestTarget && api.reveal(latestTarget));
-$("#refresh-outputs").addEventListener("click", loadOutputs);
-$("#result-search").addEventListener("input", renderOutputs);
+$("#refresh-outputs").addEventListener("click", outputs.loadOutputs);
+$("#result-search").addEventListener("input", outputs.renderOutputs);
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".result-menu")) closeResultMenus();
+  if (!event.target.closest(".result-menu")) outputs.closeResultMenus();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape" || !document.querySelector(".result-menu[open]")) return;
   event.preventDefault();
-  closeResultMenus({ restoreFocus: true });
+  outputs.closeResultMenus({ restoreFocus: true });
 });
 $$("#result-filters button").forEach((button) => button.addEventListener("click", () => {
-  outputFilter = button.dataset.outputFilter;
+  outputs.outputFilter = button.dataset.outputFilter;
   $$("#result-filters button").forEach((item) => item.classList.toggle("selected", item === button));
-  renderOutputs();
+  outputs.renderOutputs();
 }));
 $('#voice-video-name').addEventListener('dblclick', () => {
   const element = $('#voice-video-name');
-  if (!voiceVideo || reviewBusy || element.querySelector('input')) return;
-  const current = voiceVideo.name;
+  if (!mediaState.voiceVideo || review.reviewBusy || element.querySelector('input')) return;
+  const current = mediaState.voiceVideo.name;
   const field = document.createElement('input');
   field.type = 'text';
   field.className = 'rename-field';
@@ -2259,27 +1176,27 @@ $('#voice-video-name').addEventListener('dblclick', () => {
     if (settled) return;
     settled = true;
     const value = field.value.trim();
-    if (!value || value === current) return paintReviewFileName(current);
+    if (!value || value === current) return review.paintReviewFileName(current);
     try {
-      const renamed = await api.renameVideo(voiceVideo.token, value);
-      voiceVideo = { ...voiceVideo, name: renamed.name, videoUrl: renamed.videoUrl };
+      const renamed = await api.renameVideo(mediaState.voiceVideo.token, value);
+      mediaState.voiceVideo = { ...mediaState.voiceVideo, name: renamed.name, videoUrl: renamed.videoUrl };
       // 재생 중이던 자리를 잃지 않고 새 경로로 옮겨 붙인다.
-      const at = reviewPlayer.currentTime;
-      reviewPlayer.src = renamed.videoUrl;
-      reviewPlayer.addEventListener('loadedmetadata', () => { reviewPlayer.currentTime = at; }, { once: true });
-      paintReviewFileName(renamed.name);
+      const at = review.reviewPlayer.currentTime;
+      review.reviewPlayer.src = renamed.videoUrl;
+      review.reviewPlayer.addEventListener('loadedmetadata', () => { review.reviewPlayer.currentTime = at; }, { once: true });
+      review.paintReviewFileName(renamed.name);
       showToast(`이름을 ${renamed.name}(으)로 바꿨습니다.`);
-      loadOutputs();
-    } catch (error) { showToast(error.message, 'error'); paintReviewFileName(current); }
+      outputs.loadOutputs();
+    } catch (error) { showToast(error.message, 'error'); review.paintReviewFileName(current); }
   };
   field.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); commit(); }
-    if (event.key === 'Escape') { event.preventDefault(); settled = true; paintReviewFileName(current); }
+    if (event.key === 'Escape') { event.preventDefault(); settled = true; review.paintReviewFileName(current); }
   });
   field.addEventListener('blur', commit);
 });
 $("#pick-voice-video").addEventListener("click", async () => {
-  try { const [video] = await api.pickVideos(false); if (video) setReviewVideo(video); }
+  try { const [video] = await api.pickVideos(false); if (video) review.setReviewVideo(video); }
   catch (error) { showToast(error.message, "error"); }
 });
 $("#voice-start-page").addEventListener("input", () => {
@@ -2288,8 +1205,8 @@ $("#voice-start-page").addEventListener("input", () => {
 });
 $("#voice-end-page").addEventListener("input", updateVoicePageMeta);
 $("#cancel-edit-button").addEventListener("click", (event) => requestJobCancellation(event.currentTarget, "edit"));
-$("#open-edit-result").addEventListener("click", () => latestEditTarget && api.open(latestEditTarget));
-$("#reveal-edit-result").addEventListener("click", () => latestEditTarget && api.reveal(latestEditTarget));
+$("#open-edit-result").addEventListener("click", () => mediaState.latestEditTarget && api.open(mediaState.latestEditTarget));
+$("#reveal-edit-result").addEventListener("click", () => mediaState.latestEditTarget && api.reveal(mediaState.latestEditTarget));
 $("#apply-voice-candidate").addEventListener("click", async () => {
   if (!selectedCandidateToken) return;
   try {
@@ -2297,19 +1214,19 @@ $("#apply-voice-candidate").addEventListener("click", async () => {
       await api.selectTextVoice(selectedCandidateToken);
       return;
     }
-    if (!pendingCandidateContext || reviewBusy) return;
+    if (!review.pendingCandidateContext || review.reviewBusy) return;
     $$('audio,video').forEach(media => media.pause());
     // Queue it instead of writing a video now. The whole set is applied in one
     // pass when the user saves, so the picture is encoded once, not once per fix.
     const chosen = voiceCandidates.find(item => item.token === selectedCandidateToken);
-    if (queueSelectedCandidate(selectedCandidateToken, chosen?.name)) return;
+    if (review.queueSelectedCandidate(selectedCandidateToken, chosen?.name)) return;
     setEditBusy(true);
     await api.startEdit({
-      operation: "voice", name: `${pendingCandidateContext.name}-applied-${Date.now()}`,
-      videoToken: pendingCandidateContext.videoToken,
+      operation: "voice", name: `${review.pendingCandidateContext.name}-applied-${Date.now()}`,
+      videoToken: review.pendingCandidateContext.videoToken,
       audioSource: "file", audioToken: selectedCandidateToken,
-      startPage: pendingCandidateContext.startPage, endPage: pendingCandidateContext.endPage,
-      durationPolicy: pendingCandidateContext.durationPolicy,
+      startPage: review.pendingCandidateContext.startPage, endPage: review.pendingCandidateContext.endPage,
+      durationPolicy: review.pendingCandidateContext.durationPolicy,
     });
   } catch (error) {
     setEditBusy(false);
@@ -2389,8 +1306,8 @@ function attachNativeDrop(element, kind, onFiles) {
     catch (error) { appendEditLog(`[파일 오류] ${error.message}\n`); }
   });
 }
-attachNativeDrop($("#editor-drop"), "video", (files) => addEditorClips(files));
-attachNativeDrop($("#pick-voice-video"), "video", (files) => { if (files[0]) setReviewVideo(files[0]); });
+attachNativeDrop($("#editor-drop"), "video", (files) => editor.addEditorClips(files));
+attachNativeDrop($("#pick-voice-video"), "video", (files) => { if (files[0]) review.setReviewVideo(files[0]); });
 let currentView = "new";
 let renderedView = "new";
 let navigationVersion = 0;
@@ -2416,8 +1333,8 @@ function navigateToView(view, traversal = false) {
     for (const page of $$(".page-view")) page.classList.toggle("hidden", page.id !== `view-${view}`);
     window.scrollTo({ top: viewScrollPositions.get(view) || 0, behavior: "instant" });
   });
-  if (view !== "review") reviewPlayer.pause();
-  if (view === "results") loadOutputs();
+  if (view !== "review") review.reviewPlayer.pause();
+  if (view === "results") outputs.loadOutputs();
 }
 $$('[data-view]').forEach(button => button.addEventListener('click', () => navigateToView(button.dataset.view)));
 $('#window-back').addEventListener('click', () => navigateToView(viewHistory.back(), true));
@@ -2427,8 +1344,6 @@ initialize().catch((error) => {
   appendLog(`[초기화 오류] ${error.message}\n`);
 });
 
-setEditOperation("merge");
-setTrimMode("time");
 
 // One audible source at a time when comparing the original with candidates.
 document.addEventListener('play', event => {

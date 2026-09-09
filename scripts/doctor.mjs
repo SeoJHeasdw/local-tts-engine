@@ -10,7 +10,7 @@ import {
   defaultStudioPaths,
   ffmpegBuildProfile,
   resolveRuntimeTools,
-} from "../electron-app/runtime-config.mjs";
+} from "../electron-app/main/runtime-config.mjs";
 
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));

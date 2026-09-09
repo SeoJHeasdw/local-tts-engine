@@ -9,7 +9,7 @@
 ## 새 작업이 가장 먼저 할 일
 
 1. `docs/HANDOFF.md`를 끝까지 읽는다.
-2. `docs/ARCHITECTURE.md`와 `docs/BENCHMARK-PLAN.md`를 읽는다.
+2. `docs/ARCHITECTURE.md`와 `docs/QUALITY.md`를 읽는다.
 3. `python3.13 scripts/check_context.py`로 강의 소스와 로컬 음성 정본을 확인한다.
 4. 모델 설치·A/B·LoRA 튜닝은 이미 완료됐다. 사용자가 요청하지 않으면 다시
    설치하거나 처음부터 벤치마크하지 않는다.
@@ -78,3 +78,15 @@
 - 설치와 모델 다운로드 전에 예상 용량과 작업 목적을 알린다.
 - 한 번에 전체 7~8시간을 생성하지 않는다. 30~60초, CH01 일부, CH01 전체,
   전체 강의 순으로 승인받아 확장한다.
+
+## 코드·문서 구조 유지
+
+- Electron 진입점은 `electron-app/main.mjs`, 서비스 조립은 `main/application.mjs`다.
+- 제작·편집·결과 관리는 각 main 서비스, 화면별 동작은 renderer/controllers에 둔다.
+- main과 renderer가 함께 쓰는 계산은 shared에 두며 계층 역참조와 순환을 만들지 않는다.
+- Python 강의 입력·오디오·정렬은 `src/local_tts_engine/course/`가 소유한다.
+- 기존 CLI 이름과 scripts 경로는 저장된 검수 명령의 계약이다.
+- 앱 검사는 `tests/electron/`에 두고 서비스 모듈을 직접 import한다.
+- README는 사용법, HANDOFF는 현재 상태, ARCHITECTURE는 구조, QUALITY는 검수,
+  DECISIONS는 승인·라이선스 근거를 소유한다. 완료한 UI 변경일지를 누적하지 않는다.
+- 구조 변경 후 `npm run check`로 경로·계층·회귀 검사를 완료한다.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.13
 """Report dictionary readings that could lose a whole syllable unnoticed.
 
-§27 of docs/HANDOFF.md settles what this may and may not measure. A vowel that
+The gate policy in docs/QUALITY.md settles what this may and may not measure. A vowel that
 shifts by one is how people actually talk, and the gate passes it on purpose —
 in a long reading such a slip is always under 0.15, so counting those would flag
 almost every entry and teach nobody anything. A *syllable* that disappears is a

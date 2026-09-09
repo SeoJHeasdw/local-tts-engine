@@ -6,8 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
-from .course_pilot import (
-    DEFAULT_SOURCE_PROJECT,
+from .course.settings import DEFAULT_SOURCE_PROJECT
+from .course.script import (
     course_lesson_catalog,
     course_page_catalog,
 )
