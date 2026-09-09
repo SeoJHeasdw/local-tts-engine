@@ -24,7 +24,7 @@
         <nav aria-label="주 메뉴">
           <button class="nav-item active" type="button" data-view="new" aria-current="page"><span>◉</span><b>새 영상</b></button>
           <button class="nav-item" type="button" data-view="voice"><span>♪</span><b>목소리 만들기</b></button>
-          <button class="nav-item" type="button" data-view="review"><span>▷</span><b>영상 검수·수정</b></button>
+          <button class="nav-item" type="button" data-view="review"><span>◆</span><b>다듬기</b><em id="polish-count" class="hidden">0</em></button>
           <button class="nav-item" type="button" data-view="edit"><span>✂</span><b>영상 편집</b></button>
           <button class="nav-item" type="button" data-view="results"><span>▤</span><b>최근 결과</b><em id="results-count">0</em></button>
         </nav>
@@ -199,7 +199,12 @@
         </section>
 
         <section class="page-view hidden" id="view-review">
-          <header class="topbar"><div><p class="eyebrow">듣고, 고치고, 이어서 확인</p><h1>영상 검수·수정</h1><p class="lede">자동 검수가 놓친 부분도, 영상을 보며 직접 수정할 수 있습니다.</p></div></header>
+          <header class="topbar"><div><p class="eyebrow">확인이 필요한 곳만</p><h1>다듬기</h1><p class="lede">자동 검수가 걸러낸 곳을 듣고 고칩니다. 고른 교체는 모아 두었다가 한 번에 저장합니다.</p></div></header>
+          <section class="polish-strip hidden" id="polish-strip" aria-label="이 영상 상태">
+            <strong id="polish-strip-name"></strong>
+            <div class="polish-facts" id="polish-facts"></div>
+            <span class="polish-spark" id="polish-spark" aria-hidden="true"></span>
+          </section>
           <div class="review-toolbar"><button type="button" class="secondary-small drop-target" id="pick-voice-video">검수할 영상 선택</button><strong id="voice-video-name">최근 결과에서 가져오거나 영상을 선택하세요.</strong><span id="review-version">원본 보관 · 새 버전으로 저장</span></div>
           <div class="review-layout">
             <section class="review-stage card">
@@ -208,6 +213,11 @@
               <div class="review-playback"><button type="button" class="secondary-small" id="review-back">5초 전</button><strong id="review-current-page">페이지 확인 전</strong><button type="button" class="primary-small" id="review-select-page" disabled>이 페이지 수정</button></div>
               <div class="review-fine-controls"><button type="button" class="secondary-small" id="review-fine-back">0.05초 전</button><button type="button" class="secondary-small" id="review-fine-next">0.05초 뒤</button><label>재생 속도 <select id="review-speed" aria-label="검수 재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="0.75">0.75배</option><option value="1" selected>1배</option><option value="1.25">1.25배</option><option value="1.5">1.5배</option><option value="1.75">1.75배</option><option value="2">2배</option><option value="3">3배</option></select></label></div>
               <div id="review-pages" class="review-pages" aria-label="영상 페이지 탐색"></div>
+              <section class="polish-diff hidden" id="polish-diff" aria-label="원문과 받아쓰기 대조">
+                <div class="diff-row"><span>대본 원문</span><p id="polish-expected"></p></div>
+                <div class="diff-row"><span>받아쓰기</span><p id="polish-recognized"></p></div>
+                <p class="diff-note" id="polish-diff-note"></p>
+              </section>
               <section class="review-transcript"><h3>현재 페이지 대본</h3><p id="review-script">페이지 타임라인이 있는 영상에서 대본을 볼 수 있습니다.</p></section>
             </section>
             <aside class="review-sidebar">
@@ -228,6 +238,17 @@
             </aside>
           </div>
           <section class="card hidden" id="review-candidates-host"><h2>원본과 비교하고 후보 선택</h2><p id="review-candidate-scope"></p><div id="review-candidate-actions"><button type="button" class="secondary-small" id="review-candidate-original">이 후보의 원본 페이지 듣기</button></div></section>
+          <section class="polish-pending hidden" id="polish-pending" aria-live="polite">
+            <div class="polish-pending-copy">
+              <strong id="polish-pending-count">교체 대기 없음</strong>
+              <small>저장하기 전까지 원본 영상은 그대로입니다.</small>
+            </div>
+            <ul id="polish-pending-list"></ul>
+            <div class="polish-pending-actions">
+              <button type="button" class="secondary-small" id="polish-discard">모두 취소</button>
+              <button type="button" class="primary-small" id="polish-save">한 번에 저장</button>
+            </div>
+          </section>
           <section class="card hidden" id="review-saved"><h2>수정본이 저장됐습니다</h2><p>새 버전에서 수정한 부분을 확인한 뒤 이어서 검수하세요.</p><button type="button" class="primary-small" id="review-continue">수정본에서 이어서 검수</button></section>
         </section>
 

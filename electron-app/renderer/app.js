@@ -395,6 +395,124 @@ let pendingCandidateContext = null;
 let reviewResumeMs = 0;
 const reviewPlayer = $('#review-player');
 
+// 고른 교체는 바로 파일로 굽지 않고 여기 모인다. 예전에는 한 곳을 고칠 때마다
+// 영상 전체를 다시 굽고 새 파일을 남긴 뒤 그 파일을 처음부터 다시 열었다.
+// 확인할 곳이 넷이면 그 값을 네 번 치렀다. 모아 두었다가 한 번에 적용하면
+// 재인코딩도 결과 파일도 하나로 끝난다.
+const pendingFixes = new Map();
+
+function pendingFixList() {
+  return Array.from(pendingFixes.values()).sort((left, right) => left.startPage - right.startPage);
+}
+
+function renderPendingFixes() {
+  const fixes = pendingFixList();
+  const badge = $('#polish-count');
+  badge.textContent = String(fixes.length);
+  badge.classList.toggle('hidden', fixes.length === 0);
+  $('#polish-pending').classList.toggle('hidden', fixes.length === 0);
+  $('#polish-pending-count').textContent = fixes.length ? `${fixes.length}곳 교체 대기` : '교체 대기 없음';
+  $('#polish-save').disabled = reviewBusy || fixes.length === 0;
+  $('#polish-pending-list').replaceChildren(...fixes.map((fix) => {
+    const item = document.createElement('li');
+    const label = document.createElement('strong');
+    label.textContent = `${fix.startPage}페이지`;
+    const detail = document.createElement('small');
+    detail.textContent = fix.label;
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'polish-drop';
+    drop.textContent = '취소';
+    drop.setAttribute('aria-label', `${fix.startPage}페이지 교체 취소`);
+    drop.addEventListener('click', () => { pendingFixes.delete(fix.startPage); renderPendingFixes(); });
+    item.append(label, detail, drop);
+    return item;
+  }));
+}
+
+// The strip is not a mode. One lesson is a line; a chapter grows the same line
+// into rows. What was produced decides, not a setting the user has to pick.
+function renderPolishStrip(video) {
+  const strip = $('#polish-strip');
+  if (!video) { strip.classList.add('hidden'); return; }
+  const findings = video.voiceFindings || [];
+  const pages = video.pages || [];
+  strip.classList.remove('hidden');
+  $('#polish-strip-name').textContent = video.name || '';
+  const facts = [
+    ['페이지', String(pages.length || '—')],
+    ['확인 필요', String(findings.length)],
+  ];
+  $('#polish-facts').replaceChildren(...facts.map(([key, value]) => {
+    const span = document.createElement('span');
+    const label = document.createElement('i');
+    label.textContent = key;
+    const strong = document.createElement('b');
+    strong.textContent = value;
+    span.append(label, strong);
+    return span;
+  }));
+  const flagged = new Set(findings.map((finding) => Number(finding.slideNumber)));
+  $('#polish-spark').replaceChildren(...pages.slice(0, 120).map((page) => {
+    const cell = document.createElement('i');
+    if (flagged.has(Number(page.number))) cell.className = 'flagged';
+    return cell;
+  }));
+}
+
+// Why it was flagged is the whole basis for the judgement, so it sits next to
+// the video rather than behind a disclosure.
+function showFindingDiff(finding) {
+  const panel = $('#polish-diff');
+  const expected = String(finding?.expectedText || '');
+  const recognized = String(finding?.recognizedText || '');
+  if (!expected && !recognized) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  $('#polish-expected').textContent = expected || '(원문 없음)';
+  $('#polish-recognized').textContent = recognized || '(받아쓰기 없음)';
+  const terms = (finding?.terms || []).map((term) => term.term).filter(Boolean);
+  $('#polish-diff-note').textContent = terms.length
+    ? `걸린 단어: ${terms.join(', ')}`
+    : (finding?.reasons || []).join(' · ');
+}
+
+function queueSelectedCandidate(token, name) {
+  if (!pendingCandidateContext || !token) return false;
+  const startPage = Number(pendingCandidateContext.startPage);
+  const endPage = Number(pendingCandidateContext.endPage ?? startPage);
+  if (!Number.isFinite(startPage)) return false;
+  pendingFixes.set(startPage, {
+    startPage,
+    endPage,
+    audioToken: token,
+    label: name || '고른 목소리',
+  });
+  pendingCandidateContext = null;
+  $('#review-candidates-host').classList.add('hidden');
+  renderPendingFixes();
+  showToast(`${startPage}페이지 교체를 대기 목록에 담았습니다. 저장할 때 한 번에 적용됩니다.`);
+  return true;
+}
+
+async function savePendingFixes() {
+  const fixes = pendingFixList();
+  if (!voiceVideo || !fixes.length || reviewBusy) return;
+  const payload = {
+    operation: 'voice-pages',
+    name: `polish-${Date.now()}`,
+    videoToken: voiceVideo.token,
+    durationPolicy: $('#voice-duration-policy').value,
+    patches: fixes.map((fix) => ({ startPage: fix.startPage, endPage: fix.endPage, audioToken: fix.audioToken })),
+  };
+  reviewPlayer.pause();
+  try { setEditBusy(true); await api.startEdit(payload); }
+  catch (error) { setEditBusy(false); showToast(error.message, 'error'); }
+}
+
+$('#polish-save').addEventListener('click', savePendingFixes);
+$('#polish-discard').addEventListener('click', () => { pendingFixes.clear(); renderPendingFixes(); });
+
+
 function renderCompleteVoiceFindings(findings = [], target = null) {
   latestCompleteReview = target;
   const summary = summarizeVoiceFindings(findings);
@@ -421,6 +539,7 @@ function renderVoiceFindingRow(finding) {
   button.addEventListener('click', () => {
     const page = voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
     selectReviewPage(page, voiceFindingReason(finding));
+    showFindingDiff(finding);
     seekReview(Number(finding.startMs) / 1000, Number(finding.endMs) / 1000);
   });
   return row;
@@ -457,6 +576,10 @@ function setReviewVideo(video, target = null) {
   pendingCandidateContext = null;
   $('#review-candidates-host').classList.add('hidden');
   $('#review-saved').classList.add('hidden');
+  pendingFixes.clear();
+  renderPendingFixes();
+  $('#polish-diff').classList.add('hidden');
+  renderPolishStrip(video);
   $('#voice-video-name').textContent = video.name;
   reviewPlayer.src = video.videoUrl;
   reviewFindings = video.voiceFindings || [];
@@ -811,7 +934,7 @@ function handleEditEvent(event) {
     $("#candidate-gallery").classList.remove("hidden");
     $("#cancel-edit-button").classList.add("hidden");
     $("#apply-voice-candidate").classList.remove("hidden");
-    $("#apply-voice-candidate").textContent = "선택한 목소리로 교체한 영상 저장";
+    $("#apply-voice-candidate").textContent = "이 목소리로 담기";
     $("#close-edit-dialog").classList.remove("hidden");
   } else if (event.type === "cancelling") {
     $("#edit-running-label").textContent = "안전하게 중지 중";
@@ -830,7 +953,8 @@ function handleEditEvent(event) {
     setEditBusy(false);
     setIconStatus("#edit-top-status", "영상 편집과 검증이 완료됐습니다", "complete");
     latestEditTarget = event.report.target;
-    if (event.report.operation === 'mute-region' || event.report.operation === 'replace-region' || event.report.operation === 'voice-page' || event.report.operation === 'voice-batch') {
+    if (event.report.operation === 'voice-pages') { pendingFixes.clear(); renderPendingFixes(); }
+    if (['mute-region', 'replace-region', 'voice-page', 'voice-batch', 'voice-pages'].includes(event.report.operation)) {
       $('#review-saved').classList.remove('hidden');
       $('#review-candidates-host').classList.add('hidden');
     }
@@ -842,7 +966,7 @@ function handleEditEvent(event) {
     $("#open-edit-result").classList.remove("hidden");
     $("#reveal-edit-result").classList.remove("hidden");
     $("#close-edit-dialog").classList.remove("hidden");
-    if (['mute-region', 'replace-region', 'voice-page', 'voice-batch'].includes(event.report.operation)) {
+    if (['mute-region', 'replace-region', 'voice-page', 'voice-batch', 'voice-pages'].includes(event.report.operation)) {
       $('#edit-job-dialog').close();
       $('#review-saved').scrollIntoView({behavior:'smooth',block:'nearest'});
     }
@@ -1411,8 +1535,12 @@ $("#apply-voice-candidate").addEventListener("click", async () => {
       return;
     }
     if (!pendingCandidateContext || reviewBusy) return;
-    setEditBusy(true);
     $$('audio,video').forEach(media => media.pause());
+    // Queue it instead of writing a video now. The whole set is applied in one
+    // pass when the user saves, so the picture is encoded once, not once per fix.
+    const chosen = voiceCandidates.find(item => item.token === selectedCandidateToken);
+    if (queueSelectedCandidate(selectedCandidateToken, chosen?.name)) return;
+    setEditBusy(true);
     await api.startEdit({
       operation: "voice", name: `${pendingCandidateContext.name}-applied-${Date.now()}`,
       videoToken: pendingCandidateContext.videoToken,
