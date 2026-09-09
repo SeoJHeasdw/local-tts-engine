@@ -661,6 +661,18 @@ async function runPipeline(options) {
     ? await loadCatalog(studio, { tracked: true })
     : null;
   const units = chapterUnits(options, catalog);
+  // 챕터 전체 남은 시간은 페이지 수로만 낼 수 있다. 편마다 분량이 크게 달라
+  // 편 개수로 세면 남은 편이 가벼운지 무거운지를 놓친다. 여러 편으로 나눌
+  // 때에만 보내고, 한 편짜리에는 두 번째 시계가 필요 없다.
+  if (units.length > 1) {
+    emit({
+      type: "plan",
+      units: units.map((unit) => ({
+        title: unit.title,
+        pages: Math.max(1, Number(unit.endPage) - Number(unit.startPage) + 1),
+      })),
+    });
+  }
   const reports = [];
   for (const [index, unit] of units.entries()) {
     if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 
-import { etaLabel, unitLabel } from "./renderer/view-utils.mjs";
+import { chapterEtaLabel, etaLabel, unitLabel } from "./renderer/view-utils.mjs";
 
 const source = await fs.readFile(new URL("./renderer/app.js", import.meta.url), "utf8");
 function fixture(cancel = async () => false) {
@@ -21,12 +21,12 @@ function fixture(cancel = async () => false) {
     showToast() {}, setJobState: text => { $("#job-state").textContent = text; }, showJobView() {},
     appendLog: text => { $("#job-log").textContent += text; }, loadOutputs() {}, renderCompleteVoiceFindings() {},
     updateStages: stage => { $("#current-stage").textContent = stage; },
-    etaLabel, unitLabel, setInterval: () => 0, Date,
+    chapterEtaLabel, etaLabel, unitLabel, setInterval: () => 0, Date,
   });
   vm.runInContext('let creationState="idle", latestTarget=null;\n'
     + source.slice(source.indexOf("function setBusy("), source.indexOf("function setJobState("))
     + source.slice(source.indexOf("function renderJobEvent("), source.indexOf("async function initialize("))
-    + ';globalThis.jobUi={renderJobEvent,requestJobCancellation,state:()=>creationState,pace:()=>jobPace,unit:()=>jobUnit};', ctx);
+    + ';globalThis.jobUi={renderJobEvent,requestJobCancellation,state:()=>creationState,pace:()=>jobPace,unit:()=>jobUnit,plan:()=>jobPlan};', ctx);
   return { $, ui: ctx.jobUi, calls: () => calls };
 }
 
@@ -118,4 +118,68 @@ test("작업을 새로 시작하면 이전 작업의 진행 표시가 남지 않
   assert.equal(ui.pace(), null);
   assert.equal($("#job-unit").textContent, "");
   assert.equal($("#job-eta").textContent, "");
+});
+
+test("한 편짜리 작업에는 두 번째 시계를 띄우지 않는다", () => {
+  // 레슨 하나, 페이지 직접 선택, 챕터를 한 영상으로 만들기는 모두 한 편이다.
+  // '이 작업이 언제 끝나는지'가 곧 전부라 전체 시계가 따로 있을 자리가 없다.
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "lesson" } });
+  ui.renderJobEvent({ type: "voice-progress", done: 4, total: 20 });
+  ui.renderJobEvent({ type: "voice-progress", done: 12, total: 20 });
+
+  assert.equal(ui.plan(), null, "plan 이 오지 않으면 전체 시계는 존재하지 않는다");
+  assert.equal($("#job-total-eta").textContent, "");
+  assert.equal($("#job-unit").textContent, "");
+});
+
+test("레슨으로 나눠 만들 때만 편별 분량으로 전체 시계를 낸다", () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  ui.renderJobEvent({ type: "plan", units: [
+    { title: "L01", pages: 10 }, { title: "L02", pages: 10 },
+    { title: "L03", pages: 10 }, { title: "L04", pages: 30 },
+  ] });
+
+  ui.renderJobEvent({ type: "unit", index: 1, total: 4, title: "L01" });
+  assert.equal($("#job-total-eta").textContent, "", "첫 편이 끝나기 전에는 잴 것이 없다");
+
+  ui.renderJobEvent({ type: "unit", index: 2, total: 4, title: "L02" });
+
+  assert.equal(ui.plan().completedPages, 10, "끝난 편의 분량이 속도에 반영된다");
+  assert.equal($("#job-unit").textContent, "레슨 2/4");
+});
+
+test("남은 편이 무거우면 전체 시계가 편 개수보다 길게 잡는다", () => {
+  const { ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  ui.renderJobEvent({ type: "plan", units: [
+    { title: "L01", pages: 10 }, { title: "L02", pages: 10 }, { title: "L03", pages: 100 },
+  ] });
+  ui.renderJobEvent({ type: "unit", index: 1, total: 3, title: "L01" });
+
+  // 1편(10p)을 10분에 끝냈다고 두고 2편으로 넘어간다.
+  const plan = ui.plan();
+  plan.unitStartedAt = Date.now() - 10 * 60_000;
+  ui.renderJobEvent({ type: "unit", index: 2, total: 3, title: "L02" });
+
+  assert.equal(plan.completedPages, 10);
+  assert.ok(plan.completedMs >= 10 * 60_000 - 500, "실제 소요가 속도로 들어간다");
+  // 남은 110페이지 × 1분/페이지 → 편 개수(2편 남음)로 세면 20분이 나올 자리다.
+  assert.equal(
+    chapterEtaLabel({ completedPages: 10, completedMs: 10 * 60_000, currentPages: 10, currentElapsedMs: 0, pendingPages: 100 }),
+    "전체 약 1시간 50분 남음",
+  );
+});
+
+test("작업을 새로 시작하면 전체 시계도 지워진다", () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  ui.renderJobEvent({ type: "plan", units: [{ title: "L01", pages: 10 }, { title: "L02", pages: 10 }] });
+  ui.renderJobEvent({ type: "unit", index: 2, total: 2, title: "L02" });
+
+  ui.renderJobEvent({ type: "started", options: { name: "next" } });
+
+  assert.equal(ui.plan(), null);
+  assert.equal($("#job-total-eta").textContent, "");
 });

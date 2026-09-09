@@ -1238,3 +1238,13 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
   color: var(--text-3); font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
+
+/* 두 시계는 위계가 다르다. '이 편'은 곧 바뀌는 값이라 옅게, '전체'는 자리를
+   뜰지 말지를 정하는 값이라 또렷하게 둔다. */
+.job-total-eta {
+  color: var(--text-2); font-size: var(--fs-xs); font-weight: var(--fw-semi);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  padding-left: var(--s2); border-left: 1px solid var(--line);
+}
+.batch-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
+.batch-eta { color: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }

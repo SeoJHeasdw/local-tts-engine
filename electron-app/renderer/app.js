@@ -1,6 +1,7 @@
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import {
   buildChapterRanges,
+  chapterEtaLabel,
   createViewHistory,
   etaLabel,
   filterOutputItems,
@@ -946,6 +947,7 @@ function openJobDialog(title) {
   $("#edit-dialog-error").classList.add("hidden");
   $("#candidate-gallery").classList.add("hidden");
   $("#batch-progress").classList.add("hidden");
+  resetBatchProgress();
   $("#cancel-edit-button").classList.remove("hidden");
   resetCancelButton($("#cancel-edit-button"));
   $("#open-edit-result").classList.add("hidden");
@@ -1023,6 +1025,7 @@ function handleEditEvent(event) {
     $("#batch-progress").classList.remove("hidden");
     $("#batch-progress-text").textContent = `${event.completed} / ${event.total} 완료 · ${event.name}`;
     $("#batch-progress-bar").style.width = `${event.completed / event.total * 100}%`;
+    trackBatchProgress(event);
   } else if (event.type === "voice-candidates-ready") {
     candidatePurpose = "edit";
     setEditBusy(false);
@@ -1097,6 +1100,7 @@ function handleTextVoiceEvent(event) {
     $("#batch-progress").classList.remove("hidden");
     $("#batch-progress-text").textContent = `${event.completed} / ${event.total} 완료 · ${event.name}`;
     $("#batch-progress-bar").style.width = `${event.completed / event.total * 100}%`;
+    trackBatchProgress(event);
   } else if (event.type === "text-voices-ready") {
     candidatePurpose = "text";
     renderVoiceCandidates(event.candidates);
@@ -1385,7 +1389,11 @@ function renderJobEvent(event) {
     resetCancelButton($("#cancel-button"));
     resetJobPace();
     updateStages("starting");
+  } else if (event.type === "plan") {
+    jobPlan = { units: event.units || [], completedPages: 0, completedMs: 0, unitStartedAt: null };
+    renderJobPace();
   } else if (event.type === "unit") {
+    advanceChapterPlan(event.index);
     jobUnit = { index: event.index, total: event.total };
     // 편이 바뀌면 속도 관측을 다시 시작한다. 레슨마다 길이가 달라 앞 편의
     // 속도로 다음 편을 재면 남은 시간이 크게 어긋난다.
@@ -1447,8 +1455,35 @@ function renderJobEvent(event) {
 
 // 제작은 길다. 무엇을 하는 중인지만 알려주고 언제 끝나는지는 말해 주지 않으면
 // 자리를 뜰 수도, 기다릴 수도 없다.
+//
+// 시계가 둘 필요한 경우는 하나뿐이다. 레슨 하나, 페이지 직접 선택, 챕터를 한
+// 영상으로 만들기는 모두 한 편짜리라 '이 작업이 언제 끝나는지'가 곧 전부다.
+// 챕터를 레슨 단위로 나눌 때만 '이 편'과 '전체'가 서로 다른 답이 되고, 그때만
+// main 이 plan 을 보낸다.
 let jobPace = null;
 let jobUnit = null;
+let jobPlan = null;
+
+// 목소리 후보도 하나에 수십 초씩 걸린다. 몇 개 남았는지만 알려주는 것과
+// 얼마나 더 기다려야 하는지 알려주는 것은 다르다.
+let batchPace = null;
+
+function trackBatchProgress(event) {
+  if (!batchPace || batchPace.total !== event.total) {
+    batchPace = { baseline: event.completed, total: event.total, startedAt: Date.now() };
+  }
+  $("#batch-eta").textContent = etaLabel({
+    done: event.completed,
+    total: event.total,
+    elapsedMs: Date.now() - batchPace.startedAt,
+    baseline: batchPace.baseline,
+  });
+}
+
+function resetBatchProgress() {
+  batchPace = null;
+  $("#batch-eta").textContent = "";
+}
 
 function renderJobPace() {
   const unit = jobUnit ? unitLabel(jobUnit) : "";
@@ -1460,13 +1495,43 @@ function renderJobPace() {
         total: jobPace.total,
         elapsedMs: Date.now() - jobPace.startedAt,
         baseline: jobPace.baseline,
+        scope: jobPlan ? "unit" : "job",
       })
     : "";
+  const whole = jobPlan ? chapterProgressLabel() : "";
+  $("#job-total-eta").textContent = whole;
+  $("#job-total-eta").classList.toggle("hidden", !whole);
+}
+
+function chapterProgressLabel() {
+  const units = jobPlan.units || [];
+  const index = Math.max(1, Number(jobUnit?.index || 1));
+  const current = units[index - 1];
+  if (!current) return "";
+  return chapterEtaLabel({
+    completedPages: jobPlan.completedPages,
+    completedMs: jobPlan.completedMs,
+    currentPages: current.pages,
+    currentElapsedMs: jobPlan.unitStartedAt ? Date.now() - jobPlan.unitStartedAt : 0,
+    pendingPages: units.slice(index).reduce((total, unit) => total + Number(unit.pages || 0), 0),
+  });
+}
+
+// 편이 끝날 때마다 그 편의 실제 소요와 분량을 더해 속도를 갱신한다.
+function advanceChapterPlan(index) {
+  if (!jobPlan) return;
+  const previous = (jobPlan.units || [])[index - 2];
+  if (previous && jobPlan.unitStartedAt) {
+    jobPlan.completedMs += Date.now() - jobPlan.unitStartedAt;
+    jobPlan.completedPages += Number(previous.pages || 0);
+  }
+  jobPlan.unitStartedAt = Date.now();
 }
 
 function resetJobPace() {
   jobPace = null;
   jobUnit = null;
+  jobPlan = null;
   renderJobPace();
 }
 

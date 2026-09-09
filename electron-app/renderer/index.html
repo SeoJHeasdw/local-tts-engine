@@ -136,6 +136,7 @@
                 <div class="job-pace" id="job-pace">
                   <span class="job-unit hidden" id="job-unit"></span>
                   <span class="job-eta" id="job-eta"></span>
+                  <span class="job-total-eta hidden" id="job-total-eta"></span>
                 </div>
               </div>
               <ol class="stage-list">
@@ -396,7 +397,7 @@
         <div class="job-success hidden" id="edit-dialog-success"><div class="complete-icon">✓</div><p id="edit-complete-summary"></p></div>
         <div class="job-error hidden" id="edit-dialog-error"><strong>작업을 완료하지 못했습니다.</strong><p id="edit-error-message"></p></div>
         <div class="candidate-gallery hidden" id="candidate-gallery"><p>각 후보를 재생해 보고 가장 마음에 드는 목소리를 고르세요.</p><div id="candidate-list"></div></div>
-        <div class="batch-progress hidden" id="batch-progress"><span id="batch-progress-text">0 / 0 완료</span><div><i id="batch-progress-bar"></i></div></div>
+        <div class="batch-progress hidden" id="batch-progress"><div class="batch-progress-head"><span id="batch-progress-text">0 / 0 완료</span><span class="batch-eta" id="batch-eta"></span></div><div><i id="batch-progress-bar"></i></div></div>
         <details class="log-panel"><summary>상세 기록</summary><pre id="edit-log"></pre></details>
       </div>
       <div class="modal-actions"><button class="secondary-small" id="cancel-edit-button" type="button">작업 중지</button><button class="primary-small hidden" id="apply-voice-candidate" type="button">선택한 목소리로 교체</button><button class="primary-small hidden" id="open-edit-result" type="button">결과 열기</button><button class="secondary-small hidden" id="reveal-edit-result" type="button">Finder</button></div>
