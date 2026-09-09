@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
-import { clearedFindingKeys, pageRangeFromTimeline, reviewPages, videoTimelineCandidates } from "../shared/index.mjs";
+import { clearedFindingKeys, mapWithConcurrency, pageRangeFromTimeline, reviewPages, videoTimelineCandidates } from "../shared/index.mjs";
 import { pathToFileURL } from "node:url";
 import { reportDescribesVideo, safeStat } from "./files.mjs";
 import { runtimePaths } from "./paths.mjs";
@@ -41,9 +41,11 @@ export function createMediaService({
     return selected;
   }
 
-  async function findVideoTimeline(videoPath) {
-    const settings = await readAppSettings().catch(() => null);
-    const captionRoot = settings ? runtimePaths(settings.paths).captionOutputRoot : null;
+  async function findVideoTimeline(videoPath, captionRoot) {
+    if (captionRoot === undefined) {
+      const settings = await readAppSettings().catch(() => null);
+      captionRoot = settings ? runtimePaths(settings.paths).captionOutputRoot : null;
+    }
     for (const candidate of videoTimelineCandidates(videoPath, captionRoot)) {
       if (await safeStat(candidate)) return candidate;
     }
@@ -51,7 +53,13 @@ export function createMediaService({
   }
 
   async function registerSelected(paths, kind, extras = []) {
-    return Promise.all(paths.map(async (file, index) => {
+    // One settings snapshot per selection; importing 100 videos must not scan
+    // adapters 200 times or launch 100 ffprobe processes at once.
+    const captionRoot = kind === "video" && paths.length
+      ? runtimePaths((await readAppSettings()).paths).captionOutputRoot
+      : null;
+    const probes = new Map();
+    const values = await mapWithConcurrency(paths, 4, async (file, index) => {
       const token = crypto.randomUUID();
       const value = {
         token,
@@ -62,10 +70,13 @@ export function createMediaService({
         pageRange: null,
         ...(extras[index] || {}),
       };
-      const mediaProbe = await inspectMedia(value.path);
+      // Reuse only within this request. A later selection must observe edits
+      // made to the file, and each selection still has its own token/metadata.
+      if (!probes.has(value.path)) probes.set(value.path, inspectMedia(value.path));
+      const mediaProbe = await probes.get(value.path);
       value.durationMs = Math.round(Number(mediaProbe.format?.duration || 0) * 1000);
       if (kind === "video" && !value.timelinePath) {
-        const timelinePath = await findVideoTimeline(value.path);
+        const timelinePath = await findVideoTimeline(value.path, captionRoot);
         const timeline = timelinePath
           ? await fs.readFile(timelinePath, "utf8").then(JSON.parse).catch(() => null)
           : null;
@@ -77,8 +88,6 @@ export function createMediaService({
         }
       }
       if (kind === "video") {
-        const settings = await readAppSettings();
-        const captionRoot = runtimePaths(settings.paths).captionOutputRoot;
         const reports = [path.join(path.dirname(value.path), "validation-report.json"),
           path.join(captionRoot, path.basename(path.dirname(value.path)), "validation-report.json")];
         for (const reportPath of reports) {
@@ -93,8 +102,17 @@ export function createMediaService({
           }
         }
       }
-      selectedFiles.set(token, value);
-      return { token, kind, name: value.name, path: value.path, durationMs: value.durationMs, pageRange: value.pageRange, audioUrl: kind === "audio" ? pathToFileURL(value.path).href : null, pages: value.pages || [], voiceFindings: value.voiceFindings || [], clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null, videoUrl: kind === "video" ? pathToFileURL(value.path).href : null };
+      return value;
+    });
+    // Publish tokens together only after every file has been inspected.
+    for (const value of values) selectedFiles.set(value.token, value);
+    return values.map(value => ({
+      token: value.token, kind, name: value.name, path: value.path,
+      durationMs: value.durationMs, pageRange: value.pageRange,
+      audioUrl: kind === "audio" ? pathToFileURL(value.path).href : null,
+      videoUrl: kind === "video" ? pathToFileURL(value.path).href : null,
+      pages: value.pages || [], voiceFindings: value.voiceFindings || [],
+      clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null,
     }));
   }
 

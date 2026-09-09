@@ -2,14 +2,24 @@ export async function mapWithConcurrency(items, limit, worker) {
   const values = Array.from(items || []);
   const results = new Array(values.length);
   let cursor = 0;
+  let failed = false;
+  let firstError;
   const run = async () => {
-    while (cursor < values.length) {
+    while (!failed && cursor < values.length) {
       const index = cursor++;
-      results[index] = await worker(values[index], index);
+      try {
+        results[index] = await worker(values[index], index);
+      } catch (error) {
+        if (!failed) firstError = error;
+        failed = true;
+      }
     }
   };
   const concurrency = Math.max(1, Math.min(Math.floor(limit) || 1, values.length || 1));
+  // Stop dispatching on failure, but drain work already running before callers
+  // declare the job finished and allow another job to use the same resources.
   await Promise.all(Array.from({ length: concurrency }, () => run()));
+  if (failed) throw firstError;
   return results;
 }
 

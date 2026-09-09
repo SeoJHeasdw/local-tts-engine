@@ -17,10 +17,11 @@ const probe = async file => JSON.parse((await execute('ffprobe', [
 
 function appMethods(records = {}) {
   const calls = [];
+  let probeCalls = 0;
   const dependencies = {
     chosenRecord: token => records[token],
     requireRuntimeTool: name => name,
-    runUtility: async (command, args) => (await execute(command, args)).stdout,
+    runUtility: async (command, args) => { probeCalls++; return (await execute(command, args)).stdout; },
     runProcess: async (stage, command, args) => {
       calls.push(args);
       await execute(command, args, { timeout: 30000, maxBuffer: 2_000_000 });
@@ -31,7 +32,7 @@ function appMethods(records = {}) {
   const media = createMediaService(dependencies);
   const compose = createEditingComposeService({ ...dependencies, inspectMedia: media.inspectMedia });
   const pages = createEditingPagesService({ ...dependencies, inspectMedia: media.inspectMedia, validateEditVideo: compose.validateEditVideo });
-  return { ...compose, ...pages, calls };
+  return { ...compose, ...pages, calls, probeCalls: () => probeCalls };
 }
 
 async function workspace(t) {
@@ -75,8 +76,12 @@ test(`음성 트랙 ${hasAudio ? '있는' : '없는'} 영상도 지정한 시작
     ...(hasAudio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2'] : []),
     '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', input,
   ]);
-  const output = path.join(directory, 'cut.mp4');
-  await appMethods().normalizeMergeSegment(input, output, { startSeconds: 1, durationSeconds: 0.4 });
+  const out = path.join(directory, 'cut');
+  await fs.mkdir(out);
+  const app = appMethods({ video: { path: input, name: 'source.mp4' } });
+  const report = await app.runComposeEdit({ name: 'cut', clips: [{ videoToken: 'video', inMs: 1000, outMs: 1400 }] }, out);
+  const output = report.videoPath;
+  assert.equal(app.probeCalls(), 1, '분석한 입력의 정보를 정규화할 때 다시 조회하지 않는다');
   const { stdout: pixel } = await execute('ffmpeg', [
     '-v', 'error', '-i', output, '-frames:v', '1', '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1',
   ], { encoding: 'buffer' });
@@ -137,6 +142,17 @@ for (const [mode, fit] of [['single', 'match-audio'], ['batch', 'match-audio'], 
         { audioToken: 'first', startPage: 2, endPage: 2 },
       ] }, out);
     const delta = fit === 'keep-video' ? 0 : mode === 'single' ? 400 : 200;
+    assert.equal(report.operation, mode === 'single' ? 'voice-page' : 'voice-pages');
+    if (mode === 'single') assert.deepEqual(report.pageRange, { start: 2, end: 2 });
+    else assert.deepEqual(report.pages, [{ startPage: 2, endPage: 2 }, { startPage: 4, endPage: 4 }]);
+    if (fit === 'keep-video') {
+      const args = app.calls[0];
+      assert.equal(args[args.indexOf('-c:v') + 1], 'copy', '화면 길이가 같으면 단일·복수 교체 모두 영상 스트림을 복사해야 한다');
+      const hash = async file => (await execute('ffmpeg', [
+        '-v', 'error', '-i', file, '-map', '0:v:0', '-c', 'copy', '-f', 'hash', '-',
+      ])).stdout;
+      assert.equal(await hash(report.videoPath), await hash(input));
+    }
     assert.equal(report.voiceFindings?.length, 4, '교체하지 않은 페이지의 경고가 사라지면 안 된다');
     assert.equal(report.voiceFindings[0].startMs, 100);
     assert.equal(report.voiceFindings[3].startMs, 5100 + delta);

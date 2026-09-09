@@ -1,6 +1,6 @@
 import nativeFs from "node:fs/promises";
 import path from "node:path";
-import { clipTimeline, composeTotalMs, concatTimelines, normalizeComposeClips, summarizeChecks } from "../../shared/index.mjs";
+import { clipTimeline, composeTotalMs, concatTimelines, mapWithConcurrency, normalizeComposeClips, summarizeChecks } from "../../shared/index.mjs";
 
 export function createEditingComposeService({
   chosenRecord,
@@ -11,8 +11,8 @@ export function createEditingComposeService({
   requireRuntimeTool,
   runProcess,
 }) {
-  async function normalizeMergeSegment(input, output, { startSeconds = 0, durationSeconds = null } = {}) {
-    const probe = await inspectMedia(input);
+  async function normalizeMergeSegment(input, output, { startSeconds = 0, durationSeconds = null, probe: suppliedProbe = null } = {}) {
+    const probe = suppliedProbe || await inspectMedia(input);
     const whole = Number(probe.format?.duration || 0);
     if (!whole) throw new Error(`영상 길이를 읽지 못했습니다: ${path.basename(input)}`);
     const duration = durationSeconds == null ? whole : durationSeconds;
@@ -92,7 +92,7 @@ export function createEditingComposeService({
    */
   async function runComposeEdit(options, outputDir) {
     const records = (options.clips || []).map((clip) => chosenRecord(clip.videoToken, "video"));
-    const probes = await Promise.all(records.map((record) => inspectMedia(record.path)));
+    const probes = await mapWithConcurrency(records, 4, record => inspectMedia(record.path));
     const durations = probes.map((probe) => Math.round(Number(probe.format?.duration || 0) * 1000));
     const segments = normalizeComposeClips(options.clips, durations);
 
@@ -108,6 +108,7 @@ export function createEditingComposeService({
       await normalizeMergeSegment(record.path, output, {
         startSeconds: segment.inMs / 1000,
         durationSeconds: segment.lengthMs / 1000,
+        probe: probes[segment.index],
       });
       prepared.push(output);
     }

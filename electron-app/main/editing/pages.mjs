@@ -1,6 +1,6 @@
 import nativeFs from "node:fs/promises";
 import path from "node:path";
-import { assertPageReplaceable, mapWithConcurrency, pageVoicePatchPlan, pageVoicePatchesPlan, patchedTimeline, timeRangeForPages } from "../../shared/index.mjs";
+import { assertPageReplaceable, mapWithConcurrency, pageVoicePatchesPlan, patchedTimeline, timeRangeForPages } from "../../shared/index.mjs";
 import { captionText, editedReviewContext, retimeCaptions } from "./review-media.mjs";
 
 export function createEditingPagesService({
@@ -40,66 +40,11 @@ export function createEditingPagesService({
   }
 
   async function runPageVoicePatch(videoRecord, audioRecord, options, outputDir) {
-    const timeline = JSON.parse(await fs.readFile(videoRecord.timelinePath, "utf8"));
-    const target = timeRangeForPages(timeline.entries, Number(options.startPage), Number(options.endPage));
-    const targetStart = target.start;
-    const targetEnd = target.end;
-    const generated = audioRecord.generatedVoice;
-    if (
-      Number(generated.startPage) !== Number(options.startPage)
-      || Number(generated.endPage) !== Number(options.endPage)
-    ) {
-      throw new Error("생성한 목소리와 교체할 페이지 범위가 다릅니다. 후보를 다시 만들어 주세요.");
-    }
-    const sourceStart = Number(generated.sourceStartMs) / 1000;
-    const sourceEnd = Number(generated.sourceEndMs) / 1000;
-
-    const videoProbe = await inspectMedia(videoRecord.path);
-    const videoDuration = Number(videoProbe.format?.duration || 0);
-    if (!videoDuration || !videoProbe.streams?.some((stream) => stream.codec_type === "audio")) {
-      throw new Error("페이지 음성 교체에는 기존 음성 트랙과 타임라인이 필요합니다.");
-    }
-    const matchAudio = options.durationPolicy === "match-audio";
-    const patchPlan = pageVoicePatchPlan({
-      videoDuration,
-      targetStart,
-      targetEnd,
-      sourceStart,
-      sourceEnd,
-      matchAudio,
-    });
-
-    const output = path.join(outputDir, `${options.name}.mp4`);
-    await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
-      "-y", "-hide_banner", "-nostats", "-i", videoRecord.path, "-i", audioRecord.path,
-      "-filter_complex", patchPlan.filter,
-      "-map", patchPlan.videoOutput, "-map", patchPlan.audioOutput,
-      "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", output,
-    ]);
-
-    const replacementDurationMs = Math.round(patchPlan.replacementDuration * 1000);
-    const nextTimeline = patchedTimeline(
-      timeline,
-      Math.round(targetStart * 1000),
-      Math.round(targetEnd * 1000),
-      replacementDurationMs,
-    );
-    const timelinePath = path.join(outputDir, "timeline.json");
-    await fs.writeFile(timelinePath, `${JSON.stringify(nextTimeline, null, 2)}\n`, "utf8");
-    const report = await validateEditVideo(
-      output,
-      "voice-page",
-      [videoRecord.path, audioRecord.path],
-      outputDir,
-    );
-    report.timelinePath = timelinePath;
-    report.pageRange = { start: Number(options.startPage), end: Number(options.endPage) };
-    await preservePagePatchContext(report, videoRecord, [{
-      targetStart, targetEnd, replacementDuration: patchPlan.replacementDuration,
-    }], outputDir);
-    await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    return report;
+    return renderPageVoicePatches(videoRecord, [{
+      startPage: Number(options.startPage),
+      endPage: Number(options.endPage),
+      audioRecord,
+    }], options, outputDir, "voice-page");
   }
 
   async function runVoiceEdit(options, outputDir) {
@@ -108,7 +53,6 @@ export function createEditingPagesService({
       ? await generateReplacementVoice(options, outputDir).then((value) => ({ path: value.audioPath, generatedVoice: value.generatedVoice }))
       : chosenRecord(options.audioToken, "audio");
     if (audioRecord.generatedVoice) {
-      assertPageReplaceable(videoRecord, audioRecord.generatedVoice);
       return runPageVoicePatch(videoRecord, audioRecord, options, outputDir);
     }
     const video = videoRecord.path;
@@ -140,24 +84,23 @@ export function createEditingPagesService({
     return validateEditVideo(output, "voice", [video, audio], outputDir);
   }
 
-  /**
-   * Apply every approved page replacement to a lecture in one pass.
-   *
-   * Applying them one at a time re-encoded the whole lecture per fix and left a
-   * file behind each time, so four flagged pages in a seventeen-minute lecture
-   * cost four full 1080p encodes and produced four videos to keep track of. One
-   * pass produces one video, and when no replacement changes a page's length the
-   * picture is stream-copied rather than re-encoded at all.
-   */
   async function runPageVoicePatchBatch(options, outputDir) {
     const videoRecord = chosenRecord(options.videoToken, "video");
-    if (!videoRecord.timelinePath) {
-      throw new Error("페이지 음성 교체에는 기존 음성 트랙과 타임라인이 필요합니다.");
-    }
     const requested = Array.isArray(options.patches) ? options.patches : [];
     if (requested.length === 0) throw new Error("교체할 페이지를 선택해 주세요.");
     if (requested.length > 40) throw new Error("한 번에 최대 40개 페이지까지 교체할 수 있습니다.");
+    const patches = requested.map(patch => ({
+      ...patch, audioRecord: chosenRecord(patch.audioToken, "audio"),
+    }));
+    return renderPageVoicePatches(videoRecord, patches, options, outputDir, "voice-pages");
+  }
 
+  // Both entry points use the same validation, encoder plan and review/caption
+  // preservation. A one-page edit must not drift from the multi-page behavior.
+  async function renderPageVoicePatches(videoRecord, requested, options, outputDir, operation) {
+    if (!videoRecord.timelinePath) {
+      throw new Error("페이지 음성 교체에는 기존 음성 트랙과 타임라인이 필요합니다.");
+    }
     const timeline = JSON.parse(await fs.readFile(videoRecord.timelinePath, "utf8"));
     const videoProbe = await inspectMedia(videoRecord.path);
     const videoDuration = Number(videoProbe.format?.duration || 0);
@@ -179,7 +122,7 @@ export function createEditingPagesService({
       const startPage = Number(patch.startPage);
       const endPage = Number(patch.endPage ?? patch.startPage);
       assertPageReplaceable(videoRecord, { startPage, endPage });
-      const audioRecord = chosenRecord(patch.audioToken, "audio");
+      const audioRecord = patch.audioRecord;
       const generated = audioRecord.generatedVoice;
       if (!generated) throw new Error("선택한 목소리에 페이지 정보가 없습니다. 후보를 다시 만들어 주세요.");
       if (Number(generated.startPage) !== startPage || Number(generated.endPage) !== endPage) {
@@ -229,15 +172,19 @@ export function createEditingPagesService({
 
     const report = await validateEditVideo(
       output,
-      "voice-pages",
+      operation,
       [videoRecord.path, ...inputPaths],
       outputDir,
     );
     report.timelinePath = timelinePath;
     report.videoReencoded = !plan.videoUnchanged;
-    report.pages = entries
-      .map((entry) => ({ startPage: entry.startPage, endPage: entry.endPage }))
-      .sort((left, right) => left.startPage - right.startPage);
+    if (operation === "voice-page") {
+      report.pageRange = { start: entries[0].startPage, end: entries[0].endPage };
+    } else {
+      report.pages = entries
+        .map((entry) => ({ startPage: entry.startPage, endPage: entry.endPage }))
+        .sort((left, right) => left.startPage - right.startPage);
+    }
     await preservePagePatchContext(report, videoRecord, plan.patches, outputDir);
     await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
     return report;
