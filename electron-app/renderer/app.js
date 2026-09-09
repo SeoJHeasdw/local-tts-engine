@@ -489,6 +489,11 @@ function queueSelectedCandidate(token, name) {
   });
   pendingCandidateContext = null;
   $('#review-candidates-host').classList.add('hidden');
+  // 교체를 담았다면 그 페이지는 처리된 것이므로 목록에서도 내린다.
+  reviewFindings
+    .filter((finding) => Number(finding.slideNumber) === startPage)
+    .forEach((finding) => clearedFindings.add(findingKey(finding)));
+  renderFindings();
   renderPendingFixes();
   showToast(`${startPage}페이지 교체를 대기 목록에 담았습니다. 저장할 때 한 번에 적용됩니다.`);
   return true;
@@ -526,6 +531,52 @@ function renderCompleteVoiceFindings(findings = [], target = null) {
   })));
 }
 
+// 목록에 남아 있는 것이 곧 남은 일이다. 들어 보고 문제 없다고 판단했거나
+// 교체를 담은 항목은 그 자리에서 지워야, 무엇이 남았는지가 목록만 봐도 읽힌다.
+// 판정 자체를 바꾸는 것이 아니라 이 영상을 보는 동안의 표시일 뿐이라, 다른
+// 영상을 열면 초기화된다.
+const clearedFindings = new Set();
+
+function findingKey(finding) {
+  return `${finding?.slideNumber ?? ''}:${finding?.startMs ?? ''}`;
+}
+
+function visibleFindings() {
+  return reviewFindings.filter((finding) => !clearedFindings.has(findingKey(finding)));
+}
+
+function renderFindings() {
+  const remaining = visibleFindings();
+  const cleared = reviewFindings.length - remaining.length;
+  $('#review-finding-count').textContent = String(remaining.length);
+  const rows = remaining.map(renderVoiceFindingRow);
+  if (cleared > 0) {
+    const note = document.createElement('li');
+    note.className = 'findings-cleared';
+    const mark = document.createElement('b');
+    mark.textContent = '✓';
+    const label = document.createElement('span');
+    label.textContent = `${cleared}곳 확인함`;
+    const undo = document.createElement('button');
+    undo.type = 'button';
+    undo.textContent = '되돌리기';
+    undo.addEventListener('click', () => { clearedFindings.clear(); renderFindings(); });
+    note.append(mark, label, undo);
+    rows.push(note);
+  }
+  $('#review-findings-list').replaceChildren(...rows);
+  $('#review-findings-note').textContent = reviewFindings.length === 0
+    ? '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
+    : remaining.length === 0
+      ? '확인할 항목을 모두 정리했습니다. 담아 둔 교체가 있으면 저장하세요.'
+      : '자동 검수 권장 구간입니다. 눌러서 직접 확인하세요.';
+}
+
+function clearFinding(finding) {
+  clearedFindings.add(findingKey(finding));
+  renderFindings();
+}
+
 function renderVoiceFindingRow(finding) {
   const row = document.createElement('li');
   row.dataset.severity = finding.severity;
@@ -535,7 +586,13 @@ function renderVoiceFindingRow(finding) {
   const copy = document.createElement('div');
   const title = document.createElement('strong'); title.textContent = `${finding.slideNumber}페이지`;
   const reason = document.createElement('small'); reason.textContent = voiceFindingReason(finding);
-  copy.append(title, reason); button.append(time, copy); row.append(button);
+  copy.append(title, reason); button.append(time, copy);
+  const done = document.createElement('button');
+  done.type = 'button'; done.className = 'finding-done';
+  done.textContent = '확인 완료';
+  done.setAttribute('aria-label', `${finding.slideNumber}페이지 확인 완료로 표시`);
+  done.addEventListener('click', () => clearFinding(finding));
+  row.append(button, done);
   button.addEventListener('click', () => {
     const page = voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
     selectReviewPage(page, voiceFindingReason(finding));
@@ -583,11 +640,8 @@ function setReviewVideo(video, target = null) {
   $('#voice-video-name').textContent = video.name;
   reviewPlayer.src = video.videoUrl;
   reviewFindings = video.voiceFindings || [];
-  $('#review-finding-count').textContent = reviewFindings.length;
-  $('#review-findings-list').replaceChildren(...reviewFindings.map(renderVoiceFindingRow));
-  $('#review-findings-note').textContent = reviewFindings.length
-    ? '자동 검수 권장 구간입니다. 눌러서 직접 확인하세요.'
-    : '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.';
+  clearedFindings.clear();
+  renderFindings();
   $('#review-pages').replaceChildren(...(video.pages || []).map(page => {
     const button = document.createElement('button'); button.type = 'button';
     button.textContent = `${page.number}p`; button.dataset.page = page.number;
@@ -709,6 +763,30 @@ function formatDate(value) {
   if (!value) return "";
   return new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
+
+// 사이드바 접기. 폭은 CSS 토큰 하나로 정해지므로 클래스만 토글하면 된다.
+// 선택은 이 기기에만 남기면 되는 취향이라 localStorage에 둔다. 사생활 보호
+// 창이나 저장이 막힌 환경에서는 접근 자체가 던지므로 감싸 둔다.
+const SIDEBAR_KEY = 'voiceStudio.sidebarCollapsed';
+
+function applySidebarCollapsed(collapsed) {
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  const toggle = $('#sidebar-toggle');
+  toggle.textContent = collapsed ? '›' : '‹';
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  const label = collapsed ? '사이드바 펼치기' : '사이드바 접기';
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+}
+
+$('#sidebar-toggle').addEventListener('click', () => {
+  const collapsed = !document.body.classList.contains('sidebar-collapsed');
+  applySidebarCollapsed(collapsed);
+  try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch {}
+});
+
+try { applySidebarCollapsed(localStorage.getItem(SIDEBAR_KEY) === '1'); }
+catch { applySidebarCollapsed(false); }
 
 function optionPayload() {
   const lesson = productionMode === "lesson" ? selectedLesson() : null;

@@ -90,6 +90,9 @@
   --r-full: 999px;
 
   /* ---- 컨트롤 높이: 3단 ---- */
+  --sidebar-w: 226px;
+  --sidebar-w-collapsed: 68px;
+
   --h-sm: 32px;
   --h-md: 40px;
   --h-lg: 48px;
@@ -160,9 +163,9 @@ h1, h2, h3 { text-wrap: balance; }
   display: flex; gap: var(--s0); -webkit-app-region: no-drag;
 }
 .window-navigation button {
-  width: 28px; height: 28px; display: grid; place-items: center;
+  width: 24px; height: 24px; display: grid; place-items: center;
   background: transparent; border: 0; border-radius: var(--r-sm);
-  color: var(--text-2); font-size: var(--fs-xl); cursor: pointer; -webkit-app-region: no-drag;
+  color: var(--text-2); font-size: var(--fs-lg); cursor: pointer; -webkit-app-region: no-drag;
 }
 .window-navigation button:hover:not(:disabled) { background: rgba(255, 255, 255, .08); }
 .window-navigation button:disabled { opacity: .25; cursor: default; }
@@ -170,10 +173,10 @@ h1, h2, h3 { text-wrap: balance; }
 /* ============================================================================
    껍데기와 사이드바
    ========================================================================== */
-.shell { display: grid; grid-template-columns: 226px 1fr; min-height: 100vh; }
+.shell { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
 
 .sidebar {
-  position: fixed; inset: 0 auto 0 0; width: 226px; z-index: 5;
+  position: fixed; inset: 0 auto 0 0; width: var(--sidebar-w); z-index: 5;
   padding: 54px var(--s4) var(--s5);
   border-right: 1px solid var(--line); background: var(--nav);
   display: flex; flex-direction: column;
@@ -1032,8 +1035,7 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
   main { padding-left: var(--s6); padding-right: var(--s6); }
   .workspace, .edit-workspace, .voice-lab-workspace { grid-template-columns: 1fr; }
   .progress-card { position: relative; min-height: auto; }
-  .sidebar { width: 200px; }
-  .shell { grid-template-columns: 200px 1fr; }
+  :root { --sidebar-w: 200px; }
   .results-toolbar { align-items: stretch; flex-direction: column; }
   .result-filters { display: grid; grid-template-columns: repeat(5, 1fr); }
   .output-item { grid-template-columns: 42px 1fr auto; }
@@ -1111,3 +1113,67 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 }
 .polish-drop:hover { color: var(--danger); border-color: var(--dngr-edge); }
 .polish-pending-actions { display: flex; justify-content: flex-end; gap: var(--s2); }
+
+/* ============================================================================
+   사이드바 접기
+   ----------------------------------------------------------------------------
+   폭은 --sidebar-w 하나로 정해지므로, 접기는 그 값만 바꾸고 글자를 감춘다.
+   아이콘 자리는 펼침·접힘에서 같은 x좌표에 남아 메뉴가 튀어 보이지 않는다.
+   ========================================================================== */
+.brand { position: relative; }
+.brand-copy { min-width: 0; overflow: hidden; }
+.sidebar-toggle {
+  position: absolute; right: calc(var(--s2) * -1); top: 2px;
+  width: 22px; height: 22px; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text-3);
+  font-size: var(--fs-sm); line-height: 1; cursor: pointer;
+}
+.sidebar-toggle:hover { color: var(--text); border-color: var(--line-2); }
+
+.sidebar-collapsed { --sidebar-w: var(--sidebar-w-collapsed); }
+.sidebar-collapsed .sidebar { padding-left: var(--s3); padding-right: var(--s3); }
+.sidebar-collapsed .brand {
+  flex-direction: column; align-items: center; gap: var(--s2);
+  padding: 0 0 var(--s5);
+}
+.sidebar-collapsed .brand-copy { display: none; }
+.sidebar-collapsed .sidebar-toggle { position: static; }
+.sidebar-collapsed .nav-item {
+  grid-template-columns: 1fr; justify-items: center; padding: var(--s3) 0;
+}
+.sidebar-collapsed .nav-item b { display: none; }
+/* 배지는 개수가 정보라 남기되, 아이콘 위에 겹쳐 폭을 넓히지 않는다. */
+.sidebar-collapsed .nav-item em {
+  position: absolute; top: 4px; right: 6px; margin: 0;
+  min-width: 16px; height: 16px; font-size: 9px; padding: 0 var(--s1);
+}
+.sidebar-collapsed .local-card { grid-template-columns: 1fr; justify-items: center; padding: var(--s2); }
+.sidebar-collapsed .local-card-copy, .sidebar-collapsed .local-runtime { display: none; }
+
+/* ============================================================================
+   확인 항목 하나씩 지우기
+   ----------------------------------------------------------------------------
+   목록에 남아 있는 것이 곧 남은 일이다. 듣고 문제 없다고 판단한 항목은
+   그 자리에서 지워야 무엇이 남았는지가 목록만 봐도 읽힌다.
+   ========================================================================== */
+#review-findings-list li:has(> .voice-finding) {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center;
+}
+.finding-done {
+  height: var(--h-sm); padding: 0 var(--s3); flex: none;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-xs);
+}
+.finding-done:hover { color: var(--lime); border-color: var(--lime-edge); }
+.findings-cleared {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4); border: 1px solid var(--line); border-radius: var(--r-sm);
+  color: var(--text-3); font-size: var(--fs-sm);
+}
+.findings-cleared b { color: var(--lime); font-size: var(--fs-md); }
+.findings-cleared button {
+  margin-left: auto; border: 0; background: transparent; color: var(--text-3);
+  font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+.findings-cleared button:hover { color: var(--text); }

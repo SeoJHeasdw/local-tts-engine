@@ -21,11 +21,15 @@ function fixture() {
     updateVoicePageMeta(){}, formatDuration:ms=>`${ms}`, voiceFindingReason:()=>'', voiceFindingLabel:()=>'',
     summarizeVoiceFindings:()=>({total:0,title:'',tone:'warning'}), Date, Number, Math,
   });
-  vm.runInContext(controller+`;globalThis.testReview={setReviewVideo,selectReviewPage,currentReviewPage,selection:()=>reviewSelection,context:()=>pendingCandidateContext,queue:queueSelectedCandidate,save:savePendingFixes,pending:()=>pendingFixes};`,context);
+  vm.runInContext(controller+`;globalThis.testReview={setReviewVideo,selectReviewPage,currentReviewPage,selection:()=>reviewSelection,context:()=>pendingCandidateContext,queue:queueSelectedCandidate,save:savePendingFixes,pending:()=>pendingFixes,visible:visibleFindings,clear:clearFinding,cleared:()=>clearedFindings};`,context);
   const page1={number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'};
   const page2={number:2,slideId:'b',startMs:33750,endMs:50000,text:'다음 페이지'};
-  context.testReview.setReviewVideo({token:'original',name:'original.mp4',videoUrl:'file:///original.mp4',pages:[page1,page2]});
-  return {context,$,modes,calls,page1,page2};
+  const findings=[
+    {slideNumber:1,startMs:1300,endMs:33000,severity:'failed',reasons:['단어 일부 누락']},
+    {slideNumber:2,startMs:33750,endMs:50000,severity:'warning',reasons:['단어 발음 확인 필요']},
+  ];
+  context.testReview.setReviewVideo({token:'original',name:'original.mp4',videoUrl:'file:///original.mp4',pages:[page1,page2],voiceFindings:findings});
+  return {context,$,modes,calls,page1,page2,findings};
 }
 
 test('자동 권장이 없어도 재생 위치의 페이지를 직접 선택한다', () => {
@@ -140,4 +144,40 @@ test('다른 영상을 열면 이전 영상의 교체 대기가 따라가지 않
 
   context.testReview.setReviewVideo({token:'other',name:'other.mp4',videoUrl:'file:///other.mp4',pages:[]});
   assert.equal(context.testReview.pending().size,0);
+});
+
+
+test('확인 항목은 하나씩 확인 완료로 목록에서 내릴 수 있다', () => {
+  // 목록에 남아 있는 것이 곧 남은 일이다. 처리한 항목이 계속 보이면
+  // 무엇이 남았는지 목록만 봐서는 알 수 없다.
+  const {context,$,findings}=fixture();
+  assert.equal(context.testReview.visible().length,2);
+  assert.equal($('#review-finding-count').textContent,'2');
+
+  context.testReview.clear(findings[0]);
+
+  assert.equal(context.testReview.visible().length,1);
+  assert.equal(context.testReview.visible()[0].slideNumber,2);
+  assert.equal($('#review-finding-count').textContent,'1');
+});
+
+test('교체를 담으면 그 페이지의 확인 항목도 함께 내려간다', async () => {
+  const {context,$}=fixture();
+  context.testReview.selectReviewPage(context.testReview.selection()||undefined);
+  const page1={number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'};
+  context.testReview.selectReviewPage(page1);
+  await $('#review-form').listeners.submit({preventDefault(){}});
+  context.testReview.queue('token-1','후보 1');
+
+  assert.equal(context.testReview.visible().length,1,'담은 페이지의 항목이 남아 있으면 안 된다');
+  assert.equal(context.testReview.visible()[0].slideNumber,2);
+});
+
+test('다른 영상을 열면 확인 완료 표시가 따라가지 않는다', () => {
+  const {context,findings}=fixture();
+  context.testReview.clear(findings[0]);
+  assert.equal(context.testReview.cleared().size,1);
+
+  context.testReview.setReviewVideo({token:'other',name:'other.mp4',videoUrl:'file:///other.mp4',pages:[],voiceFindings:[]});
+  assert.equal(context.testReview.cleared().size,0);
 });
