@@ -24,6 +24,7 @@ import {
   presetFromManifest,
   providerForOptions,
   summarizeChecks,
+  pageVoicePatchesPlan,
   timeRangeForPages,
   assertPageReplaceable,
   pageRangeFromTimeline,
@@ -1123,6 +1124,108 @@ async function runVoiceEdit(options, outputDir) {
   return validateEditVideo(output, "voice", [video, audio], outputDir);
 }
 
+/**
+ * Apply every approved page replacement to a lecture in one pass.
+ *
+ * Applying them one at a time re-encoded the whole lecture per fix and left a
+ * file behind each time, so four flagged pages in a seventeen-minute lecture
+ * cost four full 1080p encodes and produced four videos to keep track of. One
+ * pass produces one video, and when no replacement changes a page's length the
+ * picture is stream-copied rather than re-encoded at all.
+ */
+async function runPageVoicePatchBatch(options, outputDir) {
+  const videoRecord = chosenRecord(options.videoToken, "video");
+  if (!videoRecord.timelinePath) {
+    throw new Error("페이지 음성 교체에는 기존 음성 트랙과 타임라인이 필요합니다.");
+  }
+  const requested = Array.isArray(options.patches) ? options.patches : [];
+  if (requested.length === 0) throw new Error("교체할 페이지를 선택해 주세요.");
+  if (requested.length > 40) throw new Error("한 번에 최대 40개 페이지까지 교체할 수 있습니다.");
+
+  const timeline = JSON.parse(await fs.readFile(videoRecord.timelinePath, "utf8"));
+  const videoProbe = await inspectMedia(videoRecord.path);
+  const videoDuration = Number(videoProbe.format?.duration || 0);
+  if (!videoDuration || !videoProbe.streams?.some((stream) => stream.codec_type === "audio")) {
+    throw new Error("페이지 음성 교체에는 기존 음성 트랙과 타임라인이 필요합니다.");
+  }
+
+  // ffmpeg addresses replacement audio by input position, so the position is
+  // fixed here and travels with each patch through the plan's own sorting.
+  const inputPaths = [];
+  const inputIndexFor = (file) => {
+    const existing = inputPaths.indexOf(file);
+    if (existing !== -1) return existing + 1;
+    inputPaths.push(file);
+    return inputPaths.length;
+  };
+
+  const entries = requested.map((patch) => {
+    const startPage = Number(patch.startPage);
+    const endPage = Number(patch.endPage ?? patch.startPage);
+    assertPageReplaceable(videoRecord, { startPage, endPage });
+    const audioRecord = chosenRecord(patch.audioToken, "audio");
+    const generated = audioRecord.generatedVoice;
+    if (!generated) throw new Error("선택한 목소리에 페이지 정보가 없습니다. 후보를 다시 만들어 주세요.");
+    if (Number(generated.startPage) !== startPage || Number(generated.endPage) !== endPage) {
+      throw new Error("생성한 목소리와 교체할 페이지 범위가 다릅니다. 후보를 다시 만들어 주세요.");
+    }
+    const target = timeRangeForPages(timeline.entries, startPage, endPage);
+    return {
+      startPage,
+      endPage,
+      targetStart: target.start,
+      targetEnd: target.end,
+      sourceStart: Number(generated.sourceStartMs) / 1000,
+      sourceEnd: Number(generated.sourceEndMs) / 1000,
+      input: inputIndexFor(audioRecord.path),
+    };
+  });
+
+  const matchAudio = options.durationPolicy === "match-audio";
+  const plan = pageVoicePatchesPlan({ videoDuration, matchAudio, patches: entries });
+
+  const output = path.join(outputDir, `${options.name}.mp4`);
+  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
+    "-y", "-hide_banner", "-nostats",
+    "-i", videoRecord.path,
+    ...inputPaths.flatMap((file) => ["-i", file]),
+    "-filter_complex", plan.filter,
+    "-map", plan.videoOutput, "-map", plan.audioOutput,
+    ...(plan.videoUnchanged
+      ? ["-c:v", "copy"]
+      : ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"]),
+    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", output,
+  ]);
+
+  // Each patch shifts everything after it, so folding them back-to-front keeps
+  // the earlier patches' original timeline coordinates valid.
+  let nextTimeline = timeline;
+  for (const patch of [...plan.patches].reverse()) {
+    nextTimeline = patchedTimeline(
+      nextTimeline,
+      Math.round(patch.targetStart * 1000),
+      Math.round(patch.targetEnd * 1000),
+      Math.round(patch.replacementDuration * 1000),
+    );
+  }
+  const timelinePath = path.join(outputDir, "timeline.json");
+  await fs.writeFile(timelinePath, `${JSON.stringify(nextTimeline, null, 2)}\n`, "utf8");
+
+  const report = await validateEditVideo(
+    output,
+    "voice-pages",
+    [videoRecord.path, ...inputPaths],
+    outputDir,
+  );
+  report.timelinePath = timelinePath;
+  report.videoReencoded = !plan.videoUnchanged;
+  report.pages = entries
+    .map((entry) => ({ startPage: entry.startPage, endPage: entry.endPage }))
+    .sort((left, right) => left.startPage - right.startPage);
+  await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return report;
+}
+
 async function runVoiceBatchEdit(options, outputDir) {
   const items = Array.isArray(options.videoItems) && options.videoItems.length
     ? options.videoItems
@@ -1237,6 +1340,7 @@ async function runVideoEdit(options) {
   else if (options.operation === "mute-region") report = await runMuteEdit(options, outputDir);
   else if (options.operation === "replace-region") report = await runRegionReplaceEdit(options, outputDir);
   else if (options.operation === "voice") report = await runVoiceBatchEdit(options, outputDir);
+  else if (options.operation === "voice-pages") report = await runPageVoicePatchBatch(options, outputDir);
   else throw new Error("지원하지 않는 편집 작업입니다.");
   if (activeJob !== job) return;
   job.state = "done";
@@ -1604,7 +1708,7 @@ function registerIpc() {
       throw new Error("이미 실행 중인 작업이 있습니다.");
     }
     requireRuntimeTool("ffmpeg", "FFmpeg");
-    const operation = ["merge", "trim", "voice", "voice-candidates", "mute-region", "replace-region"].includes(rawOptions.operation)
+    const operation = ["merge", "trim", "voice", "voice-pages", "voice-candidates", "mute-region", "replace-region"].includes(rawOptions.operation)
       ? rawOptions.operation
       : null;
     if (!operation) throw new Error("편집 종류를 선택해 주세요.");

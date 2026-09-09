@@ -6,7 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { pageVoicePatchPlan, patchedTimeline, timeRangeForPages } from "./pipeline-utils.mjs";
+import {
+  pageVoicePatchPlan,
+  pageVoicePatchesPlan,
+  patchedTimeline,
+  timeRangeForPages,
+} from "./pipeline-utils.mjs";
 
 const run = promisify(execFile);
 
@@ -155,6 +160,141 @@ test("마지막 페이지를 교체해도 뒤 구간 없이 그래프가 성립�
   assert.doesNotMatch(plan.filter, /\[vpost\]/);
   const output = await patch(workspace, plan, video, voice);
   assert.ok(Math.abs(await ffprobeDuration(output) - 6) < 0.25);
+});
+
+/** Run a batched plan, stream-copying the picture when the plan says it is untouched. */
+async function patchAll(directory, plan, video, voices, name) {
+  const output = path.join(directory, name);
+  await run("ffmpeg", [
+    "-y", "-hide_banner", "-loglevel", "error",
+    "-i", video, ...voices.flatMap((voice) => ["-i", voice]),
+    "-filter_complex", plan.filter,
+    "-map", plan.videoOutput, "-map", plan.audioOutput,
+    ...(plan.videoUnchanged
+      ? ["-c:v", "copy"]
+      : ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]),
+    "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", output,
+  ]);
+  return output;
+}
+
+/** Hash of the video stream alone, to prove the picture was carried through untouched. */
+async function videoStreamHash(file) {
+  const { stdout } = await run("ffmpeg", [
+    "-v", "error", "-i", file, "-map", "0:v:0", "-c", "copy", "-f", "hash", "-",
+  ]);
+  return stdout;
+}
+
+test("여러 페이지를 한 번에 교체해도 각 구간에만 새 목소리가 들어간다", async () => {
+  // Fixing pages one at a time re-encoded the whole lecture once per page. The
+  // batch has to land every patch in its own span and leave the gaps alone.
+  const video = await makeVideo(path.join(workspace, "multi.mp4"), { seconds: 8 });
+  const first = await makeVoice(path.join(workspace, "multi-voice-1.wav"), { seconds: 1 });
+  const second = await makeVoice(path.join(workspace, "multi-voice-2.wav"), { seconds: 1 });
+  const plan = pageVoicePatchesPlan({
+    videoDuration: 8,
+    matchAudio: false,
+    patches: [
+      { targetStart: 2, targetEnd: 3, sourceStart: 0, sourceEnd: 1, input: 1 },
+      { targetStart: 5, targetEnd: 6, sourceStart: 0, sourceEnd: 1, input: 2 },
+    ],
+  });
+  const output = await patchAll(workspace, plan, video, [first, second], "multi-out.mp4");
+
+  assert.ok(Math.abs(await ffprobeDuration(output) - 8) < 0.25);
+  const patchedOne = await meanVolume(output, 2.2, 0.6);
+  const patchedTwo = await meanVolume(output, 5.2, 0.6);
+  const gap = await meanVolume(output, 3.6, 0.8);
+  const head = await meanVolume(output, 0.4, 1.2);
+  const tail = await meanVolume(output, 6.6, 1.0);
+  assert.ok(patchedOne > gap + 8, `첫 구간에 새 목소리가 없다 (${patchedOne} vs ${gap})`);
+  assert.ok(patchedTwo > gap + 8, `둘째 구간에 새 목소리가 없다 (${patchedTwo} vs ${gap})`);
+  assert.ok(patchedOne > head + 8, `앞 구간이 오염됐다 (${patchedOne} vs ${head})`);
+  assert.ok(patchedTwo > tail + 8, `뒤 구간이 오염됐다 (${patchedTwo} vs ${tail})`);
+  assert.ok(Math.abs(head - gap) < 6, `사이 구간이 원본과 달라졌다 (${gap} vs ${head})`);
+});
+
+test("화면 길이를 유지하면 영상 스트림을 다시 굽지 않고 그대로 넘긴다", async () => {
+  // The picture is being cut apart and glued back together unchanged, so
+  // re-encoding it costs minutes of 1080p x264 and changes nothing. The plan
+  // has to say so, and the copied stream has to be bit-identical.
+  const video = await makeVideo(path.join(workspace, "copy.mp4"), { seconds: 8 });
+  const voice = await makeVoice(path.join(workspace, "copy-voice.wav"), { seconds: 1 });
+  const plan = pageVoicePatchesPlan({
+    videoDuration: 8,
+    matchAudio: false,
+    patches: [
+      { targetStart: 2, targetEnd: 3, sourceStart: 0, sourceEnd: 1, input: 1 },
+      { targetStart: 5, targetEnd: 6, sourceStart: 0, sourceEnd: 1, input: 1 },
+    ],
+  });
+
+  assert.equal(plan.videoUnchanged, true);
+  assert.equal(plan.videoOutput, "0:v:0");
+  assert.doesNotMatch(plan.filter, /\[0:v]/);
+
+  const output = await patchAll(workspace, plan, video, [voice], "copy-out.mp4");
+  assert.equal(await videoStreamHash(output), await videoStreamHash(video));
+});
+
+test("새 음성이 길면 영상을 다시 굽고 늘어난 만큼 전체가 길어진다", async () => {
+  const video = await makeVideo(path.join(workspace, "stretch.mp4"), { seconds: 8 });
+  const first = await makeVoice(path.join(workspace, "stretch-1.wav"), { seconds: 2 });
+  const second = await makeVoice(path.join(workspace, "stretch-2.wav"), { seconds: 2 });
+  const plan = pageVoicePatchesPlan({
+    videoDuration: 8,
+    matchAudio: true,
+    patches: [
+      { targetStart: 2, targetEnd: 3, sourceStart: 0, sourceEnd: 2, input: 1 },
+      { targetStart: 5, targetEnd: 6, sourceStart: 0, sourceEnd: 2, input: 2 },
+    ],
+  });
+
+  assert.equal(plan.videoUnchanged, false);
+  assert.equal(plan.videoOutput, "[vout]");
+  // pre, mid0, gap, mid1, post
+  assert.match(plan.filter, /concat=n=5:v=1:a=0\[vout]/);
+
+  const output = await patchAll(workspace, plan, video, [first, second], "stretch-out.mp4");
+  assert.ok(Math.abs(await ffprobeDuration(output) - 10) < 0.35);
+});
+
+test("겹치는 페이지 구간은 조용히 재배열하지 않고 거부한다", () => {
+  assert.throws(() => pageVoicePatchesPlan({
+    videoDuration: 8,
+    patches: [
+      { targetStart: 2, targetEnd: 5, sourceStart: 0, sourceEnd: 1, input: 1 },
+      { targetStart: 4, targetEnd: 6, sourceStart: 0, sourceEnd: 1, input: 2 },
+    ],
+  }), /겹칩니다/);
+});
+
+test("여러 구간을 교체해도 타임라인은 뒤에서부터 접어 원래 좌표를 지킨다", () => {
+  // Each patch shifts everything after it, so applying them back-to-front keeps
+  // the earlier patches' original coordinates valid.
+  const timeline = {
+    totalMs: 8_000,
+    entries: [
+      { slideNumber: 1, startMs: 0, endMs: 2_000, transitionAtMs: 2_000, speechStartMs: 100, speechEndMs: 1_900, alignment: { words: [] } },
+      { slideNumber: 2, startMs: 2_000, endMs: 3_000, transitionAtMs: 3_000, speechStartMs: 2_100, speechEndMs: 2_900, alignment: { words: [] } },
+      { slideNumber: 3, startMs: 3_000, endMs: 5_000, transitionAtMs: 5_000, speechStartMs: 3_100, speechEndMs: 4_900, alignment: { words: [] } },
+      { slideNumber: 4, startMs: 5_000, endMs: 6_000, transitionAtMs: 6_000, speechStartMs: 5_100, speechEndMs: 5_900, alignment: { words: [] } },
+      { slideNumber: 5, startMs: 6_000, endMs: 8_000, transitionAtMs: 8_000, speechStartMs: 6_100, speechEndMs: 7_900, alignment: { words: [] } },
+    ],
+  };
+  const patches = [
+    { startMs: 2_000, endMs: 3_000, replacementMs: 2_000 },
+    { startMs: 5_000, endMs: 6_000, replacementMs: 2_000 },
+  ];
+  let patched = timeline;
+  for (const patch of [...patches].reverse()) {
+    patched = patchedTimeline(patched, patch.startMs, patch.endMs, patch.replacementMs);
+  }
+  assert.equal(patched.totalMs, 10_000);
+  assert.deepEqual(patched.entries.map((entry) => [entry.startMs, entry.endMs]), [
+    [0, 2_000], [2_000, 4_000], [4_000, 6_000], [6_000, 8_000], [8_000, 10_000],
+  ]);
 });
 
 test("교체한 길이만큼 이후 타임라인이 밀린다", () => {
