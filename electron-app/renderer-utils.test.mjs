@@ -6,6 +6,7 @@ import {
   findingExcerpt,
   findingSeek,
   compactOutputLabel,
+  outputRowTitle,
   outputGroupTitle,
   splitOutputTitle,
   groupOutputs,
@@ -267,6 +268,33 @@ test("묶음 제목은 챕터까지만 적는다", () => {
     items: [{ name: "studio-1-ch02-lessons-ch02-l01", displayName: "CH02 L01 · Agent Loop" }],
   };
   assert.equal(outputGroupTitle(group), "CH02");
+});
+
+test("최근 결과는 Finder에서 보게 될 파일 이름을 그대로 적는다", () => {
+  const item = {
+    name: "studio-1-ch02-lessons-ch02-l04",
+    displayName: "CH02 L04 · 그래서 어떻게 만들라는 건가",
+    fileName: "CH02 L04 · 그래서 어떻게 만들라는 건가 - 영어 보정 (최종).mp4",
+  };
+  assert.equal(outputRowTitle(item), "CH02 L04 · 그래서 어떻게 만들라는 건가 - 영어 보정 (최종).mp4");
+  // 묶음 안에서는 머리글이 이미 챕터를 말한다. 확장자는 그래도 남는다 —
+  // 그 자리에서 고쳐 쓸 이름이 무엇인지가 확장자까지여야 하기 때문이다.
+  assert.equal(
+    outputRowTitle(item, { compact: true }),
+    "L04 · 그래서 어떻게 만들라는 건가 - 영어 보정 (최종).mp4",
+  );
+});
+
+test("파일을 찾지 못한 결과도 이름 없이 남지 않는다", () => {
+  const item = { name: "studio-2-ch01-full", displayName: "CH01 전체" };
+  assert.equal(outputRowTitle(item), "CH01 전체");
+  assert.equal(outputRowTitle(item, { compact: true }), "CH01 전체");
+});
+
+test("파일 이름으로도 결과를 찾는다", () => {
+  const items = [{ name: "studio-1", displayName: "CH02 L04", fileName: "CH02 L04 - 영어 보정.mp4" }];
+  assert.equal(filterOutputItems(items, "영어 보정").length, 1);
+  assert.equal(filterOutputItems(items, "없는말").length, 0);
 });
 
 test("편에 속하지 않는 결과는 이름을 그대로 쓴다", () => {

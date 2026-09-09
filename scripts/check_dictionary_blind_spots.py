@@ -62,7 +62,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     rows = []
+    declared = []
     for item in course_pronunciation_dictionary(args.source_project):
+        # 읽는 법을 표기로 선언한 항목은 이 관문이 아니라 그 목록으로 검수한다.
+        # 선언한 표기가 아닌 것은 거리와 무관하게 걸리므로 사각지대가 없다.
+        # 여기서 세지 않으면 감시받는 항목과 아예 보이지 않는 항목이 구분되지
+        # 않는다 — 문장 안의 영어 용어는 to가 영어라 이 표에 오른 적이 없었다.
+        if item.get("comparisonReading"):
+            readings = [str(item["comparisonReading"]),
+                        *(str(value) for value in item.get("comparisonVariants") or ())]
+            declared.append((str(item["from"]), readings))
+            continue
         if item.get("literal"):
             continue
         reading = str(item["to"])
@@ -91,7 +101,11 @@ def main(argv: list[str] | None = None) -> int:
     rows.sort(key=lambda row: (row["distance"], -row["jamo"]))
     blind = [row for row in rows if row["verdict"] == "사각지대"]
     print(f"사전 항목 {len(rows)}개 중, 음절 하나가 사라져도 관문을 통과하는 것 "
-          f"{len(blind)}개 (일치 관문 {PRONUNCIATION_MATCH_DISTANCE})\n")
+          f"{len(blind)}개 (일치 관문 {PRONUNCIATION_MATCH_DISTANCE})")
+    print(f"표기를 선언해 거리 관문 밖에서 검수하는 항목 {len(declared)}개 — 사각지대 없음")
+    for source, readings in declared:
+        print(f"    {source[:22]:22} {' / '.join(readings)}")
+    print()
     print(f"{'from':22} {'to':20} {'자모':>4} {'음절 하나 빠지면':16} {'거리':>6}")
     for row in blind:
         print(f"{row['from'][:22]:22} {row['to'][:20]:20} {row['jamo']:>4} "

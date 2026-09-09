@@ -18,7 +18,10 @@ export function makeJobName(now = new Date(), seconds = null) {
   return `studio-${stamp}-${length}`;
 }
 
-export function displayVideoFileStem(value) {
+// 파일 이름으로 쓸 수 없는 글자를 골라낸다. 남는 것이 없으면 빈 문자열이다.
+// 무엇으로 대신할지는 부르는 쪽이 정한다 — 자동으로 짓는 이름과 사람이 직접
+// 친 이름은 비었을 때 할 일이 다르다.
+export function sanitizeFileStem(value) {
   const replacements = {
     "<": "＜",
     ">": "＞",
@@ -30,16 +33,33 @@ export function displayVideoFileStem(value) {
     "?": "？",
     "*": "＊",
   };
-  const stem = String(value || "완성 영상")
+  return String(value ?? "")
     .normalize("NFC")
-    .replace(/\.mp4$/i, "")
     .replace(/[<>:"/\\|?*]/g, (character) => replacements[character])
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[. ]+$/g, "")
-    .slice(0, 180);
-  return stem || "완성 영상";
+    .slice(0, 180)
+    .trim();
+}
+
+export function displayVideoFileStem(value) {
+  return sanitizeFileStem(String(value || "완성 영상").replace(/\.mp4$/i, "")) || "완성 영상";
+}
+
+// 이름 바꾸기는 사람이 친 글자를 그대로 받는다. 확장자까지 지울 수 있게 두면
+// 그 파일은 다음에 열리지 않으므로, 원래 확장자는 무슨 일이 있어도 지킨다.
+// 화면에는 확장자를 붙여 보여 주므로 그대로 두고 고친 경우도 받아 준다.
+export function renamedFileName(currentName, rawName) {
+  const extension = path.extname(String(currentName || ""));
+  const typed = String(rawName ?? "").normalize("NFC").trim();
+  const base = extension && typed.toLocaleLowerCase("ko-KR").endsWith(extension.toLocaleLowerCase("ko-KR"))
+    ? typed.slice(0, -extension.length)
+    : typed;
+  const stem = sanitizeFileStem(base);
+  if (!stem) throw new Error("파일 이름을 입력하세요.");
+  return `${stem}${extension}`;
 }
 
 export function nextDisplayVideoFileName(title, existingNames = []) {
@@ -234,9 +254,12 @@ export function voiceQualityFindings(manifest = {}) {
         endMs: onlyEnglish ? clipStart + Math.max(...englishChecks.map(check => check.startMs + check.durationMs)) : onlyPauses ? clipStart + Math.max(...pauses.map((check) => check.endMs)) : Number(timing.endMs || timing.startMs || 0),
         severity,
         reasons: reasons.length ? reasons : ["자동 음성 검수 점수 미달"],
+        // 어떤 표기로 들렸는지가 곧 판단 근거다. 지정한 발음과 다르게 들렸다면
+        // 그 표기를 함께 적어야, 읽어 보지 않고도 무엇을 확인할지 알 수 있다.
         terms: [...(selected.pronunciationChecks || []), ...pauses]
           .filter((check) => check?.status && check.status !== "ok")
-          .map((check) => ({ term: String(check.term || ""), status: String(check.status) })),
+          .map((check) => ({ term: String(check.term || ""), status: String(check.status),
+            ...(check.heardReading ? { heard: String(check.heardReading) } : {}) })),
         expectedText: String(selected.expectedText || ""),
         recognizedText: String(selected.recognizedText || ""),
         ...(selected.contentChecks?.length ? {contentChecks: selected.contentChecks} : {}),

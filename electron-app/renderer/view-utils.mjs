@@ -50,7 +50,7 @@ export function outputKind(item = {}) {
 export function filterOutputItems(items = [], query = "", filter = "all") {
   const needle = String(query || "").trim().toLocaleLowerCase("ko-KR");
   return items.filter((item) => {
-    const matchesQuery = !needle || [item.displayName, item.name, item.operation, item.root]
+    const matchesQuery = !needle || [item.fileName, item.displayName, item.name, item.operation, item.root]
       .some((value) => String(value || "").toLocaleLowerCase("ko-KR").includes(needle));
     if (!matchesQuery) return false;
     if (filter === "pending") return item.review?.status !== "approved";
@@ -80,7 +80,10 @@ export function voiceFindingLabel(finding = {}) {
 export function voiceFindingReason(finding = {}) {
   const omissions = omissionEvidence(finding);
   if (omissions.length) return `받아쓰기에서 구절 누락: ${omissions.map(check => `“${check.text}”`).join(', ')}`;
-  const terms = (finding.terms || []).map((item) => item.term).filter(Boolean);
+  // 지정한 발음과 다르게 들린 항목은 무엇으로 들렸는지가 확인의 전부다.
+  const terms = (finding.terms || [])
+    .map((item) => (item.heard ? `${item.term} → ${item.heard}로 들림` : item.term))
+    .filter(Boolean);
   const reasons = (finding.reasons || []).filter(Boolean);
   const base = reasons.join(", ") || "자동 음성 검수 점수 미달";
   return terms.length ? `${base} · ${terms.join(", ")}` : base;
@@ -288,6 +291,21 @@ export function compactOutputLabel(item = {}) {
   const { unit: found, title } = splitOutputTitle(item.displayName, unit);
   if (!found) return item.displayName || item.name || "";
   return title ? `${found} · ${title}` : found;
+}
+
+// 목록에 적히는 이름은 Finder에서 보게 될 이름과 같아야 한다. 확장자까지
+// 함께 적어야 그 줄에서 바로 고쳐 쓸 이름이 무엇인지 헷갈리지 않는다.
+// 묶음 안에서는 머리글이 이미 챕터를 말하므로 되풀이되는 앞부분만 덜어 낸다.
+export function outputRowTitle(item = {}, { compact = false } = {}) {
+  const fileName = String(item.fileName || "");
+  if (!fileName) return compact ? compactOutputLabel(item) : (item.displayName || item.name || "");
+  if (!compact) return fileName;
+  const dot = fileName.lastIndexOf(".");
+  const extension = dot > 0 ? fileName.slice(dot) : "";
+  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
+  const { unit, title } = splitOutputTitle(stem, outputUnitLabel(item));
+  if (!unit) return fileName;
+  return `${title ? `${unit} · ${title}` : unit}${extension}`;
 }
 
 export function outputGroupTitle(group = {}) {

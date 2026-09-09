@@ -241,6 +241,28 @@ test('실제 L04 행은 누락 구절·미해결 횟수를 보이고 해당 문�
   assert.match($('#polish-diff-note').textContent,/구절 누락 의심 · 4회 생성 후 미해결/);
 });
 
+test('확인 항목의 재생성은 그 페이지로 후보 생성을 바로 건다', async () => {
+  const {context,$,calls,modes,findings}=fixture();
+  const row=context.testReview.renderVoiceFindingRow(findings[1]);
+  // 확인 다음에 재생성이 선다. 넘어가기와 다시 만들기가 나란히 있어야 한다.
+  const [,,done,again]=row.children[1].children;
+  assert.equal(done.textContent,'확인');
+  assert.equal(again.textContent,'재생성');
+  await again.listeners.click();
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].operation,'voice-candidates');
+  assert.equal(calls[0].startPage,2);
+  assert.equal(calls[0].endPage,2);
+  // 몇 번이고 다시 누를 수 있다. 후보가 별로면 그 자리에서 또 만든다.
+  await again.listeners.click();
+  assert.equal(calls.length,2);
+  assert.equal(calls[1].startPage,2);
+  // 구간 탭에 있었더라도 재생성 탭으로 되돌리고 시작한다.
+  modes[1].listeners.click();
+  await again.listeners.click();
+  assert.equal(calls.at(-1).operation,'voice-candidates');
+});
+
 function longReview(context) {
   context.testReview.setReviewVideo({token:'long',name:'lesson.mp4',videoUrl:'file:///lesson.mp4',durationMs:400000,pages:[]});
 }

@@ -184,12 +184,43 @@ def merge_pronunciation_dictionaries(
                 or not re.fullmatch(r"[가-힣 ]+", str(item.get("comparisonReading", "")))
             ):
                 raise ValueError("문장 안의 영어 용어는 literal과 영어 to, 한글 comparisonReading이 필요합니다.")
+            variants = item.get("comparisonVariants")
+            if variants is not None and (
+                not isinstance(variants, list)
+                or not item.get("comparisonReading")
+                or any(not re.fullmatch(r"[가-힣 ]+", str(value)) for value in variants)
+            ):
+                raise ValueError("comparisonVariants는 comparisonReading이 있는 항목의 한글 표기 목록이어야 합니다.")
             if source not in merged:
                 order.append(source)
             merged[source] = {**item, "from": source, "to": replacement}
     # Longest-first prevents Agent from consuming the tail of Multi-Agent.
     position = {source: index for index, source in enumerate(order)}
     return sorted(merged.values(), key=lambda item: (-len(item["from"]), position[item["from"]]))
+
+
+def declared_readings(term: str, dictionary: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Return every Korean spelling that counts as hearing ``term`` correctly.
+
+    A term whose reading a person decided is not a term whose reading may drift,
+    but the transcript still has genuine spelling freedom: an English sound
+    written in Hangul comes back more than one way, and Anthropic's θ was
+    measured on this course as both 앤스로픽 and 앤트로픽. A distance gate cannot
+    tell those apart from a real misreading — 앤스로픽 sits exactly as far from
+    the correct 앤트로픽 as from the wrong 안쓰로픽 — so the entry lists the
+    spellings it accepts instead of a threshold guessing which single letter was
+    a spelling difference and which was the reader saying something else.
+
+    An entry with no declared reading is not judged this way; it keeps the
+    tolerant distance gate that ASR number and acronym spellings need.
+    """
+    readings: list[str] = []
+    for item in merge_pronunciation_dictionaries(dictionary):
+        if str(item.get("to", "")) != term or not item.get("comparisonReading"):
+            continue
+        readings.append(str(item["comparisonReading"]))
+        readings.extend(str(value) for value in item.get("comparisonVariants") or ())
+    return tuple(dict.fromkeys(readings))
 
 
 def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:

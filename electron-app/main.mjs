@@ -38,6 +38,7 @@ import {
   pageRangeFromTimeline,
   videoTimelineCandidates,
   videoTimelineFileName,
+  renamedFileName,
   voiceQualityFindings,
   withOutputReview,
 } from "./pipeline-utils.mjs";
@@ -435,6 +436,17 @@ async function findVideo(renderDir, name) {
   })));
   dated.sort((left, right) => left.at - right.at || left.item.localeCompare(right.item));
   return path.join(renderDir, dated.at(-1).item);
+}
+
+// 결과 폴더의 영상 이름을 Finder에서 바꾸는 일은 흔하다. 기록해 둔 경로와
+// 글자가 다르다고 남이 되면, 그 영상의 확인 항목과 승인 표시가 통째로
+// 사라진다. 적어 둔 파일이 더는 없고 같은 폴더의 영상을 연 것이라면,
+// 이름만 바뀐 바로 그 영상이다.
+async function reportDescribesVideo(reportVideoPath, videoPath) {
+  const recorded = path.resolve(String(reportVideoPath || ""));
+  if (recorded === videoPath) return true;
+  if (path.dirname(recorded) !== path.dirname(videoPath)) return false;
+  return !await safeStat(recorded);
 }
 
 async function publishedVideoNames(root) {
@@ -845,7 +857,7 @@ async function registerSelected(paths, kind, extras = []) {
         path.join(captionRoot, path.basename(path.dirname(value.path)), "validation-report.json")];
       for (const reportPath of reports) {
         const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
-        if (report?.videoPath && path.resolve(report.videoPath) === value.path) {
+        if (report?.videoPath && await reportDescribesVideo(report.videoPath, value.path)) {
           value.voiceFindings = report.voiceFindings || [];
           // 확인 완료 표시는 결과에 적혀 있다. 다시 열어도 그대로 남아야 한다.
           value.clearedFindings = clearedFindingKeys(report);
@@ -1580,6 +1592,10 @@ async function safeStat(file) {
   try { return await fs.stat(file); } catch { return null; }
 }
 
+async function existingFile(file) {
+  return file && await safeStat(file) ? file : null;
+}
+
 async function listDirectories(root) {
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   return entries.filter((item) => item.isDirectory() && /^[a-z0-9][a-z0-9-]*$/.test(item.name));
@@ -1601,6 +1617,11 @@ async function resolveOutputFile(target) {
     const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
     file = await safeStat(file) ? file : report?.videoPath || report?.audioPath || file;
   }
+  // 이름이 바뀐 영상은 적어 둔 경로에 없다. 폴더에 그 영상이 그대로 있는데도
+  // 열 수 없다고 말하지 않는다.
+  if (!await safeStat(file) && ["render", "edit"].includes(target.root)) {
+    file = await findVideo(directory, target.name) || file;
+  }
   return { directory, file: await safeStat(file) ? file : null };
 }
 
@@ -1612,7 +1633,7 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
     const reportPath = path.join(dir, "validation-report.json");
     const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
     const videoPath = await findVideo(path.join(studio.videoOutputRoot, entry.name), entry.name)
-      || report?.videoPath
+      || await existingFile(report?.videoPath)
       || await findVideo(dir, entry.name);
     if (!videoPath && !report) continue;
     result.push({
@@ -1632,6 +1653,7 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
       voiceFindings: report?.voiceFindings || [],
       review: report?.review || null,
       path: videoPath || dir,
+      fileName: videoPath ? path.basename(videoPath) : null,
     });
   }
   const dayEntries = await fs.readdir(studio.ttsOutputRoot, { withFileTypes: true }).catch(() => []);
@@ -1659,6 +1681,7 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
         voiceFindings: report.voiceFindings || [],
         review: report.review || null,
         path: report.audioPath || dir,
+        fileName: report.audioPath ? path.basename(report.audioPath) : null,
       });
     }
   }
@@ -1685,6 +1708,7 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
         total: report.summary?.total ?? null,
         review: report.review || null,
         path: report.audioPath,
+        fileName: path.basename(report.audioPath),
       });
     }
   }
@@ -1696,6 +1720,7 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
       const report = await fs.readFile(path.join(dir, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
       if (!report) continue;
       const stat = await safeStat(dir);
+      const videoPath = await existingFile(report.videoPath) || await findVideo(dir, entry.name);
       result.push({
         key: `${storeId}:edit:${dayEntry.name}:${entry.name}`,
         store: storeId,
@@ -1712,7 +1737,8 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
         passed: report.summary?.passed ?? null,
         total: report.summary?.total ?? null,
         review: report.review || null,
-        path: report.videoPath || dir,
+        path: videoPath || dir,
+        fileName: videoPath ? path.basename(videoPath) : null,
       });
     }
   }
@@ -1754,15 +1780,21 @@ function resolveOutputTarget(target, studio) {
   return directory;
 }
 
+// 검증 기록은 다음에 열 때의 유일한 근거다. 쓰다 만 파일이 남으면 그 결과는
+// 통째로 읽히지 않으므로, 옆에 다 쓰고 나서 자리를 바꾼다.
+async function writeReport(reportPath, report, tag) {
+  const temporary = `${reportPath}.${tag}-${process.pid}.tmp`;
+  await fs.writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  await fs.rename(temporary, reportPath);
+  return report;
+}
+
 async function setOutputReview(target, status, studio) {
   const directory = resolveOutputTarget(target, studio);
   const reportPath = path.join(directory, "validation-report.json");
   const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
   if (!report) throw new Error("자동 검증 기록이 있는 결과만 청취 승인할 수 있습니다.");
-  const reviewed = withOutputReview(report, status);
-  const temporary = `${reportPath}.review-${process.pid}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(reviewed, null, 2)}\n`, "utf8");
-  await fs.rename(temporary, reportPath);
+  const reviewed = await writeReport(reportPath, withOutputReview(report, status), "review");
   return reviewed.review;
 }
 
@@ -1771,11 +1803,78 @@ async function setClearedFindings(target, keys, studio) {
   const reportPath = path.join(directory, "validation-report.json");
   const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
   if (!report) throw new Error("자동 검증 기록이 있는 결과만 확인 표시를 남길 수 있습니다.");
-  const saved = withClearedFindings(report, keys);
-  const temporary = `${reportPath}.cleared-${process.pid}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(saved, null, 2)}\n`, "utf8");
-  await fs.rename(temporary, reportPath);
-  return clearedFindingKeys(saved);
+  return clearedFindingKeys(await writeReport(reportPath, withClearedFindings(report, keys), "cleared"));
+}
+
+// 영상 하나만 바꿔 부르면 이름을 나눠 갖던 타임라인이 뒤에 남는다. 그러면
+// 다음 검수에서 페이지를 잃으므로, 이름을 함께 쓰던 곁 파일도 같이 옮긴다.
+async function renameMediaFile(file, rawName) {
+  const directory = path.dirname(file);
+  const previous = path.basename(file);
+  const next = renamedFileName(previous, rawName);
+  if (next === previous) return file;
+  const target = path.join(directory, next);
+  if (await safeStat(target)) throw new Error("같은 이름의 파일이 이미 있습니다.");
+  const previousStem = path.basename(previous, path.extname(previous));
+  const nextStem = path.basename(next, path.extname(next));
+  await fs.rename(file, target);
+  for (const entry of await fs.readdir(directory).catch(() => [])) {
+    if (entry === next || !entry.startsWith(`${previousStem}.`)) continue;
+    await fs.rename(path.join(directory, entry), path.join(directory, `${nextStem}${entry.slice(previousStem.length)}`))
+      .catch(() => {});
+  }
+  return target;
+}
+
+// 기록이 파일을 가리키고 있었다면 옮긴 자리를 함께 적어 둔다. 화면에 뜨는
+// 이름도 파일 이름을 따라간다 — 둘이 다르면 어느 쪽이 이 영상인지 알 수 없다.
+async function repointReport(directory, previous, next) {
+  return repointReportFile(path.join(directory, "validation-report.json"), previous, next);
+}
+
+async function repointReportFile(reportPath, previous, next) {
+  const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
+  if (!report) return null;
+  const updated = { ...report, displayName: path.basename(next, path.extname(next)) };
+  for (const key of ["videoPath", "audioPath"]) {
+    if (report[key] && path.resolve(report[key]) === previous) updated[key] = next;
+  }
+  return writeReport(reportPath, updated, "rename");
+}
+
+async function renameOutput(target, rawName, studio) {
+  resolveOutputTarget(target, studio);
+  const { directory, file } = await resolveOutputFile(target);
+  if (!file) throw new Error("이름을 바꿀 파일을 찾지 못했습니다.");
+  const renamed = await renameMediaFile(file, rawName);
+  await repointReport(directory, file, renamed);
+  return { fileName: path.basename(renamed), path: renamed };
+}
+
+// 지우기는 되돌릴 수 있어야 한다. 두 시간을 들인 결과를 한 번의 오조작으로
+// 잃지 않도록, 먼저 물어보고 그다음에도 삭제가 아니라 휴지통으로 보낸다.
+async function deleteOutput(target, studio) {
+  const directory = resolveOutputTarget(target, studio);
+  if (!await safeStat(directory)) throw new Error("이미 없는 결과입니다.");
+  // 강의 결과는 작업 폴더와 완성 영상 폴더로 나뉘어 있다. 한쪽만 버리면 목록
+  // 에서는 사라졌는데 영상은 남아, 지웠는지 아닌지를 알 수 없는 상태가 된다.
+  const store = outputStoreForTarget(target, studio);
+  const directories = [directory];
+  if (target.root === "render") {
+    const published = path.join(store.videoOutputRoot, target.name);
+    if (isInside(store.videoOutputRoot, published) && await safeStat(published)) directories.push(published);
+  }
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: "warning",
+    buttons: ["휴지통으로 보내기", "취소"],
+    defaultId: 1,
+    cancelId: 1,
+    message: "이 결과를 휴지통으로 보낼까요?",
+    detail: `${path.basename(directory)} 폴더 ${directories.length}곳의 영상·음성·검수 기록이 함께 들어갑니다. Finder의 휴지통에서 되돌릴 수 있습니다.`,
+  });
+  if (response !== 0) return false;
+  for (const item of directories) await shell.trashItem(item);
+  return true;
 }
 
 function registerIpc() {
@@ -1887,6 +1986,36 @@ function registerIpc() {
     guard(event);
     const settings = await readAppSettings();
     return setOutputReview(target, status, runtimePaths(settings.paths));
+  });
+
+  ipcMain.handle("studio:rename-output", async (event, target, name) => {
+    guard(event);
+    const settings = await readAppSettings();
+    return renameOutput(target, name, runtimePaths(settings.paths));
+  });
+
+  ipcMain.handle("studio:delete-output", async (event, target) => {
+    guard(event);
+    const settings = await readAppSettings();
+    return deleteOutput(target, runtimePaths(settings.paths));
+  });
+
+  // 다듬기에서 여는 영상은 결과 목록을 거치지 않고 고른 파일일 수도 있다.
+  // 이름은 그 파일에 붙은 것이므로, 결과인지 아닌지와 무관하게 바꿀 수 있다.
+  ipcMain.handle("studio:rename-video", async (event, token, name) => {
+    guard(event);
+    const record = chosenRecord(token, "video");
+    const previous = record.path;
+    const renamed = await renameMediaFile(previous, name);
+    // 완성 강의 영상은 작업 폴더의 기록이 가리킨다. 영상 옆에 기록이 없을 수도
+    // 있으므로, 이 영상을 자기 것이라고 말한 기록까지 함께 맞춘다.
+    for (const reportPath of new Set([path.join(path.dirname(renamed), "validation-report.json"), record.reportPath].filter(Boolean))) {
+      await repointReportFile(reportPath, previous, renamed);
+    }
+    record.path = renamed;
+    record.name = path.basename(renamed);
+    if (record.timelinePath) record.timelinePath = await findVideoTimeline(renamed);
+    return { name: record.name, videoUrl: pathToFileURL(renamed).href };
   });
 
   ipcMain.handle("studio:pick-location", async (event, key) => {

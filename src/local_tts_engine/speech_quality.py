@@ -32,12 +32,14 @@ import numpy as np
 import soundfile as sf
 
 from .korean_phonetics import (
+    count_any_pronunciation_matches,
     count_pronunciation_matches,
+    phonetic_key,
     phonetic_variants,
     pronunciation_distance,
 )
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
-from .pronunciation import comparison_pronunciation
+from .pronunciation import comparison_pronunciation, declared_readings
 from .prosody import PAUSE_WARNING, confirm_pause_checks, interior_silences, pause_checks
 from .transcript_coverage import clause_omissions
 
@@ -103,6 +105,9 @@ MIN_LEXICAL_KEY_LENGTH = 6
 LEXICAL_WARNING_DISTANCE = 0.24
 LEXICAL_FAILURE_DISTANCE = 0.55
 HANGUL_WORD_PATTERN = re.compile(r"[가-힣]+")
+# 들린 표기를 그대로 되돌려 주기 위한 낱말 나누기. 문장 부호는 발음이 아니므로
+# 버리고, 받아쓰기가 남긴 라틴 문자는 그 자체가 증거라 함께 남긴다.
+HANGUL_OR_LATIN_RUN = re.compile(r"[가-힣]+|[A-Za-z0-9]+")
 
 # The reader writes numbers as digits no matter how the script spells them, so
 # "일곱 챕터" comes back as "7챕터", and the pronunciation pass then expands that
@@ -202,6 +207,34 @@ def phonetic_error_rate(
     )
 
 
+def heard_reading(
+    readings: tuple[str, ...] | list[str],
+    recognized_text: str,
+    dictionary: list[dict[str, Any]] | None = None,
+) -> str:
+    """Return the transcript fragment that came closest to a required reading.
+
+    "지정 발음 확인 필요" alone tells the listener a term is worth checking but
+    not what the machine actually heard, which is the one fact that decides
+    whether the reader misread the word or the transcript merely spelled it a
+    second way. With the fragment in hand that judgement is one glance, and an
+    accepted spelling can be added to the entry instead of argued about.
+    """
+    words = HANGUL_OR_LATIN_RUN.findall(comparison_pronunciation(recognized_text, dictionary or []))
+    keys = [key for reading in readings for key in phonetic_variants(reading) if key]
+    if not words or not keys:
+        return ""
+    width = max(len(str(reading).split()) for reading in readings)
+    best, best_cost = "", None
+    for size in range(1, width + 1):
+        for start in range(len(words) - size + 1):
+            fragment = " ".join(words[start:start + size])
+            cost = min(pronunciation_distance(key, phonetic_key(fragment)) for key in keys)
+            if best_cost is None or cost < best_cost:
+                best, best_cost = fragment, cost
+    return best
+
+
 def check_pronunciation(
     term: str,
     expected_text: str,
@@ -212,32 +245,53 @@ def check_pronunciation(
 
     Returns the measured distance alongside a verdict, so a manifest records why
     a page was flagged rather than only that it was.
+
+    A term whose readings the dictionary declares is judged against exactly
+    those readings. The normalized distance gate cannot serve that case: one
+    wrong jamo in a four-syllable term is 0.10, comfortably inside the 0.15 the
+    gate allows for ASR spelling, and the measured transcripts of this course
+    put the correct 앤트로픽 and the incorrect 안쓰로픽 at that same 0.10 from
+    앤스로픽. Listing the accepted spellings separates them; no threshold can.
     """
-    term_keys = [key for key in pronunciation_keys(term, dictionary) if key]
+    readings = declared_readings(term, dictionary or [])
+    term_keys = ([key for reading in readings for key in phonetic_variants(reading) if key]
+                 if readings else [key for key in pronunciation_keys(term, dictionary) if key])
     recognized_keys = [key for key in pronunciation_keys(recognized_text, dictionary) if key] or [""]
     expected_keys = [key for key in pronunciation_keys(expected_text, dictionary) if key] or [""]
     if not term_keys:
         return {"term": term, "distance": 0.0, "expectedCount": 0, "heardCount": 0, "status": "ok"}
 
+    # A declared reading is a decision, so anything but one of those readings is
+    # something to look at. Everything else keeps the tolerance that ASR number
+    # and acronym spellings need.
+    match_distance = 0.0 if readings else PRONUNCIATION_MATCH_DISTANCE
     distance = min(
         pronunciation_distance(term_key, recognized_key)
         for term_key in term_keys
         for recognized_key in recognized_keys
     )
-    expected_count = max(
-        count_pronunciation_matches(term_key, expected_key, PRONUNCIATION_MATCH_DISTANCE)
-        for term_key in term_keys
-        for expected_key in expected_keys
-    )
-    heard_count = max(
-        count_pronunciation_matches(term_key, recognized_key, PRONUNCIATION_MATCH_DISTANCE)
-        for term_key in term_keys
-        for recognized_key in recognized_keys
-    )
+    # Counting uses the same bar as the verdict. A term said twice and read
+    # correctly once would otherwise let the second, wrong reading hide behind
+    # the first: the distance is measured at the best match in the whole
+    # transcript, so it stays 0 while one of the two is 안쓰로픽.
+    def occurrences(keys: list[str]) -> int:
+        # Declared spellings are one term written several ways, so they are
+        # counted together. Variant keys of a single spelling are competing
+        # readings of the transcript instead, and there the best one wins.
+        if readings:
+            return max(count_any_pronunciation_matches(term_keys, key, match_distance) for key in keys)
+        return max(
+            count_pronunciation_matches(term_key, key, match_distance)
+            for term_key in term_keys
+            for key in keys
+        )
+
+    expected_count = occurrences(expected_keys)
+    heard_count = occurrences(recognized_keys)
 
     if distance > PRONUNCIATION_WARNING_DISTANCE:
         status, reason = "failed", "지정 발음 불일치"
-    elif distance > PRONUNCIATION_MATCH_DISTANCE:
+    elif distance > match_distance:
         status, reason = "warning", "지정 발음 확인 필요"
     elif heard_count < expected_count:
         status, reason = "warning", "지정 발음 일부 누락"
@@ -250,6 +304,10 @@ def check_pronunciation(
         "heardCount": heard_count,
         "status": status,
     }
+    if readings:
+        record["declaredReadings"] = list(readings)
+        if status != "ok":
+            record["heardReading"] = heard_reading(readings, recognized_text, dictionary)
     if reason:
         record["reason"] = reason
     return record

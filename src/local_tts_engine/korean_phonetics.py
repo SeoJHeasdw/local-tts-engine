@@ -202,21 +202,11 @@ def pronunciation_distance(pattern: str, text: str) -> float:
     return approximate_match_cost(pattern, text) / len(pattern)
 
 
-def count_pronunciation_matches(pattern: str, text: str, tolerance: float) -> int:
-    """Count non-overlapping places where ``pattern`` is heard within ``text``.
-
-    Used only to notice that a term said twice was read once.  Deliberately
-    generous: an over-count hides an omission, while an under-count would
-    invent one, and inventing work for the user is the failure mode this whole
-    layer exists to remove.
-    """
-    if not pattern or not text:
-        return 0
+def _match_end_positions(pattern: str, text: str, tolerance: float) -> list[int]:
+    """Return every position where ``pattern`` finishes within the tolerance."""
     limit = tolerance * len(pattern)
-    stride = max(1, len(pattern) // 2)
     previous = list(range(len(pattern) + 1))
-    matches = 0
-    last_match_end = -stride
+    positions: list[int] = []
     for position, character in enumerate(text):
         current = [0]
         for index, expected in enumerate(pattern, start=1):
@@ -228,7 +218,55 @@ def count_pronunciation_matches(pattern: str, text: str, tolerance: float) -> in
                 )
             )
         previous = current
-        if previous[-1] <= limit and position - last_match_end >= stride:
+        if previous[-1] <= limit:
+            positions.append(position)
+    return positions
+
+
+def _count_non_overlapping(positions: list[int], stride: int) -> int:
+    matches = 0
+    last_match_end = -stride
+    for position in positions:
+        if position - last_match_end >= stride:
             matches += 1
             last_match_end = position
     return matches
+
+
+def count_pronunciation_matches(pattern: str, text: str, tolerance: float) -> int:
+    """Count non-overlapping places where ``pattern`` is heard within ``text``.
+
+    Used only to notice that a term said twice was read once.  Deliberately
+    generous: an over-count hides an omission, while an under-count would
+    invent one, and inventing work for the user is the failure mode this whole
+    layer exists to remove.
+    """
+    if not pattern or not text:
+        return 0
+    return _count_non_overlapping(
+        _match_end_positions(pattern, text, tolerance), max(1, len(pattern) // 2)
+    )
+
+
+def count_any_pronunciation_matches(
+    patterns: tuple[str, ...] | list[str], text: str, tolerance: float
+) -> int:
+    """Count places where *any* accepted spelling of one term is heard.
+
+    Alternative spellings of a term are not competing readings of the
+    transcript, they are the same term written two ways: a name said twice and
+    transcribed 앤스로픽 once and 앤트로픽 once was said twice.  Scoring each
+    spelling separately and keeping the best would count it once and report an
+    omission that never happened.
+    """
+    unique = [pattern for pattern in dict.fromkeys(patterns) if pattern]
+    if not unique or not text:
+        return 0
+    positions = sorted(
+        {
+            position
+            for pattern in unique
+            for position in _match_end_positions(pattern, text, tolerance)
+        }
+    )
+    return _count_non_overlapping(positions, max(1, min(map(len, unique)) // 2))

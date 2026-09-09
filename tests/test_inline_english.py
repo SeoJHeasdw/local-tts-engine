@@ -6,8 +6,11 @@ import soundfile as sf
 
 from local_tts_engine.course_pilot import generate_candidate_audio, production_pronunciation
 from local_tts_engine.english_voice import EnglishVoiceRouter, speech_segments
-from local_tts_engine.pronunciation import apply_pronunciation, comparison_pronunciation, pronunciation_preflight, merge_pronunciation_dictionaries
-from local_tts_engine.speech_quality import evaluate_candidate
+from local_tts_engine.pronunciation import (
+    apply_pronunciation, comparison_pronunciation, declared_readings,
+    merge_pronunciation_dictionaries, pronunciation_preflight,
+)
+from local_tts_engine.speech_quality import check_pronunciation, evaluate_candidate
 
 
 def inline(source, reading, target=None):
@@ -80,3 +83,92 @@ def test_user_selection_preserves_approved_terms_and_leaves_deferred_terms_in_ha
     approved_text = 'Anthropic의 Artificial Analysis Intelligence Index와 Boris Cherny, Y Combinator입니다.'
     assert apply_pronunciation(approved_text, dictionary) == approved_text
     assert speech_segments(approved_text, dictionary) == [{'text': approved_text, 'language': 'Korean'}]
+
+
+def test_declared_readings_separate_an_asr_spelling_from_a_misread_vowel(tmp_path):
+    """Anthropic이 '안쓰로픽'으로 읽혀도 통과하던 구멍을 막는다.
+
+    이 강의 받아쓰기에서 실제로 나온 표기는 엔스로픽·엔트로픽·안쓰로픽·안트로픽
+    이고, 앤스로픽에서 넷 다 정확히 0.10이다. 거리로는 갈라지지 않는다 — 갈리는
+    것은 어느 자모가 다른가다. 그래서 받아들일 표기를 사전이 직접 적는다.
+    """
+    dictionary = [{**inline('Anthropic', '앤스로픽'), 'comparisonVariants': ['앤트로픽']}]
+    source = 'Anthropic은 평가가 좋아질 때 남깁니다.'
+    path = tmp_path / 'clip.wav'
+    sf.write(path, np.sin(np.arange(72720) * .03) * .1, 24000)
+
+    def verdict(recognized):
+        result = evaluate_candidate(expected_text=source, recognized_text=recognized, audio_path=path,
+                                    dictionary=dictionary, required_pronunciations=['Anthropic'])
+        return next(c for c in result['pronunciationChecks'] if c['term'] == 'Anthropic')
+
+    for accepted in ('엔스로픽은 평가가 좋아질 때 남깁니다.', '엔트로픽은 평가가 좋아질 때 남깁니다.',
+                     '앤쓰로픽은 평가가 좋아질 때 남깁니다.', 'Anthropic은 평가가 좋아질 때 남깁니다.'):
+        assert verdict(accepted)['status'] == 'ok', accepted
+    for misread in ('안쓰로픽은 평가가 좋아질 때 남깁니다.', '안트로픽은 평가가 좋아질 때 남깁니다.'):
+        check = verdict(misread)
+        assert check['status'] == 'warning' and check['reason'] == '지정 발음 확인 필요'
+        # 무엇으로 들렸는지가 곧 확인 근거다. 들어 보기 전에 판단이 선다.
+        assert check['heardReading'].startswith(misread[:4])
+        assert check['declaredReadings'] == ['앤스로픽', '앤트로픽']
+    assert verdict('평가가 좋아질 때 남깁니다.')['status'] == 'failed'
+
+
+def test_production_declares_one_reading_so_every_other_spelling_is_shown(tmp_path):
+    """제작 사전은 아직 표준 표기만 선언한다 — 나머지는 사람이 듣고 정한다.
+
+    θ를 트로 적은 '엔트로픽'이 받아쓰기 표기차인지 실제로 T로 읽은 것인지는
+    귀로만 갈린다. 그래서 미리 받아주지 않고 확인 항목으로 올린다. 들어 보고
+    정상이면 그 항목의 comparisonVariants에 한 줄 넣으면 다음부터 통과한다.
+    """
+    dictionary = production_pronunciation()
+    assert declared_readings('Anthropic', dictionary) == ('앤스로픽',)
+    source = 'Anthropic은 평가가 좋아질 때 남깁니다.'
+    path = tmp_path / 'clip.wav'
+    sf.write(path, np.sin(np.arange(72720) * .03) * .1, 24000)
+    check = next(c for c in evaluate_candidate(
+        expected_text=source, recognized_text='엔트로픽은 평가가 좋아질 때 남깁니다.', audio_path=path,
+        dictionary=dictionary, required_pronunciations=['Anthropic'])['pronunciationChecks']
+        if c['term'] == 'Anthropic')
+    assert check['status'] == 'warning' and check['heardReading'] == '엔트로픽은'
+    # 표기 하나를 받아들이기로 하면 그 자리에서 통과로 바뀐다.
+    accepted = [{**item, 'comparisonVariants': ['앤트로픽']} if item.get('from') == 'Anthropic' else item
+                for item in dictionary]
+    assert check_pronunciation('Anthropic', source, '엔트로픽은 평가가 좋아질 때 남깁니다.', accepted)['status'] == 'ok'
+
+
+def test_a_correct_reading_does_not_cover_for_a_second_wrong_one():
+    """두 번 나온 용어를 한 번만 제대로 읽으면 그 사실이 남아야 한다.
+
+    거리는 받아쓰기 전체에서 가장 잘 맞는 자리로 재므로, 하나만 맞아도 0이다.
+    세는 기준도 판정과 같아야 나머지 하나가 뒤에 숨지 않는다.
+    """
+    dictionary = [{**inline('Anthropic', '앤스로픽'), 'comparisonVariants': ['앤트로픽']}]
+    source = 'Anthropic은 평가를 봅니다. 그래서 Anthropic은 남깁니다.'
+    both = check_pronunciation('Anthropic', source, '앤스로픽은 평가를 봅니다. 그래서 앤트로픽은 남깁니다.', dictionary)
+    assert both['status'] == 'ok' and (both['expectedCount'], both['heardCount']) == (2, 2)
+    one = check_pronunciation('Anthropic', source, '앤스로픽은 평가를 봅니다. 그래서 안쓰로픽은 남깁니다.', dictionary)
+    assert one['status'] == 'warning' and one['reason'] == '지정 발음 일부 누락'
+    assert (one['expectedCount'], one['heardCount']) == (2, 1) and one['distance'] == 0
+
+
+def test_terms_without_a_declared_reading_keep_the_tolerant_spelling_gate():
+    """숫자와 약어의 받아쓰기 표기까지 엄격하게 보면 멀쩡한 페이지가 걸린다.
+
+    같은 강의에서 A2041은 '에이 이공사일'로 지정했는데 받아쓰기는 '에이이영사일'
+    로 적는다. 0과 영·공처럼 표기만 다른 경우가 이 층에 여전히 필요하다.
+    """
+    dictionary = production_pronunciation()
+    source = '주문 A-2041을 확인합니다.'
+    check = check_pronunciation('에이 이공사일', source, '주문 에이 이영사일을 확인합니다.', dictionary)
+    assert check['status'] == 'ok' and 0 < check['distance'] <= .15
+    assert 'declaredReadings' not in check
+
+
+def test_accepted_spellings_must_be_hangul_and_belong_to_a_declared_reading():
+    with pytest.raises(ValueError, match='comparisonVariants'):
+        merge_pronunciation_dictionaries([{**inline('Anthropic', '앤스로픽'), 'comparisonVariants': ['Anthropic']}])
+    with pytest.raises(ValueError, match='comparisonVariants'):
+        merge_pronunciation_dictionaries([{'from': 'Agent', 'to': '에이전트', 'comparisonVariants': ['에이젼트']}])
+    assert declared_readings('Anthropic', [inline('Anthropic', '앤스로픽')]) == ('앤스로픽',)
+    assert declared_readings('에이전트', [{'from': 'Agent', 'to': '에이전트'}]) == ()

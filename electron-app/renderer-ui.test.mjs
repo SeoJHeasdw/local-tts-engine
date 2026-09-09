@@ -130,3 +130,104 @@ test("완성 영상은 자기 타임라인을 데리고 발행된다", async () 
   assert.match(block, /path\.join\(outputDir, videoTimelineFileName\(target\)\)/);
   assert.match(main, /publishVideo\(videoPath, studio, options\.name, options\.title, renderDir\)/);
 });
+
+
+test("확인할 부분에서 바로, 몇 번이고 다시 읽힐 수 있다", async () => {
+  const [script, css] = await Promise.all([
+    fs.readFile(path.join(renderer, "app.js"), "utf8"),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+  ]);
+  assert.match(script, /again\.className = 'finding-regenerate'/);
+  assert.match(script, /tools\.append\(why, more, done, again\)/);
+  // 한 번 쓰고 사라지는 버튼이 아니다. 제출 경로를 공유하므로 후보가 별로면
+  // 그 자리에서 또 누르면 된다.
+  assert.match(script, /function startReviewRepair\(\)/);
+  assert.match(script, /\$\('#review-form'\)\.addEventListener\('submit', event => \{ event\.preventDefault\(\); return startReviewRepair\(\); \}\)/);
+  assert.match(script, /again\.addEventListener\('click', \(\) => regenerateFinding\(finding, page\)\)/);
+  assert.match(css, /\.finding-regenerate \{/);
+});
+
+
+test("결과와 검수 화면 모두에서 파일 이름을 그 자리에서 바꾼다", async () => {
+  const [script, css, preload, main] = await Promise.all([
+    fs.readFile(path.join(renderer, "app.js"), "utf8"),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+    fs.readFile(path.join(APP_DIR, "preload.cjs"), "utf8"),
+    fs.readFile(path.join(APP_DIR, "main.mjs"), "utf8"),
+  ]);
+  assert.match(script, /title\.addEventListener\("dblclick", \(\) => editOutputName\(title, item, target\)\)/);
+  assert.match(script, /\$\('#voice-video-name'\)\.addEventListener\('dblclick'/);
+  assert.match(script, /api\.renameOutput\(target, value\)/);
+  assert.match(script, /api\.renameVideo\(voiceVideo\.token, value\)/);
+  assert.match(css, /\.rename-field \{/);
+  assert.match(preload, /renameOutput: \(target, name\)/);
+  assert.match(preload, /renameVideo: \(token, name\)/);
+  assert.match(main, /ipcMain\.handle\("studio:rename-output"/);
+  assert.match(main, /ipcMain\.handle\("studio:rename-video"/);
+  // 영상만 바꿔 부르면 이름을 나눠 갖던 타임라인이 뒤에 남아 페이지를 잃는다.
+  assert.match(main, /entry\.startsWith\(`\$\{previousStem\}\.`\)/);
+  assert.match(main, /displayName: path\.basename\(next, path\.extname\(next\)\)/);
+});
+
+
+test("결과는 파일 이름 그대로 적히고, 지우기는 되돌릴 수 있게 휴지통으로 보낸다", async () => {
+  const [script, main, preload] = await Promise.all([
+    fs.readFile(path.join(renderer, "app.js"), "utf8"),
+    fs.readFile(path.join(APP_DIR, "main.mjs"), "utf8"),
+    fs.readFile(path.join(APP_DIR, "preload.cjs"), "utf8"),
+  ]);
+  assert.match(script, /outputRowTitle\(item, \{ compact \}\)/);
+  assert.match(main, /fileName: videoPath \? path\.basename\(videoPath\) : null/);
+  assert.match(script, /class="delete-button"/);
+  assert.match(script, /api\.deleteOutput\(target\)/);
+  assert.match(preload, /deleteOutput: \(target\)/);
+  // 두 시간을 들인 결과다. 먼저 묻고, 그다음에도 지우지 않고 휴지통으로 보낸다.
+  assert.match(main, /dialog\.showMessageBox\(mainWindow, \{\s*type: "warning"/);
+  assert.match(main, /for \(const item of directories\) await shell\.trashItem\(item\)/);
+  // 강의 결과는 작업 폴더와 완성 영상 폴더로 나뉜다. 한쪽만 버리면 목록에서는
+  // 사라졌는데 영상은 남는다.
+  assert.match(main, /const published = path\.join\(store\.videoOutputRoot, target\.name\)/);
+});
+
+
+test("이름이 바뀐 영상도 같은 결과로 이어 준다", async () => {
+  const main = await fs.readFile(path.join(APP_DIR, "main.mjs"), "utf8");
+  // Finder에서 이름을 고친 영상은 적어 둔 경로에 없다. 폴더에 그대로 있는데도
+  // 열 수 없다거나 확인 항목이 사라졌다고 말하지 않는다.
+  assert.match(main, /async function reportDescribesVideo\(/);
+  assert.match(main, /await reportDescribesVideo\(report\.videoPath, value\.path\)/);
+  assert.match(main, /file = await findVideo\(directory, target\.name\) \|\| file/);
+  assert.match(main, /await existingFile\(report\.videoPath\) \|\| await findVideo\(dir, entry\.name\)/);
+});
+
+
+test("창 막대의 단추는 아이콘과 툴팁을 함께 갖고, 사이드바는 미끄러진다", async () => {
+  const [html, css, script] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+    fs.readFile(path.join(renderer, "app.js"), "utf8"),
+  ]);
+  assert.match(html, /id="sidebar-toggle"[^>]+data-tooltip="사이드바 접기"/);
+  assert.match(html, /id="window-back"[^>]+data-tooltip="뒤로가기"/);
+  assert.match(html, /id="window-forward"[^>]+data-tooltip="앞으로가기"/);
+  // 화살표 글자 대신 같은 굵기의 아이콘을 쓴다.
+  assert.doesNotMatch(html, /id="window-back"[^>]*>←/);
+  assert.match(html, /class="panel-toggle-chevron"/);
+  // 아이콘을 글자로 덮어쓰면 접을 때마다 모양이 바뀐다. 문구만 바꾼다.
+  assert.doesNotMatch(script, /toggle\.textContent = collapsed/);
+  assert.match(script, /toggle\.dataset\.tooltip = label/);
+  assert.match(script, /applySidebarCollapsed\(collapsed, \{ animate: true \}\)/);
+  assert.match(css, /\.sidebar-motion \.sidebar \{/);
+  assert.match(css, /\.sidebar-motion \.shell \{ transition: grid-template-columns/);
+  // 창 왼쪽 끝 단추의 툴팁은 오른쪽 정렬이면 화면 밖으로 나간다.
+  assert.match(css, /\.nav-tip::after \{ left: 0; right: auto; \}/);
+});
+
+
+test("묶음이 행의 더 보기 메뉴를 잘라 내지 않는다", async () => {
+  const css = await fs.readFile(path.join(renderer, "styles.css"), "utf8");
+  const block = css.slice(css.indexOf(".output-group {"), css.indexOf(".output-group-head {"));
+  assert.doesNotMatch(block, /overflow: hidden/);
+  assert.match(css, /\.output-group:has\(\.result-menu\[open\]\) \{ position: relative; z-index: 40; \}/);
+  assert.match(css, /\.output-group-body \.output-item:last-child \{[\s\S]*?border-radius/);
+});

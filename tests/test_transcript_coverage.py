@@ -9,6 +9,7 @@ import soundfile as sf
 from local_tts_engine.course_pilot import (
     CourseChunk, CourseEntry, generate_candidate_audio, resolve_chunk_take,
 )
+from local_tts_engine.english_voice import speech_segments
 from local_tts_engine.transcript_coverage import clause_omissions, omission_recovery_parts, saved_omissions
 from local_tts_engine.speech_quality import evaluate_candidate, better_evaluation
 
@@ -187,3 +188,23 @@ def test_empty_or_mixed_rate_recovery_piece_is_not_silently_omitted():
         generate_candidate_audio(mixed, {"text": "문장을 읽습니다."})
     with pytest.raises(ValueError, match="원래 발음문"):
         generate_candidate_audio(mixed, {"text": EXPECTED}, ["요청을 누락했습니다."])
+
+
+def test_recovery_cuts_never_split_a_quoted_english_sentence():
+    """인용된 영어 문장은 한 덩어리로 남아야 영어 목소리로 읽힌다.
+
+    조각마다 목소리를 정하는 근거는 그 조각이 들고 있는 따옴표다. 문장 안의
+    마침표에서 잘리면 양쪽 다 짝 잃은 따옴표만 남아 한국어 목소리와 한국어
+    LoRA로 읽히고, 낱말 단위 영어 받아쓰기 검사도 함께 사라진다.
+    """
+    text = '공식 문서를 보겠습니다. 문장은 "Agents are tools. Use them carefully." 입니다. 이 말이 핵심입니다.'
+    target = 'Use them carefully'
+    start = text.index(target)
+    parts = omission_recovery_parts(
+        text, [{"expectedStart": start, "expectedEnd": start + len(target), "text": target}]
+    )
+    assert '"Agents are tools. Use them carefully."' in parts[1]
+    assert [segment["language"] for segment in speech_segments(parts[1], [])] == ["Korean", "English", "Korean"]
+    assert " ".join(parts) == " ".join(text.split())
+    # 인용문 밖의 문장 경계는 그대로 자를 수 있어야 한다.
+    assert len(parts) == 3

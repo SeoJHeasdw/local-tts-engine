@@ -9,6 +9,7 @@ import {
   makeJobName,
   mapWithConcurrency,
   nextDisplayVideoFileName,
+  renamedFileName,
   normalizeVoiceText,
   normalizeOptions,
   outputPathsForRoot,
@@ -31,6 +32,7 @@ import {
   voiceFindingKey,
   withClearedFindings,
 } from "./pipeline-utils.mjs";
+import { voiceFindingReason } from "./renderer/view-utils.mjs";
 
 test("기본 작업은 제작 LoRA v1 0.6과 레슨 전체 제작이다", () => {
   const options = normalizeOptions({ name: "lecture-a" });
@@ -285,6 +287,22 @@ test("레슨 제목으로 완성 영상 이름을 만들고 기존 파일은 번
     "CH01 L00 챕터 프레임 (2).mp4",
   ]), "CH01 L00 챕터 프레임 (3).mp4");
   assert.equal(nextDisplayVideoFileName("CH01 / 오프닝", []), "CH01 ／ 오프닝.mp4");
+});
+
+test("이름을 바꿔도 확장자는 지킨다", () => {
+  const current = "CH02 L04 · 그래서 어떻게 만들라는 건가 - 영어 보정.mp4";
+  // 화면에는 확장자까지 보여 주므로, 그대로 두고 앞부분만 고친 경우가 기본이다.
+  assert.equal(
+    renamedFileName(current, "CH02 L04 · 그래서 어떻게 만들라는 건가 - 영어 보정 (최종).mp4"),
+    "CH02 L04 · 그래서 어떻게 만들라는 건가 - 영어 보정 (최종).mp4",
+  );
+  // 확장자를 지워 버려도 그 파일이 열리지 않게 두지 않는다.
+  assert.equal(renamedFileName(current, "CH02 L04 최종"), "CH02 L04 최종.mp4");
+  assert.equal(renamedFileName("영어 발음 수정.wav", "CH02 나레이션"), "CH02 나레이션.wav");
+  // 경로 구분자는 다른 폴더로 옮기는 뜻이 되므로 파일 이름 안에 들이지 않는다.
+  assert.equal(renamedFileName(current, "CH02/L04"), "CH02／L04.mp4");
+  assert.throws(() => renamedFileName(current, "   "), /파일 이름/);
+  assert.throws(() => renamedFileName(current, ".mp4"), /파일 이름/);
 });
 
 test("초와 시:분:초 타임코드를 해석한다", () => {
@@ -544,4 +562,32 @@ test("확인 표시의 키는 페이지와 시각으로 만든다", () => {
     voiceFindingKey({ slideNumber: 36, startMs: 501200 }),
     voiceFindingKey({ slideNumber: 36, startMs: 660000 }),
   );
+});
+
+
+test("지정한 발음과 다르게 들린 항목은 들린 표기를 함께 들고 온다", () => {
+  // 무엇으로 들렸는지가 곧 확인 근거다. "Anthropic 확인 필요"만으로는 읽는
+  // 사람이 영상을 열기 전에는 아무것도 판단할 수 없다.
+  const manifest = {
+    chunks: [{ key: "c1", startMs: 1_000, endMs: 9_000 }],
+    quality: { chunks: [{
+      chunkKey: "c1", chapter: "ch02", slideId: "s1", slideNumber: 194, severity: "warning",
+      selected: {
+        warnings: ["지정 발음 확인 필요"],
+        pronunciationChecks: [
+          { term: "Anthropic", status: "warning", heardReading: "안쓰로픽은",
+            declaredReadings: ["앤스로픽", "앤트로픽"] },
+          { term: "에이전트", status: "warning" },
+        ],
+        expectedText: "Anthropic은 남깁니다", recognizedText: "안쓰로픽은 남깁니다",
+      },
+    }] },
+  };
+  const [finding] = voiceQualityFindings(manifest);
+  assert.deepEqual(finding.terms, [
+    { term: "Anthropic", status: "warning", heard: "안쓰로픽은" },
+    { term: "에이전트", status: "warning" },
+  ]);
+  assert.match(voiceFindingReason(finding), /Anthropic → 안쓰로픽은로 들림/);
+  assert.match(voiceFindingReason(finding), /에이전트/);
 });

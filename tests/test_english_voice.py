@@ -5,7 +5,10 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from local_tts_engine.course_pilot import generate_candidate_audio
+from local_tts_engine.course_pilot import (
+    CourseChunk, CourseEntry, generate_candidate_audio, resolve_chunk_take,
+)
+from local_tts_engine.speech_quality import MAX_AUTOMATIC_ATTEMPTS
 from local_tts_engine.english_voice import (
     EnglishVoiceRouter, english_reading_check, read_routed_transcript,
     routing_identity, speech_segments, without_lora,
@@ -131,3 +134,52 @@ def test_mixed_asr_english_remains_protected_when_punctuation_is_missing():
     expected = f'질문이 "{QUOTE}" 봇들이 공유합니다.'
     recognized = '질문이 "do my bots share one computer" 봇들이 공유합니다.'
     assert phonetic_error_rate(expected, recognized, DICTIONARY) == 0
+
+
+def test_english_evidence_buys_the_same_four_seeds_korean_does():
+    """영어도 한국어와 같은 재시도 구조를 쓴다.
+
+    영어 구간의 낱말 불일치와 문장 안 영어 용어의 지정 발음 불일치는 둘 다
+    후보를 통과시키지 않는다. 통과하지 못한 후보는 다음 시드를 사고, 네 번 모두
+    같은 경고가 나오면 사람이 볼 일로 올라간다 — 한국어 오독과 같은 길이다.
+    """
+    made, seen = [], []
+
+    def synthesize(_chunk, attempt):
+        made.append(attempt)
+        return {"attempt": attempt, "sampleRate": 24_000, "frames": 24_000}
+
+    def review(_chunk, candidate):
+        seen.append(candidate["attempt"])
+        warnings = ["영어 구절 받아쓰기 확인 필요", "지정 발음 확인 필요"]
+        return {"attempt": candidate["attempt"], "failures": [], "warnings": warnings,
+                "recognizedText": f"take-{candidate['attempt']}", "passed": False, "score": 12}
+
+    entry = CourseEntry(chapter="ch02", slide_id="anthropic", slide_number=194, step=1,
+                        source_text="Anthropic은 남깁니다", tts_text="Anthropic은 남깁니다")
+    result = resolve_chunk_take(CourseChunk((entry,)), attempt_limit=MAX_AUTOMATIC_ATTEMPTS,
+                                synthesize=synthesize, review=review)
+    assert made == seen == [1, 2, 3, 4]
+    # 네 시드가 같은 말을 하면 디코더 잡음이 아니라 모델이 계속 그렇게 읽는 것이다.
+    assert result["severity"] == "failed"
+
+
+def test_one_good_english_seed_stops_the_retries():
+    made = []
+
+    def synthesize(_chunk, attempt):
+        made.append(attempt)
+        return {"attempt": attempt, "sampleRate": 24_000, "frames": 24_000}
+
+    def review(_chunk, candidate):
+        clean = candidate["attempt"] == 2
+        return {"attempt": candidate["attempt"], "failures": [],
+                "warnings": [] if clean else ["영어 구절 받아쓰기 확인 필요"],
+                "recognizedText": "take", "passed": clean, "score": 0 if clean else 12}
+
+    entry = CourseEntry(chapter="ch02", slide_id="quote", slide_number=195, step=1,
+                        source_text='문장은 "Do my Bots share one computer?" 입니다',
+                        tts_text='문장은 "Do my Bots share one computer?" 입니다')
+    result = resolve_chunk_take(CourseChunk((entry,)), attempt_limit=MAX_AUTOMATIC_ATTEMPTS,
+                                synthesize=synthesize, review=review)
+    assert made == [1, 2] and result["severity"] == "ok"
