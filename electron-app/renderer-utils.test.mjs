@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   buildChapterRanges,
+  compactOutputLabel,
+  outputGroupTitle,
+  splitOutputTitle,
   groupOutputs,
   outputGroupKey,
   outputState,
@@ -247,4 +250,27 @@ test("레슨 편 이름을 짧은 표로 읽는다", () => {
   assert.equal(outputUnitLabel({ name: "studio-1-ch02-lessons-ch02-l07" }), "L07");
   assert.equal(outputUnitLabel({ name: "studio-2-ch01-full" }), null);
   assert.equal(outputGroupKey({ name: "studio-1-ch02-lessons-ch02-l07" }), "studio-1-ch02-lessons");
+});
+
+test("묶음 안의 행은 챕터를 되풀이하지 않고 편만 적는다", () => {
+  // displayName 이 이미 "CH02 L04 · 제목"이라, 편 표시를 앞에 덧붙이면
+  // "L04 CH02 L04 · 제목"이 된다.
+  const item = { name: "studio-1-ch02-lessons-ch02-l04", displayName: "CH02 L04 · 그래서 어떻게 만들라는 건가" };
+  assert.equal(compactOutputLabel(item), "L04 · 그래서 어떻게 만들라는 건가");
+});
+
+test("묶음 제목은 챕터까지만 적는다", () => {
+  const group = {
+    key: "studio-1-ch02-lessons",
+    items: [{ name: "studio-1-ch02-lessons-ch02-l01", displayName: "CH02 L01 · Agent Loop" }],
+  };
+  assert.equal(outputGroupTitle(group), "CH02");
+});
+
+test("편에 속하지 않는 결과는 이름을 그대로 쓴다", () => {
+  const single = { name: "studio-2-ch01-full", displayName: "CH01 전체" };
+  assert.equal(compactOutputLabel(single), "CH01 전체");
+  assert.deepEqual(splitOutputTitle("CH01 전체", ""), { scope: "", unit: "", title: "CH01 전체" });
+  // 제목 없이 편 표시만 있는 경우도 깨지지 않는다.
+  assert.equal(compactOutputLabel({ name: "j-ch02-lessons-ch02-l07", displayName: "CH02 L07" }), "L07");
 });

@@ -245,3 +245,31 @@ export function groupOutputs(items = [], findingsOf = () => []) {
   }
   return rows;
 }
+
+// displayName 은 이미 "CH02 L04 · 그래서 어떻게 만들라는 건가" 처럼 스스로를
+// 다 말한다. 묶음 머리가 챕터를 적고 나면 행에서 챕터는 되풀이일 뿐이고, 편
+// 표시를 앞에 덧붙이면 L04 가 두 번 나온다. 한 번만 나누고 필요한 조각만 쓴다.
+export function splitOutputTitle(displayName = "", unitLabel = "") {
+  const text = String(displayName || "").trim();
+  const unit = String(unitLabel || "");
+  const index = unit ? text.indexOf(unit) : -1;
+  if (index === -1) return { scope: "", unit: "", title: text };
+  return {
+    scope: text.slice(0, index).trim(),
+    unit,
+    title: text.slice(index + unit.length).replace(/^\s*·\s*/, "").trim(),
+  };
+}
+
+export function compactOutputLabel(item = {}) {
+  const unit = outputUnitLabel(item);
+  const { unit: found, title } = splitOutputTitle(item.displayName, unit);
+  if (!found) return item.displayName || item.name || "";
+  return title ? `${found} · ${title}` : found;
+}
+
+export function outputGroupTitle(group = {}) {
+  const first = group.items?.[0];
+  const { scope } = splitOutputTitle(first?.displayName, outputUnitLabel(first || {}));
+  return scope || group.key || "";
+}

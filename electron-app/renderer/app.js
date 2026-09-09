@@ -14,8 +14,9 @@ import {
   unitLabel,
   voiceFindingLabel,
   voiceFindingReason,
+  compactOutputLabel,
+  outputGroupTitle,
   outputState,
-  outputUnitLabel,
   visibleVoiceFindings,
   voiceFindingSummaryLine,
 } from "./view-utils.mjs";
@@ -1391,7 +1392,7 @@ function renderOutputs() {
         </div>`;
 
       row.querySelector("strong").textContent = compact
-        ? `${outputUnitLabel(item) || ""} ${item.displayName || ""}`.trim() || item.name
+        ? compactOutputLabel(item)
         : (item.displayName || item.name);
       row.querySelector("small").textContent = [
         compact ? "" : outputLabel(item),
@@ -1448,7 +1449,7 @@ function renderOutputs() {
       const head = document.createElement("header");
       head.className = "output-group-head";
       const title = document.createElement("strong");
-      title.textContent = group.items[0]?.displayName?.replace(/\s*·.*$/, "") || group.key;
+      title.textContent = outputGroupTitle(group);
       const meta = document.createElement("small");
       meta.textContent = `레슨 ${group.items.length}편 · ${formatDate(group.updatedAt)}`;
       const state = document.createElement("span");
