@@ -255,7 +255,7 @@ nav { display: grid; gap: var(--s1); }
    본문과 화면 머리
    ========================================================================== */
 main {
-  grid-column: 2; width: 100%; max-width: 1260px; margin: 0 auto;
+  grid-column: 2; width: 100%; max-width: 1460px; margin: 0 auto;
   padding: 66px 46px 60px; view-transition-name: page-content;
 }
 .topbar { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: var(--s6); }
@@ -595,7 +595,9 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 .review-toolbar strong { flex: 1; min-width: 200px; font-size: var(--fs-md); font-weight: var(--fw-semi); }
 .review-toolbar > span { color: var(--text-3); font-size: var(--fs-xs); }
 
-.review-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(300px, 1fr); gap: var(--s5); align-items: start; }
+/* 남는 폭은 전부 영상으로 보낸다. 확인 목록은 읽을 만큼만 있으면 되고,
+   더 넓어져 봐야 한 줄에 담기는 글자만 늘 뿐이다. */
+.review-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: var(--s5); align-items: start; }
 .review-stage { padding: var(--s4); position: sticky; top: var(--s5); min-width: 0; }
 #review-player { display: block; width: 100%; aspect-ratio: 16 / 9; background: var(--nav); border-radius: var(--r-md); }
 
@@ -1367,3 +1369,14 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
 li[data-severity="failed"] .finding-term {
   background: var(--dngr-soft); color: var(--danger); box-shadow: inset 0 -2px 0 var(--danger);
 }
+
+/* 발췌는 걸린 낱말을 짚는 것이 목적이라 앞뒤를 자른다. 잘린 것이 궁금할 때가
+   있으므로 펼칠 수 있게 둔다. */
+.finding-line.full { display: block; -webkit-line-clamp: none; }
+.finding-more {
+  width: 22px; height: 22px; display: grid; place-items: center;
+  border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--text-3); cursor: pointer; font-size: var(--fs-xs); line-height: 1;
+}
+.finding-more:hover { color: var(--text); background: var(--raised); }
+.finding-more[aria-expanded="true"] { color: var(--lime); }

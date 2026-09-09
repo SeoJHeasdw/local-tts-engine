@@ -622,19 +622,42 @@ function renderVoiceFindingRow(finding) {
   const line = document.createElement('p');
   line.className = 'finding-line';
   const excerpt = findingExcerpt(finding);
-  if (excerpt?.term) {
-    const before = document.createElement('span'); before.textContent = excerpt.before;
-    const term = document.createElement('mark'); term.className = 'finding-term'; term.textContent = excerpt.term;
-    const after = document.createElement('span'); after.textContent = excerpt.after;
-    line.append(before, term, after);
-  } else {
-    line.textContent = excerpt?.after || voiceFindingReason(finding);
-  }
+  const paintExcerpt = () => {
+    line.replaceChildren();
+    if (excerpt?.term) {
+      const before = document.createElement('span'); before.textContent = excerpt.before;
+      const term = document.createElement('mark'); term.className = 'finding-term'; term.textContent = excerpt.term;
+      const after = document.createElement('span'); after.textContent = excerpt.after;
+      line.append(before, term, after);
+    } else {
+      line.textContent = excerpt?.after || voiceFindingReason(finding);
+    }
+  };
+  paintExcerpt();
 
   button.append(head, line);
 
   const tools = document.createElement('div');
   tools.className = 'finding-tools';
+  // 발췌는 걸린 낱말을 짚으려고 앞뒤를 잘랐다. 잘린 데가 궁금할 때를 위해
+  // 펼칠 수 있게 둔다. 항목 버튼 안에 버튼을 넣을 수는 없으므로 옆에 세운다.
+  const full = String(finding.expectedText || '').trim();
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'finding-more';
+  more.textContent = '⋯';
+  more.setAttribute('aria-expanded', 'false');
+  more.title = '대본 전체 보기';
+  more.setAttribute('aria-label', `${finding.slideNumber}페이지 대본 전체 보기`);
+  more.disabled = !full;
+  more.addEventListener('click', () => {
+    const open = more.getAttribute('aria-expanded') !== 'true';
+    more.setAttribute('aria-expanded', String(open));
+    more.title = open ? '발췌만 보기' : '대본 전체 보기';
+    line.classList.toggle('full', open);
+    if (open) { line.replaceChildren(); line.textContent = full; }
+    else paintExcerpt();
+  });
   const why = document.createElement('span');
   why.className = 'finding-why';
   why.setAttribute('tabindex', '0');
@@ -649,7 +672,7 @@ function renderVoiceFindingRow(finding) {
   done.title = '확인 완료로 표시';
   done.setAttribute('aria-label', `${finding.slideNumber}페이지 확인 완료로 표시`);
   done.addEventListener('click', () => clearFinding(finding));
-  tools.append(why, done);
+  tools.append(why, more, done);
 
   row.append(button, tools);
   button.addEventListener('click', () => {

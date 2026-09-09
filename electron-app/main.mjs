@@ -2175,8 +2175,10 @@ function registerIpc() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    // 검수 목록이 옆에 서면서 영상이 좁아졌다. 목록을 줄이는 대신 창을 넓힌다.
+    // 14인치(1512x982)에도 들어가는 크기다.
+    width: 1440,
+    height: 900,
     minWidth: 980,
     minHeight: 680,
     titleBarStyle: "hiddenInset",
