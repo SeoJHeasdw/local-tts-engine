@@ -20,7 +20,6 @@ import {
   outputPathsForRoot,
   pageVoicePatchPlan,
   patchedTimeline,
-  parseTimecode,
   presetFromManifest,
   providerForOptions,
   summarizeChecks,
@@ -938,107 +937,7 @@ async function runComposeEdit(options, outputDir) {
   return report;
 }
 
-async function runMergeEdit(options, outputDir) {
-  const records = options.videoTokens.map((token) => chosenRecord(token, "video"));
-  const inputs = records.map((record) => record.path);
-  if (inputs.length < 2) throw new Error("합칠 영상은 2개 이상 선택해 주세요.");
-  const segmentDir = path.join(outputDir, "work");
-  await fs.mkdir(segmentDir, { recursive: true });
-  const probes = await Promise.all(inputs.map((input) => inspectMedia(input)));
-  const uniform = probes.every(mergeSegmentMatchesTarget);
-  if (uniform) {
-    emit({ type: "log", stream: "stdout",
-      text: "합칠 영상의 규격이 모두 같아 다시 굽지 않고 그대로 이어 붙입니다.\n" });
-  }
-  const segments = [];
-  for (const [index, input] of inputs.entries()) {
-    if (uniform) { segments.push(input); continue; }
-    const output = path.join(segmentDir, `${String(index + 1).padStart(3, "0")}.mp4`);
-    await normalizeMergeSegment(input, output);
-    segments.push(output);
-  }
-  const concatPath = path.join(segmentDir, "concat.txt");
-  const concatText = segments.map((file) => `file '${file.replaceAll("'", "'\\''")}'`).join("\n");
-  await fs.writeFile(concatPath, `${concatText}\n`, "utf8");
-  const output = path.join(outputDir, `${options.name}.mp4`);
-  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
-    "-y", "-hide_banner", "-nostats",
-    "-f", "concat", "-safe", "0", "-i", concatPath,
-    "-c", "copy", "-movflags", "+faststart", output,
-  ]);
 
-  // Joining the files without joining their timelines produces a chapter the
-  // app can no longer repair: page replacement needs page boundaries.
-  const parts = await Promise.all(records.map(async (record, index) => ({
-    durationMs: Math.round(Number(probes[index].format?.duration || 0) * 1000),
-    timeline: record.timelinePath
-      ? await fs.readFile(record.timelinePath, "utf8").then(JSON.parse).catch(() => null)
-      : null,
-  })));
-  const report = await validateEditVideo(output, "merge", inputs, outputDir);
-  const merged = concatTimelines(parts);
-  if (merged) {
-    const timelinePath = path.join(outputDir, "timeline.json");
-    await fs.writeFile(timelinePath, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
-    report.timelinePath = timelinePath;
-  } else {
-    emit({ type: "log", stream: "stdout",
-      text: "합친 영상에 페이지 타임라인이 없습니다. 이 결과는 페이지 단위로 다듬을 수 없습니다.\n" });
-  }
-  report.videoReencoded = !uniform;
-  await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  return report;
-}
-
-async function runTrimEdit(options, outputDir) {
-  const selected = chosenRecord(options.videoToken, "video");
-  const input = selected.path;
-  const probe = await inspectMedia(input);
-  const duration = Number(probe.format?.duration || 0);
-  let start;
-  let end;
-  if (options.trimMode === "pages") {
-    if (!selected.timelinePath) throw new Error("이 영상에는 페이지 타임라인이 없습니다. 시간으로 잘라 주세요.");
-    const timeline = JSON.parse(await fs.readFile(selected.timelinePath, "utf8"));
-    const range = timeRangeForPages(
-      timeline.entries,
-      Number(options.trimStartPage),
-      Number(options.trimEndPage),
-    );
-    start = range.start;
-    end = range.end;
-  } else {
-    start = parseTimecode(options.startTime);
-    end = parseTimecode(options.endTime);
-  }
-  if (end <= start || end > duration + 0.05) {
-    throw new Error(`끝 시간은 시작 이후이며 영상 길이 ${duration.toFixed(2)}초 이하여야 합니다.`);
-  }
-  const output = path.join(outputDir, `${options.name}.mp4`);
-  await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
-    "-y", "-hide_banner", "-nostats",
-    "-ss", start.toFixed(3), "-to", end.toFixed(3), "-i", input,
-    "-map", "0:v:0", "-map", "0:a:0?",
-    "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-    "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-    "-movflags", "+faststart", output,
-  ]);
-  const report = await validateEditVideo(output, "trim", [input], outputDir);
-  // Reading the timeline to resolve pages but not writing one back left the
-  // trimmed video unrepairable, which is the opposite of what trimming by page
-  // is for.
-  if (selected.timelinePath) {
-    const source = await fs.readFile(selected.timelinePath, "utf8").then(JSON.parse).catch(() => null);
-    const clipped = source && clipTimeline(source, Math.round(start * 1000), Math.round(end * 1000));
-    if (clipped) {
-      const timelinePath = path.join(outputDir, "timeline.json");
-      await fs.writeFile(timelinePath, `${JSON.stringify(clipped, null, 2)}\n`, "utf8");
-      report.timelinePath = timelinePath;
-      await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    }
-  }
-  return report;
-}
 
 async function generateReplacementVoice(options, outputDir) {
   const studio = runtimePaths(options.paths);
@@ -1520,9 +1419,7 @@ async function runVideoEdit(options) {
     return;
   }
   let report;
-  if (options.operation === "merge") report = await runMergeEdit(options, outputDir);
-  else if (options.operation === "trim") report = await runTrimEdit(options, outputDir);
-  else if (options.operation === "mute-region") report = await runMuteEdit(options, outputDir);
+  if (options.operation === "mute-region") report = await runMuteEdit(options, outputDir);
   else if (options.operation === "replace-region") report = await runRegionReplaceEdit(options, outputDir);
   else if (options.operation === "voice") report = await runVoiceBatchEdit(options, outputDir);
   else if (options.operation === "voice-pages") report = await runPageVoicePatchBatch(options, outputDir);
@@ -1894,7 +1791,7 @@ function registerIpc() {
       throw new Error("이미 실행 중인 작업이 있습니다.");
     }
     requireRuntimeTool("ffmpeg", "FFmpeg");
-    const operation = ["compose", "merge", "trim", "voice", "voice-pages", "voice-candidates", "mute-region", "replace-region"].includes(rawOptions.operation)
+    const operation = ["compose", "voice", "voice-pages", "voice-candidates", "mute-region", "replace-region"].includes(rawOptions.operation)
       ? rawOptions.operation
       : null;
     if (!operation) throw new Error("편집 종류를 선택해 주세요.");
@@ -1904,7 +1801,6 @@ function registerIpc() {
       ...rawOptions,
       operation,
       name: normalizeEditName(rawOptions.name),
-      trimMode: rawOptions.trimMode === "pages" ? "pages" : "time",
       durationPolicy: rawOptions.durationPolicy === "match-audio" ? "match-audio" : "keep-video",
       audioSource: rawOptions.audioSource === "generate" ? "generate" : "file",
       voiceMode: rawOptions.voiceMode === "zero" ? "zero" : "finetuned",

@@ -36,10 +36,6 @@ let catalogLessons = [];
 let totalPages = 715;
 let latestTarget = null;
 let latestEditTarget = null;
-let editOperation = "merge";
-let trimMode = "time";
-let mergeVideos = [];
-let trimVideo = null;
 let voiceVideo = null;
 let appSettings = null;
 let voiceCandidates = [];
@@ -835,65 +831,10 @@ function optionPayload() {
   };
 }
 
-function suggestedEditName(operation = editOperation) {
-  const labels = { merge: "merged", trim: "trimmed", voice: "voice" };
-  return `edit-${dateStamp()}-${labels[operation]}`;
-}
-
-function setEditOperation(operation) {
-  return animateLayout($("#edit-form"), () => {
-    editOperation = ["merge", "trim"].includes(operation) ? operation : "merge";
-    $$("#edit-operation-tabs button").forEach((button) => button.classList.toggle("selected", button.dataset.operation === editOperation));
-    $("#edit-merge-panel").classList.toggle("hidden", editOperation !== "merge");
-    $("#edit-trim-panel").classList.toggle("hidden", editOperation !== "trim");
-    $("#start-edit-label").textContent = { merge: "영상 합치기", trim: "영상 자르기" }[editOperation];
-    $("#edit-name").value = suggestedEditName();
-  });
-}
 
 
-function setTrimMode(mode) {
-  return animateLayout($("#edit-trim-panel"), () => {
-    trimMode = mode === "pages" ? "pages" : "time";
-    $$("#trim-mode-tabs button").forEach((button) => button.classList.toggle("selected", button.dataset.trimMode === trimMode));
-    $("#trim-time-options").classList.toggle("hidden", trimMode !== "time");
-    $("#trim-page-options").classList.toggle("hidden", trimMode !== "pages");
-    $("#trim-hint").textContent = trimMode === "pages"
-      ? trimVideo?.pageRange
-        ? `이 영상은 ${trimVideo.pageRange.start}~${trimVideo.pageRange.end}페이지 타임라인과 연결되어 있습니다.`
-        : "앱에서 만든 타임라인 영상만 페이지로 자를 수 있습니다."
-      : "초 단위 숫자나 시:분:초 형식을 사용할 수 있습니다.";
-  });
-}
 
-function renderMergeQueue() {
-  const queue = $("#merge-queue");
-  queue.replaceChildren(...mergeVideos.map((file, index) => {
-    const row = document.createElement("li");
-    row.className = "queue-item";
-    row.draggable = true;
-    row.dataset.index = String(index);
-    row.innerHTML = '<span class="queue-handle">⠿</span><strong></strong><button type="button">×</button>';
-    row.querySelector("strong").textContent = `${index + 1}. ${file.name}`;
-    row.querySelector("button").addEventListener("click", () => {
-      mergeVideos.splice(index, 1);
-      renderMergeQueue();
-    });
-    row.addEventListener("dragstart", () => row.classList.add("dragging"));
-    row.addEventListener("dragend", () => row.classList.remove("dragging"));
-    row.addEventListener("dragover", (event) => event.preventDefault());
-    row.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const dragging = queue.querySelector(".dragging");
-      if (!dragging) return;
-      const from = Number(dragging.dataset.index);
-      const [moved] = mergeVideos.splice(from, 1);
-      mergeVideos.splice(index, 0, moved);
-      renderMergeQueue();
-    });
-    return row;
-  }));
-}
+
 
 function updateVoicePageMeta() {
   const start = Number($("#voice-start-page").value || 1);
@@ -906,22 +847,218 @@ function updateVoicePageMeta() {
   $("#voice-page-meta").textContent = `${start}~${end}페이지 음성을 ${profile} 설정으로 새로 만듭니다.`;
 }
 
-function editPayload() {
-  const common = { operation: editOperation, name: $("#edit-name").value.trim() };
-  if (editOperation === "merge") return { ...common, videoTokens: mergeVideos.map((file) => file.token) };
-  if (editOperation === "trim") {
-    return {
-      ...common,
-      videoToken: trimVideo?.token,
-      trimMode,
-      startTime: $("#trim-start").value,
-      endTime: $("#trim-end").value,
-      trimStartPage: Number($("#trim-start-page").value),
-      trimEndPage: Number($("#trim-end-page").value),
-    };
-  }
-  throw new Error("편집할 작업을 선택해 주세요.");
+
+// 영상 편집은 클립 목록 하나다. 구간을 준 클립 하나가 자르기, 구간 없는 클립
+// 여럿이 합치기, 섞으면 예전 두 탭으로는 만들 수 없던 편집이 된다. 화면이 하는
+// 일은 그 목록을 보여 주고 고치게 하는 것뿐이고, 렌더는 compose 하나로 간다.
+let editorClips = [];
+let editorActive = -1;
+const editorPlayer = $("#editor-player");
+
+function editorClip() { return editorClips[editorActive] || null; }
+function clipLengthMs(clip) { return Math.max(0, Number(clip.outMs) - Number(clip.inMs)); }
+
+function formatTimecode(ms) {
+  const total = Math.max(0, Number(ms) || 0);
+  const hours = Math.floor(total / 3_600_000);
+  const minutes = Math.floor((total % 3_600_000) / 60_000);
+  const seconds = Math.floor((total % 60_000) / 1000);
+  const millis = Math.round(total % 1000);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:`
+    + `${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
 }
+
+// 초만 적어도, 분:초로 적어도, 시:분:초까지 적어도 받는다. 편집 중에 시간을
+// 손으로 고치는 일은 잦고, 형식을 틀렸다고 막아 세울 일이 아니다.
+function parseTimecodeMs(text) {
+  const value = String(text ?? "").trim();
+  if (!value) return null;
+  const parts = value.split(":");
+  if (parts.length > 3 || parts.some((part) => part !== "" && !/^\d*\.?\d*$/.test(part))) return null;
+  let seconds = 0;
+  for (const part of parts) seconds = seconds * 60 + (Number(part) || 0);
+  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : null;
+}
+
+function renderEditorOutput() {
+  const total = editorClips.reduce((sum, clip) => sum + clipLengthMs(clip), 0);
+  $("#editor-total").textContent = editorClips.length ? formatDuration(total) : "0:00";
+  const trimmed = editorClips.filter((clip) => clip.inMs > 0 || clip.outMs < clip.durationMs).length;
+  // 다시 굽는 비용은 클립마다 갈린다. 실행 전에 알려 주면 기다릴지 말지 고를 수 있다.
+  $("#editor-quality").textContent = editorClips.length === 0
+    ? "클립을 담으면 다시 구울지 그대로 쓸지 알려드립니다."
+    : trimmed === 0
+      ? "구간을 자른 클립이 없어 다시 굽지 않고 그대로 이어 붙입니다. 금방 끝납니다."
+      : `${trimmed}개 클립만 다시 굽습니다. 나머지는 원본을 그대로 씁니다.`;
+  $("#start-edit-label").textContent = editorClips.length > 1 ? "이어서 만들기" : "이대로 만들기";
+}
+
+function renderEditorClipFields() {
+  const clip = editorClip();
+  $("#editor-clip-name").textContent = clip ? clip.name : "담은 영상이 없습니다";
+  $("#editor-clip-time").textContent = clip
+    ? `${formatDuration(clip.inMs)}–${formatDuration(clip.outMs)} · 원본 ${formatDuration(clip.durationMs)}`
+    : "—";
+  $("#editor-in").value = clip ? formatTimecode(clip.inMs) : "00:00:00.000";
+  $("#editor-out").value = clip ? formatTimecode(clip.outMs) : "00:00:00.000";
+  for (const id of ["#editor-mark-in", "#editor-mark-out", "#editor-play-clip", "#editor-reset-clip", "#editor-in", "#editor-out"]) {
+    $(id).disabled = !clip || reviewBusy;
+  }
+}
+
+function renderEditorTrack() {
+  $("#editor-count").textContent = String(editorClips.length);
+  $("#editor-empty").classList.toggle("hidden", editorClips.length > 0);
+  $("#start-edit-button").disabled = editorClips.length === 0 || reviewBusy;
+  $("#editor-clips").replaceChildren(...editorClips.map((clip, index) => {
+    const item = document.createElement("li");
+    item.className = "track-clip";
+    item.draggable = true;
+    if (index === editorActive) item.classList.add("active");
+    if (clip.inMs > 0 || clip.outMs < clip.durationMs) item.classList.add("trimmed");
+
+    const order = document.createElement("b");
+    order.textContent = String(index + 1);
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = clip.name;
+    const meta = document.createElement("small");
+    meta.textContent = clip.inMs > 0 || clip.outMs < clip.durationMs
+      ? `${formatDuration(clip.inMs)}–${formatDuration(clip.outMs)} · ${formatDuration(clipLengthMs(clip))}`
+      : `전체 · ${formatDuration(clipLengthMs(clip))}`;
+    copy.append(title, meta);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "track-remove";
+    remove.textContent = "×";
+    remove.title = "이 클립 빼기";
+    remove.setAttribute("aria-label", `${clip.name} 빼기`);
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editorClips.splice(index, 1);
+      selectEditorClip(Math.min(editorActive, editorClips.length - 1));
+    });
+
+    item.append(order, copy, remove);
+    item.addEventListener("click", () => selectEditorClip(index));
+    item.addEventListener("dragstart", (event) => {
+      item.classList.add("dragging");
+      event.dataTransfer.setData("text/plain", String(index));
+      event.dataTransfer.effectAllowed = "move";
+    });
+    item.addEventListener("dragend", () => item.classList.remove("dragging"));
+    item.addEventListener("dragover", (event) => event.preventDefault());
+    item.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const from = Number(event.dataTransfer.getData("text/plain"));
+      if (!Number.isInteger(from) || from === index) return;
+      const [moved] = editorClips.splice(from, 1);
+      editorClips.splice(index, 0, moved);
+      selectEditorClip(index);
+    });
+    return item;
+  }));
+  renderEditorOutput();
+}
+
+function selectEditorClip(index) {
+  editorActive = index >= 0 && index < editorClips.length ? index : -1;
+  const clip = editorClip();
+  if (clip && editorPlayer.dataset.token !== clip.token) {
+    editorPlayer.dataset.token = clip.token;
+    editorPlayer.src = clip.videoUrl;
+  }
+  if (!clip) {
+    editorPlayer.removeAttribute("src");
+    editorPlayer.dataset.token = "";
+  }
+  renderEditorTrack();
+  renderEditorClipFields();
+}
+
+function addEditorClips(videos = []) {
+  const added = (videos || []).filter(Boolean).map((video) => {
+    const durationMs = Math.max(1, Math.round(Number(video.durationMs) || 0));
+    return { token: video.token, name: video.name, videoUrl: video.videoUrl, durationMs, inMs: 0, outMs: durationMs };
+  });
+  if (!added.length) return;
+  editorClips = [...editorClips, ...added];
+  if (!$("#edit-name").value.trim()) {
+    $("#edit-name").value = `${added.length > 1 || editorClips.length > 1 ? "이어붙임" : "편집"}-${Date.now()}`;
+  }
+  selectEditorClip(editorClips.length - added.length);
+  setIconStatus("#edit-top-status", `클립 ${editorClips.length}개를 담았습니다`);
+}
+
+async function pickEditorVideos() {
+  try { addEditorClips(await api.pickVideos(true)); }
+  catch (error) { showToast(error.message, "error"); }
+}
+
+function moveClipEdge(field, ms) {
+  const clip = editorClip();
+  if (!clip) return;
+  const bounded = Math.max(0, Math.min(clip.durationMs, ms));
+  if (field === "inMs") clip.inMs = Math.min(bounded, clip.outMs - 1);
+  else clip.outMs = Math.max(bounded, clip.inMs + 1);
+  renderEditorTrack();
+  renderEditorClipFields();
+}
+
+$("#editor-pick").addEventListener("click", pickEditorVideos);
+$("#editor-drop").addEventListener("click", (event) => { if (!event.target.closest("button")) pickEditorVideos(); });
+$("#editor-mark-in").addEventListener("click", () => moveClipEdge("inMs", Math.round(editorPlayer.currentTime * 1000)));
+$("#editor-mark-out").addEventListener("click", () => moveClipEdge("outMs", Math.round(editorPlayer.currentTime * 1000)));
+$("#editor-reset-clip").addEventListener("click", () => {
+  const clip = editorClip();
+  if (!clip) return;
+  clip.inMs = 0;
+  clip.outMs = clip.durationMs;
+  renderEditorTrack();
+  renderEditorClipFields();
+});
+$("#editor-play-clip").addEventListener("click", () => {
+  const clip = editorClip();
+  if (!clip) return;
+  editorPlayer.currentTime = clip.inMs / 1000;
+  editorPlayer.play().catch(() => showToast("미리보기의 재생 버튼을 눌러 주세요.", "error"));
+});
+editorPlayer.addEventListener("timeupdate", () => {
+  const clip = editorClip();
+  if (clip && editorPlayer.currentTime * 1000 >= clip.outMs) editorPlayer.pause();
+});
+for (const [id, field] of [["#editor-in", "inMs"], ["#editor-out", "outMs"]]) {
+  $(id).addEventListener("change", () => {
+    const ms = parseTimecodeMs($(id).value);
+    if (ms == null) {
+      renderEditorClipFields();
+      showToast("시간은 5, 1:30, 00:01:23.400 처럼 적어 주세요.", "error");
+      return;
+    }
+    moveClipEdge(field, ms);
+  });
+}
+$("#start-edit-button").addEventListener("click", async () => {
+  if (!editorClips.length || reviewBusy) return;
+  try {
+    setEditBusy(true);
+    openJobDialog("영상 만드는 중");
+    await api.startEdit({
+      operation: "compose",
+      name: $("#edit-name").value.trim() || `편집-${Date.now()}`,
+      clips: editorClips.map((clip) => ({ videoToken: clip.token, inMs: clip.inMs, outMs: clip.outMs })),
+    });
+  } catch (error) {
+    setEditBusy(false);
+    openJobDialog("입력 확인 필요");
+    $("#edit-dialog-spinner").classList.add("hidden");
+    $("#edit-dialog-error").classList.remove("hidden");
+    $("#edit-error-message").textContent = error.message;
+    $("#cancel-edit-button").classList.add("hidden");
+    $("#close-edit-dialog").classList.remove("hidden");
+  }
+});
 
 function setEditBusy(busy) {
   reviewBusy = busy;
@@ -930,8 +1067,9 @@ function setEditBusy(busy) {
   updateReviewAction();
   updateReviewPosition();
   $("#start-edit-button").disabled = busy;
-  $("#edit-form").querySelectorAll("input, select, button:not(#cancel-edit-button)").forEach((element) => { element.disabled = busy; });
-  setIconStatus("#edit-top-status", busy ? "영상 편집 중" : "편집할 영상을 선택하세요", busy ? "running" : "idle");
+  $$("#view-edit input, #view-edit select, #view-edit button").forEach((element) => { element.disabled = busy; });
+  if (!busy) renderEditorTrack();
+  setIconStatus("#edit-top-status", busy ? "영상 만드는 중" : "편집할 영상을 담으세요", busy ? "running" : "idle");
 }
 
 function appendEditLog(text) {
@@ -1561,7 +1699,7 @@ async function initialize() {
   for (const selector of ["#start-page", "#end-page"]) {
     $(selector).max = String(totalPages);
   }
-  for (const selector of ["#voice-start-page", "#voice-end-page", "#trim-start-page", "#trim-end-page"]) {
+  for (const selector of ["#voice-start-page", "#voice-end-page"]) {
     $(selector).max = String(totalPages);
   }
   $("#start-page-total").textContent = `/ ${totalPages}`;
@@ -1701,26 +1839,6 @@ $$("#result-filters button").forEach((button) => button.addEventListener("click"
   $$("#result-filters button").forEach((item) => item.classList.toggle("selected", item === button));
   renderOutputs();
 }));
-$$("#edit-operation-tabs button").forEach((button) => button.addEventListener("click", () => setEditOperation(button.dataset.operation)));
-
-$$("#trim-mode-tabs button").forEach((button) => button.addEventListener("click", () => setTrimMode(button.dataset.trimMode)));
-$("#pick-merge-videos").addEventListener("click", async () => {
-  mergeVideos.push(...await api.pickVideos(true));
-  renderMergeQueue();
-});
-$("#pick-trim-video").addEventListener("click", async () => {
-  [trimVideo] = await api.pickVideos(false);
-  if (trimVideo) {
-    $("#trim-video-name").textContent = trimVideo.name;
-    if (trimVideo.pageRange) {
-      $("#trim-start-page").value = String(trimVideo.pageRange.start);
-      $("#trim-end-page").value = String(trimVideo.pageRange.end);
-      setTrimMode("pages");
-    } else {
-      setTrimMode("time");
-    }
-  }
-});
 $("#pick-voice-video").addEventListener("click", async () => {
   try { const [video] = await api.pickVideos(false); if (video) setReviewVideo(video); }
   catch (error) { showToast(error.message, "error"); }
@@ -1730,18 +1848,6 @@ $("#voice-start-page").addEventListener("input", () => {
   updateVoicePageMeta();
 });
 $("#voice-end-page").addEventListener("input", updateVoicePageMeta);
-$("#edit-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try { await api.startEdit(editPayload()); }
-  catch (error) {
-    openJobDialog("입력 확인 필요");
-    $("#edit-dialog-spinner").classList.add("hidden");
-    $("#edit-dialog-error").classList.remove("hidden");
-    $("#edit-error-message").textContent = error.message;
-    $("#cancel-edit-button").classList.add("hidden");
-    $("#close-edit-dialog").classList.remove("hidden");
-  }
-});
 $("#cancel-edit-button").addEventListener("click", (event) => requestJobCancellation(event.currentTarget, "edit"));
 $("#open-edit-result").addEventListener("click", () => latestEditTarget && api.open(latestEditTarget));
 $("#reveal-edit-result").addEventListener("click", () => latestEditTarget && api.reveal(latestEditTarget));
@@ -1844,17 +1950,7 @@ function attachNativeDrop(element, kind, onFiles) {
     catch (error) { appendEditLog(`[파일 오류] ${error.message}\n`); }
   });
 }
-attachNativeDrop($("#merge-drop-zone"), "video", (files) => { mergeVideos.push(...files); renderMergeQueue(); });
-attachNativeDrop($("#pick-trim-video"), "video", (files) => {
-  [trimVideo] = files;
-  if (!trimVideo) return;
-  $("#trim-video-name").textContent = trimVideo.name;
-  if (trimVideo.pageRange) {
-    $("#trim-start-page").value = String(trimVideo.pageRange.start);
-    $("#trim-end-page").value = String(trimVideo.pageRange.end);
-    setTrimMode("pages");
-  }
-});
+attachNativeDrop($("#editor-drop"), "video", (files) => addEditorClips(files));
 attachNativeDrop($("#pick-voice-video"), "video", (files) => { if (files[0]) setReviewVideo(files[0]); });
 let currentView = "new";
 let renderedView = "new";

@@ -260,56 +260,60 @@
         <section class="page-view hidden" id="view-edit">
           <header class="topbar">
             <div>
-              <p class="eyebrow">편집</p>
+              <p class="eyebrow">여러 소스로 새 영상 짜기</p>
               <h1>영상 편집</h1>
-              <p class="lede">필요한 부분을 자르고, 원하는 순서로 붙입니다.</p>
+              <p class="lede">영상을 담고, 쓸 구간만 남기고, 순서를 정해 하나로 만듭니다. 강의 영상이 아니어도 됩니다.</p>
             </div>
-            <div class="top-status" id="edit-top-status" tabindex="0" data-tooltip="편집할 영상을 선택하세요" aria-label="편집할 영상을 선택하세요"><span class="pulse"></span><span class="sr-only">대기</span></div>
+            <div class="top-status" id="edit-top-status" tabindex="0" data-tooltip="편집할 영상을 담으세요" aria-label="편집할 영상을 담으세요"><span class="pulse"></span><span class="sr-only">대기</span></div>
           </header>
 
-          <section class="edit-workspace">
-            <form class="card edit-card" id="edit-form">
-              <div class="card-heading">
-                <div><h2>어떤 작업을 할까요?</h2></div>
+          <section class="editor">
+            <div class="editor-stage card">
+              <video id="editor-player" controls preload="metadata" aria-label="편집 미리보기"></video>
+              <div class="editor-playhead">
+                <strong id="editor-clip-name">담은 영상이 없습니다</strong>
+                <span id="editor-clip-time">—</span>
               </div>
-
-              <div class="segmented edit-tabs" id="edit-operation-tabs">
-                <button type="button" data-operation="merge" class="selected">영상 합치기</button>
-                <button type="button" data-operation="trim">영상 자르기</button>
-
+              <div class="editor-marks">
+                <button type="button" class="secondary-small" id="editor-mark-in">여기를 시작으로</button>
+                <button type="button" class="secondary-small" id="editor-mark-out">여기를 끝으로</button>
+                <button type="button" class="secondary-small" id="editor-play-clip">이 구간 재생</button>
+                <button type="button" class="secondary-small" id="editor-reset-clip">구간 해제</button>
               </div>
-
-              <div class="edit-panel" id="edit-merge-panel">
-                <div class="drop-zone drop-target" id="merge-drop-zone">
-                  <div class="drop-icon">＋</div>
-                  <strong>합칠 영상을 선택하세요</strong>
-                  <p>선택한 뒤 아래 목록을 드래그해 순서를 바꿀 수 있습니다.</p>
-                  <button type="button" class="secondary-small" id="pick-merge-videos">영상 여러 개 선택</button>
-                </div>
-                <ol class="media-queue" id="merge-queue"></ol>
+              <div class="editor-fields">
+                <label class="field"><span>시작</span><input id="editor-in" value="00:00:00.000" autocomplete="off" spellcheck="false"></label>
+                <label class="field"><span>끝</span><input id="editor-out" value="00:00:00.000" autocomplete="off" spellcheck="false"></label>
               </div>
+            </div>
 
-              <div class="edit-panel hidden" id="edit-trim-panel">
-                <button type="button" class="file-picker drop-target" id="pick-trim-video"><span>▶</span><div><strong>자를 영상 선택</strong><small id="trim-video-name">클릭하거나 파일을 여기에 놓으세요.</small></div><b>선택</b></button>
-                <div class="segmented voice-source-tabs" id="trim-mode-tabs">
-                  <button type="button" data-trim-mode="time" class="selected">시간으로 자르기</button>
-                  <button type="button" data-trim-mode="pages">페이지로 자르기</button>
+            <aside class="editor-side">
+              <section class="card editor-sources">
+                <h2>영상 담기</h2>
+                <div class="drop-zone drop-target" id="editor-drop">
+                  <div class="drop-icon" aria-hidden="true">＋</div>
+                  <strong>여기에 영상을 끌어다 놓으세요</strong>
+                  <p>앱이 만든 강의 영상도, 다른 영상도 됩니다.</p>
+                  <button type="button" class="secondary-small" id="editor-pick">영상 고르기</button>
                 </div>
-                <div class="time-grid" id="trim-time-options">
-                  <label class="field"><span>시작 시간</span><input id="trim-start" value="00:00:00.000" autocomplete="off"></label>
-                  <label class="field"><span>끝 시간</span><input id="trim-end" value="00:00:30.000" autocomplete="off"></label>
-                </div>
-                <div class="time-grid hidden" id="trim-page-options">
-                  <label class="field"><span>시작 페이지</span><input id="trim-start-page" type="number" min="1" max="715" value="1"></label>
-                  <label class="field"><span>끝 페이지</span><input id="trim-end-page" type="number" min="1" max="715" value="1"></label>
-                </div>
-                <p class="tool-hint" id="trim-hint">초 단위 숫자나 시:분:초 형식을 사용할 수 있습니다.</p>
-              </div>
+              </section>
 
-              <details class="advanced-options full compact-options"><summary><span>결과 이름</span><small>자동 생성</small></summary><div><label class="field full"><input id="edit-name" autocomplete="off" spellcheck="false" required aria-label="편집 결과 이름"></label></div></details>
-              <button class="primary-button full" id="start-edit-button" type="submit"><span id="start-edit-label">영상 합치기</span><span>→</span></button>
-            </form>
+              <section class="card editor-output">
+                <h2>결과</h2>
+                <div class="editor-total"><span>완성 길이</span><strong id="editor-total">0:00</strong></div>
+                <p class="editor-note" id="editor-quality">클립을 담으면 다시 구울지 그대로 쓸지 알려드립니다.</p>
+                <details class="advanced-options full compact-options"><summary><span>결과 이름</span><small>자동 생성</small></summary><div><label class="field full"><input id="edit-name" autocomplete="off" spellcheck="false" required aria-label="편집 결과 이름"></label></div></details>
+                <button class="primary-button full" id="start-edit-button" type="button"><span id="start-edit-label">이대로 만들기</span><span aria-hidden="true">→</span></button>
+              </section>
+            </aside>
+          </section>
 
+          <section class="editor-track" aria-label="클립 순서">
+            <div class="track-head">
+              <h2>클립 <span id="editor-count">0</span></h2>
+              <p>왼쪽부터 순서대로 이어집니다. 끌어서 순서를 바꾸고, 클립을 눌러 구간을 정하세요.</p>
+            </div>
+            <ol class="track-list" id="editor-clips"></ol>
+            <p class="track-empty" id="editor-empty">담은 클립이 없습니다.</p>
           </section>
         </section>
 

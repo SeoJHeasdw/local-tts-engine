@@ -637,9 +637,6 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 /* ============================================================================
    영상 편집
    ========================================================================== */
-.edit-workspace { max-width: 820px; margin: 0 auto; }
-.edit-card { display: grid; gap: var(--s4); padding: var(--s5); }
-.edit-panel { display: grid; gap: var(--s3); }
 
 .drop-zone {
   display: flex; flex-direction: column; align-items: center; padding: var(--s5) var(--s4);
@@ -1034,7 +1031,8 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 
 @media (max-width: 1080px) {
   main { padding-left: var(--s6); padding-right: var(--s6); }
-  .workspace, .edit-workspace, .voice-lab-workspace { grid-template-columns: 1fr; }
+  .workspace, .voice-lab-workspace { grid-template-columns: 1fr; }
+  .editor { grid-template-columns: 1fr; }
   .progress-card { position: relative; min-height: auto; }
   :root { --sidebar-w: 200px; }
   .results-toolbar { align-items: stretch; flex-direction: column; }
@@ -1248,3 +1246,57 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
 }
 .batch-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
 .batch-eta { color: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ============================================================================
+   영상 편집 — 클립 타임라인
+   ----------------------------------------------------------------------------
+   합치기와 자르기가 한 목록이라, 화면도 하나다. 위에서 클립 하나를 보며 구간을
+   정하고, 아래 트랙이 완성될 순서 그대로를 보여 준다.
+   ========================================================================== */
+.editor { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: var(--s5); align-items: start; }
+.editor-stage { padding: var(--s4); display: grid; gap: var(--s3); min-width: 0; }
+#editor-player { display: block; width: 100%; aspect-ratio: 16 / 9; background: var(--nav); border-radius: var(--r-md); }
+.editor-playhead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
+.editor-playhead strong { font-size: var(--fs-md); font-weight: var(--fw-semi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-playhead span { color: var(--text-3); font: var(--fs-xs) var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.editor-marks { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.editor-fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+.editor-fields input { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.editor-side { display: grid; gap: var(--s4); }
+.editor-side .card { padding: var(--s5); display: grid; gap: var(--s3); }
+.editor-side h2 { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-semi); }
+.editor-total { display: flex; align-items: baseline; justify-content: space-between; }
+.editor-total span { color: var(--text-3); font-size: var(--fs-sm); }
+.editor-total strong { font: var(--fw-bold) var(--fs-xl) var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.editor-note { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-body); }
+
+.editor-track { margin-top: var(--s5); }
+.track-head { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+.track-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-semi); }
+.track-head h2 span { color: var(--lime); }
+.track-head p { margin: 0; color: var(--text-3); font-size: var(--fs-xs); }
+.track-list {
+  display: flex; gap: var(--s2); margin: 0; padding: var(--s3); list-style: none;
+  overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well);
+}
+.track-list:empty { display: none; }
+.track-clip {
+  flex: 0 0 220px; display: grid; grid-template-columns: 24px minmax(0, 1fr) 24px;
+  align-items: center; gap: var(--s2); padding: var(--s3);
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); cursor: grab;
+}
+.track-clip.active { border-color: var(--lime); background: var(--lime-wash); }
+.track-clip.dragging { opacity: .4; }
+/* 자른 클립은 다시 굽는다. 비용이 달라지는 지점이라 눈에 띄어야 한다. */
+.track-clip.trimmed { border-left: 3px solid var(--warn); }
+.track-clip b { font: var(--fw-semi) var(--fs-xs) var(--mono); color: var(--text-3); }
+.track-clip.active b { color: var(--lime); }
+.track-clip strong { display: block; font-size: var(--fs-sm); font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-clip small { display: block; margin-top: var(--s1); color: var(--text-3); font: var(--fs-micro) var(--mono); }
+.track-remove { width: 24px; height: 24px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-md); }
+.track-remove:hover { color: var(--danger); background: var(--dngr-wash); }
+.track-empty {
+  margin: 0; padding: var(--s6); text-align: center;
+  border: 1px dashed var(--line); border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm);
+}
