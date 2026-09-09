@@ -4,6 +4,7 @@ import {
   chapterEtaLabel,
   createViewHistory,
   findingKeyOf,
+  groupOutputs,
   etaLabel,
   filterOutputItems,
   outputKind,
@@ -13,6 +14,8 @@ import {
   unitLabel,
   voiceFindingLabel,
   voiceFindingReason,
+  outputState,
+  outputUnitLabel,
   visibleVoiceFindings,
   voiceFindingSummaryLine,
 } from "./view-utils.mjs";
@@ -1357,85 +1360,130 @@ function renderOutputs() {
       container.innerHTML = `<div class="empty-output">${outputItems.length ? "조건에 맞는 결과가 없습니다." : "아직 완성된 결과가 없습니다."}</div>`;
       return;
     }
-    container.replaceChildren(...list.map((item) => {
+    // 결과를 나열하는 것과, 남은 일을 보여 주는 것은 다르다. 상태를 한 마디로
+    // 적고, 레슨으로 나눈 작업은 하나로 묶어 어디에 할 일이 남았는지 먼저
+    // 읽히게 한다.
+    const findingsOf = (item) => visibleVoiceFindings(item.voiceFindings, item.review?.clearedFindings);
+
+    function buildRow(item, { compact = false } = {}) {
       const kind = outputKind(item);
+      const findings = findingsOf(item);
+      const state = outputState(item, findings);
       const approved = item.review?.status === "approved";
+      const target = { root: item.root, name: item.name, day: item.day, store: item.store };
+
       const row = document.createElement("article");
       row.className = "output-item";
+      row.dataset.state = state.key;
       row.innerHTML = `
         <div class="output-type ${kind}">${kind === "edit" ? "✂" : item.video ? "▶" : "♪"}</div>
         <div class="output-copy"><strong></strong><small></small></div>
-        <div class="output-status" aria-label="결과 상태">
-          <span class="status-symbol ${item.ok ? "verified" : "unverified"}" tabindex="0" data-tooltip="${item.ok ? "자동 파일 검증 완료" : "자동 검증 기록 없음"}" aria-label="${item.ok ? "자동 파일 검증 완료" : "자동 검증 기록 없음"}">${item.ok ? "✓" : "!"}</span>
-          <span class="status-symbol ${approved ? "reviewed" : "review-pending"}" tabindex="0" data-tooltip="${approved ? "직접 확인 완료" : "직접 확인 필요"}" aria-label="${approved ? "직접 확인 완료" : "직접 확인 필요"}">${approved ? "✓" : "○"}</span>
-        </div>
+        <div class="output-status" aria-label="결과 상태"><span class="state-pill ${state.tone}"></span></div>
         <div class="item-actions">
           <button class="open-button" type="button">열기</button>
           <details class="result-menu">
             <summary aria-label="결과 작업 더 보기">•••</summary>
             <div>
-              <button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "확인 완료 취소" : "확인 완료로 표시"}</button>
+              <button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "청취 승인 취소" : "청취 승인으로 표시"}</button>
               <button class="reveal-button" type="button">Finder에서 보기</button>
             </div>
           </details>
         </div>`;
-      row.querySelector("strong").textContent = item.displayName || item.name;
-      // 다듬기에서 내린 항목은 여기서도 사라져야 한다. 한 화면에서만
-      // 처리되면 그 버튼이 무엇을 한 것인지 알 수 없다.
-      const findings = visibleVoiceFindings(item.voiceFindings, item.review?.clearedFindings);
-      const voiceSummary = summarizeVoiceFindings(findings);
+
+      row.querySelector("strong").textContent = compact
+        ? `${outputUnitLabel(item) || ""} ${item.displayName || ""}`.trim() || item.name
+        : (item.displayName || item.name);
       row.querySelector("small").textContent = [
-        outputLabel(item),
+        compact ? "" : outputLabel(item),
         formatDuration(item.durationMs),
-        formatDate(item.updatedAt),
-        voiceSummary.total ? `목소리 ${voiceSummary.title}` : "",
+        compact ? "" : formatDate(item.updatedAt),
+        findings.length ? voiceFindingSummaryLine(findings) : "",
       ].filter(Boolean).join(" · ");
-      const automaticStatus = row.querySelector(".output-status .status-symbol");
-      const automaticLabel = !item.ok
-        ? "자동 검증 실패 또는 기록 없음"
-        : voiceSummary.total
-          ? `${voiceSummary.title} · ${voiceFindingSummaryLine(findings)}`
-          : "자동 파일 검증 완료 · 음성은 직접 확인해 주세요";
-      automaticStatus.classList.toggle("verified", Boolean(item.ok) && !voiceSummary.total);
-      automaticStatus.classList.toggle("advisory", Boolean(item.ok) && voiceSummary.total > 0);
-      automaticStatus.textContent = item.ok ? (voiceSummary.total ? "!" : "✓") : "!";
-      automaticStatus.dataset.tooltip = automaticLabel;
-      automaticStatus.setAttribute("aria-label", automaticLabel);
-      const target = { root: item.root, name: item.name, day: item.day, store: item.store };
+
+      const pill = row.querySelector(".state-pill");
+      pill.textContent = state.label;
+      pill.tabIndex = 0;
+      const detail = state.key === "failed"
+        ? "자동 검증에 실패했거나 기록이 없습니다."
+        : state.key === "attention"
+          ? `${voiceFindingSummaryLine(findings)} · 다듬기에서 처리하세요`
+          : state.key === "approved"
+            ? "직접 듣고 승인한 결과입니다."
+            : "자동 검수에서 걸린 곳이 없습니다. 직접 들어 보고 승인할 수 있습니다.";
+      pill.dataset.tooltip = detail;
+      pill.setAttribute("aria-label", `${state.label} · ${detail}`);
+
       const resultMenu = row.querySelector(".result-menu");
       resultMenu.addEventListener("toggle", () => {
-        if (!resultMenu.open) {
-          resultMenu.classList.remove("open-upward");
-          return;
-        }
-        $$(".result-menu[open]").forEach((other) => {
-          if (other !== resultMenu) other.removeAttribute("open");
-        });
+        if (!resultMenu.open) { resultMenu.classList.remove("open-upward"); return; }
+        $$(".result-menu[open]").forEach((other) => { if (other !== resultMenu) other.removeAttribute("open"); });
         const popover = resultMenu.querySelector(":scope > div");
         const availableBelow = window.innerHeight - resultMenu.getBoundingClientRect().bottom;
         resultMenu.classList.toggle("open-upward", shouldOpenMenuUpward(availableBelow, popover.offsetHeight));
       });
       row.querySelector(".review-button").addEventListener("click", async () => {
         try {
-          const review = await api.setOutputReview(target, approved ? "pending" : "approved");
-          item.review = review;
+          item.review = await api.setOutputReview(target, approved ? "pending" : "approved");
           renderOutputSummary();
           renderOutputs();
-          showToast(approved ? "확인 완료 표시를 취소했습니다." : "직접 확인한 결과로 표시했습니다.");
-        } catch (error) {
-          showToast(error.message, "error");
-        }
+          showToast(approved ? "청취 승인을 취소했습니다." : "직접 들은 결과로 표시했습니다.");
+        } catch (error) { showToast(error.message, "error"); }
       });
       if (item.video) {
-        row.querySelector(".open-button").textContent = "검수·수정";
+        row.querySelector(".open-button").textContent = findings.length ? "다듬기" : "열기";
         row.querySelector(".open-button").addEventListener("click", () => openReview(target));
-      } else row.querySelector(".open-button").addEventListener("click", () => api.open(target).catch(error => showToast(error.message, "error")));
+      } else {
+        row.querySelector(".open-button").addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
+      }
       row.querySelector(".reveal-button").addEventListener("click", () => {
         resultMenu.removeAttribute("open");
         api.reveal(target).catch((error) => showToast(error.message, "error"));
       });
       return row;
-    }));
+    }
+
+    function buildGroup(group) {
+      const box = document.createElement("section");
+      box.className = "output-group";
+      const head = document.createElement("header");
+      head.className = "output-group-head";
+      const title = document.createElement("strong");
+      title.textContent = group.items[0]?.displayName?.replace(/\s*·.*$/, "") || group.key;
+      const meta = document.createElement("small");
+      meta.textContent = `레슨 ${group.items.length}편 · ${formatDate(group.updatedAt)}`;
+      const state = document.createElement("span");
+      state.className = `state-pill ${group.attention ? "attention" : "ready"}`;
+      state.textContent = group.attention
+        ? `${group.attention}편에 확인 ${group.findings}곳`
+        : "모두 확인 끝";
+      const copy = document.createElement("div");
+      copy.append(title, meta);
+      head.append(copy, state);
+
+      const body = document.createElement("div");
+      body.className = "output-group-body";
+      body.append(...group.items.map((item) => buildRow(item, { compact: true })));
+
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "output-group-toggle";
+      // 할 일이 남은 묶음은 펼쳐 둔다. 다 끝난 묶음까지 열어 두면 남은 일이 묻힌다.
+      let open = group.attention > 0;
+      const paint = () => {
+        body.classList.toggle("hidden", !open);
+        toggle.textContent = open ? "접기" : `${group.items.length}편 보기`;
+        toggle.setAttribute("aria-expanded", String(open));
+      };
+      toggle.addEventListener("click", () => { open = !open; paint(); });
+      paint();
+      head.append(toggle);
+
+      box.append(head, body);
+      return box;
+    }
+
+    container.replaceChildren(...groupOutputs(list, findingsOf).map((row) =>
+      row.type === "group" ? buildGroup(row) : buildRow(row.item)));
   });
 }
 

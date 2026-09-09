@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 
 import {
   buildChapterRanges,
+  groupOutputs,
+  outputGroupKey,
+  outputState,
+  outputUnitLabel,
   chapterEtaLabel,
   etaLabel,
   formatRemaining,
@@ -197,4 +201,50 @@ test("전체 시계가 함께 설 때는 편 시계를 '이 편'으로 읽는다
   assert.equal(etaLabel(both), "약 10분 남음");
   assert.equal(etaLabel({ ...both, scope: "unit" }), "이 편 약 10분");
   assert.equal(etaLabel({ done: 30, total: 30, elapsedMs: 60_000, scope: "unit" }), "이 편 곧 완료");
+});
+
+test("레슨으로 나눠 만든 결과는 챕터 작업 하나로 묶인다", () => {
+  const items = [
+    { name: "studio-1-ch02-lessons-ch02-l02", updatedAt: "2026-09-09T15:00:00Z", ok: true },
+    { name: "studio-1-ch02-lessons-ch02-l01", updatedAt: "2026-09-09T14:00:00Z", ok: true },
+    { name: "studio-2-ch01-full", updatedAt: "2026-09-09T12:00:00Z", ok: true },
+  ];
+  const rows = groupOutputs(items, () => []);
+
+  assert.equal(rows.length, 2, "열여섯 줄이 아니라 작업 수만큼 보여야 한다");
+  assert.equal(rows[0].type, "group");
+  assert.deepEqual(rows[0].items.map((item) => item.name).map((name) => name.split("-").at(-1)), ["l01", "l02"]);
+  assert.equal(rows[0].updatedAt, "2026-09-09T15:00:00Z", "묶음의 시각은 가장 최근 편을 따른다");
+  assert.equal(rows[1].type, "single");
+});
+
+test("묶음은 아직 할 일이 남은 편이 몇인지 앞세운다", () => {
+  const items = [
+    { name: "j-ch02-lessons-ch02-l01", ok: true, review: { status: "approved" } },
+    { name: "j-ch02-lessons-ch02-l02", ok: true },
+    { name: "j-ch02-lessons-ch02-l03", ok: true },
+  ];
+  const findings = { "j-ch02-lessons-ch02-l03": [{ slideNumber: 5 }, { slideNumber: 9 }] };
+  const [group] = groupOutputs(items, (item) => findings[item.name] || []);
+
+  assert.equal(group.attention, 1, "확인이 남은 편만 센다");
+  assert.equal(group.findings, 2);
+});
+
+test("결과 상태는 세 배지가 아니라 한 마디로 읽힌다", () => {
+  // 파일 검증이 실패했으면 나머지는 따질 것이 없다.
+  assert.equal(outputState({ ok: false, review: { status: "approved" } }, [{}]).key, "failed");
+  // 아직 걸린 곳이 있으면 들었든 아니든 남은 일이다.
+  assert.deepEqual(
+    outputState({ ok: true, review: { status: "approved" } }, [{}, {}]),
+    { key: "attention", label: "확인 2곳", tone: "attention" },
+  );
+  assert.equal(outputState({ ok: true, review: { status: "approved" } }, []).key, "approved");
+  assert.equal(outputState({ ok: true }, []).key, "ready");
+});
+
+test("레슨 편 이름을 짧은 표로 읽는다", () => {
+  assert.equal(outputUnitLabel({ name: "studio-1-ch02-lessons-ch02-l07" }), "L07");
+  assert.equal(outputUnitLabel({ name: "studio-2-ch01-full" }), null);
+  assert.equal(outputGroupKey({ name: "studio-1-ch02-lessons-ch02-l07" }), "studio-1-ch02-lessons");
 });

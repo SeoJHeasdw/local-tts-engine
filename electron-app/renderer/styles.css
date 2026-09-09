@@ -1316,3 +1316,44 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
 .resume-banner strong { display: block; font-size: var(--fs-md); font-weight: var(--fw-semi); }
 .resume-banner small { display: block; margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
 .resume-actions { display: flex; gap: var(--s2); }
+
+/* ============================================================================
+   최근 결과 — 작업 단위로 묶고 남은 일을 앞세운다
+   ----------------------------------------------------------------------------
+   레슨 열여섯 편이 평평하게 늘어서면 어디에 할 일이 남았는지 열여섯 줄을 세어야
+   알 수 있었다. 만든 작업으로 묶고, 상태는 배지 셋 대신 한 마디로 적는다.
+   ========================================================================== */
+.state-pill {
+  display: inline-flex; align-items: center; white-space: nowrap;
+  padding: var(--s1) var(--s3); border-radius: var(--r-full);
+  border: 1px solid transparent;
+  font-size: var(--fs-xs); font-weight: var(--fw-semi); cursor: help;
+}
+.state-pill.ready { background: var(--raised); color: var(--text-3); border-color: var(--line); }
+.state-pill.approved { background: var(--aqua-soft); color: var(--aqua); }
+.state-pill.attention { background: var(--warn-soft); color: var(--warn); }
+.state-pill.failed { background: var(--dngr-soft); color: var(--danger); }
+/* 툴팁이 카드 오른쪽 밖으로 나가지 않게 왼쪽으로 물린다. */
+.state-pill::after { right: 0; left: auto; min-width: 220px; }
+
+.output-group {
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); overflow: hidden;
+}
+/* 할 일이 남은 묶음은 테두리로 먼저 눈에 든다. */
+.output-group:has(.state-pill.attention) { border-color: var(--warn-edge); }
+.output-group-head {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); background: var(--raised);
+}
+.output-group-head > div { flex: 1; min-width: 0; }
+.output-group-head strong { display: block; font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.output-group-head small { display: block; margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
+.output-group-toggle {
+  height: var(--h-sm); padding: 0 var(--s3); border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-xs);
+}
+.output-group-toggle:hover { color: var(--text); border-color: var(--line-2); }
+.output-group-body { display: grid; gap: 1px; background: var(--line); }
+.output-group-body .output-item { border: 0; border-radius: 0; background: var(--surface); }
+.output-group-body .output-item:hover { background: var(--raised); }

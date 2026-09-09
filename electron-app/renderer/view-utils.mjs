@@ -189,3 +189,59 @@ export function visibleVoiceFindings(findings = [], clearedKeys = []) {
   const cleared = new Set(clearedKeys.map(String));
   return (findings || []).filter((finding) => !cleared.has(findingKeyOf(finding)));
 }
+
+// 한 챕터를 레슨으로 나눠 만들면 결과가 열여섯 줄로 평평하게 늘어선다. 그중
+// 어디에 아직 할 일이 남았는지는 열여섯 줄을 눈으로 세어야 알 수 있었다.
+// 이름이 이미 소속을 담고 있으므로(<작업>-ch02-l03) 그것으로 묶는다.
+const LESSON_UNIT_PATTERN = /^(.+)-(ch\d+-l\d+)$/;
+
+export function outputGroupKey(item = {}) {
+  const match = LESSON_UNIT_PATTERN.exec(String(item.name || ""));
+  return match ? match[1] : null;
+}
+
+export function outputUnitLabel(item = {}) {
+  const match = LESSON_UNIT_PATTERN.exec(String(item.name || ""));
+  return match ? match[2].split("-").at(-1).toUpperCase() : null;
+}
+
+/**
+ * State a result in one word, so a list can be read rather than decoded.
+ *
+ * Three separate badges — file check, voice findings, listening approval — meant
+ * holding all three in your head to know whether anything was left to do. They
+ * are not independent: a failed file check makes the rest moot, and something
+ * still flagged is work regardless of whether it was listened to.
+ */
+export function outputState(item = {}, findings = []) {
+  if (item.ok === false) return { key: "failed", label: "검증 실패", tone: "failed" };
+  if (findings.length) {
+    return { key: "attention", label: `확인 ${findings.length}곳`, tone: "attention" };
+  }
+  if (item.review?.status === "approved") return { key: "approved", label: "청취 승인", tone: "approved" };
+  return { key: "ready", label: "확인할 곳 없음", tone: "ready" };
+}
+
+export function groupOutputs(items = [], findingsOf = () => []) {
+  const groups = new Map();
+  const rows = [];
+  for (const item of items) {
+    const key = outputGroupKey(item);
+    if (!key) { rows.push({ type: "single", item }); continue; }
+    if (!groups.has(key)) {
+      const group = { type: "group", key, items: [], updatedAt: item.updatedAt };
+      groups.set(key, group);
+      rows.push(group);
+    }
+    const group = groups.get(key);
+    group.items.push(item);
+    if (String(item.updatedAt || "") > String(group.updatedAt || "")) group.updatedAt = item.updatedAt;
+  }
+  for (const group of groups.values()) {
+    group.items.sort((left, right) => String(left.name).localeCompare(String(right.name)));
+    group.attention = group.items.filter((item) => outputState(item, findingsOf(item)).key !== "ready"
+      && outputState(item, findingsOf(item)).key !== "approved").length;
+    group.findings = group.items.reduce((total, item) => total + findingsOf(item).length, 0);
+  }
+  return rows;
+}

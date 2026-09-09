@@ -57,9 +57,14 @@ test("최근 결과는 열기만 기본 행동으로 두고 나머지를 더 보
   ]);
   assert.match(script, /class="open-button"/);
   assert.match(script, /class="result-menu"/);
-  assert.match(script, /확인 완료로 표시/);
+  // '확인 완료'는 이제 항목 하나를 내리는 동작이다. 결과 전체를 직접 듣고
+  // 승인하는 것과 같은 말을 쓰면 둘이 구분되지 않는다.
+  // 다듬기의 항목별 '확인 완료'와는 다른 동작이므로 문구도 겹치지 않아야 한다.
+  assert.match(script, /"청취 승인 취소" : "청취 승인으로 표시"/);
   assert.match(script, /Finder에서 보기/);
-  assert.match(script, /class="status-symbol/);
+  // 파일 검증·목소리·청취 승인을 배지 셋으로 나눠 두면 셋을 합쳐 읽어야 상태를
+  // 알 수 있다. 한 마디로 적는다.
+  assert.match(script, /class="state-pill/);
   assert.match(script, /shouldOpenMenuUpward\(availableBelow, popover\.offsetHeight\)/);
   assert.match(script, /\["results-menu-bottom", "results-menu-outside"\]\.includes\(initialView\)/);
   assert.match(script, /initialView === "results-menu-outside"\) \$\("#output-list"\)\.click\(\)/);
