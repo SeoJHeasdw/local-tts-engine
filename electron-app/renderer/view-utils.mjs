@@ -123,3 +123,33 @@ export function createViewHistory(initial = 'new') {
     forward() { if (index < items.length - 1) index++; return items[index]; },
   };
 }
+
+// 남은 시간은 지금까지의 속도로만 낸다. 청크마다 재시도 횟수가 달라 실제
+// 소요가 들쭉날쭉하므로, 앞으로를 예측하지 않고 여태 걸린 만큼이 이어진다고
+// 본다. 그래서 '약'이라고 적고 분 단위로만 말한다.
+export function formatRemaining(ms) {
+  const seconds = Math.round(Number(ms) / 1000);
+  if (!(seconds > 0)) return "";
+  if (seconds < 60) return "1분 미만";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}분`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours}시간 ${rest}분` : `${hours}시간`;
+}
+
+export function etaLabel({ done, total, elapsedMs, baseline = 0 } = {}) {
+  const completed = Number(done) - Number(baseline);
+  const remaining = Number(total) - Number(done);
+  if (!(Number(total) > 0) || !(completed > 0) || !(Number(elapsedMs) > 0)) return "";
+  if (remaining <= 0) return "곧 완료";
+  const label = formatRemaining((Number(elapsedMs) / completed) * remaining);
+  return label ? `약 ${label} 남음` : "";
+}
+
+// 챕터를 레슨으로 나눠 만들 때, 전체 중 몇 번째인지가 남은 시간보다 먼저
+// 궁금하다. 한 편짜리 작업에서는 표시할 것이 없다.
+export function unitLabel({ index, total } = {}) {
+  if (!(Number(total) > 1)) return "";
+  return `레슨 ${Number(index)}/${Number(total)}`;
+}

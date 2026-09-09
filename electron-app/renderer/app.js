@@ -2,11 +2,13 @@ import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from 
 import {
   buildChapterRanges,
   createViewHistory,
+  etaLabel,
   filterOutputItems,
   outputKind,
   shouldOpenMenuUpward,
   summarizePageRange,
   summarizeVoiceFindings,
+  unitLabel,
   voiceFindingLabel,
   voiceFindingReason,
   voiceFindingSummaryLine,
@@ -577,22 +579,49 @@ function clearFinding(finding) {
   renderFindings();
 }
 
+// 사유는 길고 대본 문장은 더 길다. 셋을 한 줄에 나란히 두면 문장이 잘리거나
+// 줄이 무너지므로, 짧은 것(페이지·시각)만 윗줄에 두고 문장은 아래 한 줄을
+// 통째로 쓴다. 사유는 아이콘 툴팁으로 접는다.
 function renderVoiceFindingRow(finding) {
   const row = document.createElement('li');
   row.dataset.severity = finding.severity;
+
   const button = document.createElement('button');
   button.type = 'button'; button.className = 'voice-finding';
-  const time = document.createElement('span'); time.textContent = voiceFindingLabel(finding);
-  const copy = document.createElement('div');
+
+  const head = document.createElement('div');
+  head.className = 'finding-head';
   const title = document.createElement('strong'); title.textContent = `${finding.slideNumber}페이지`;
-  const reason = document.createElement('small'); reason.textContent = voiceFindingReason(finding);
-  copy.append(title, reason); button.append(time, copy);
+  const time = document.createElement('span');
+  time.className = 'finding-time';
+  time.textContent = voiceFindingLabel(finding);
+  head.append(title, time);
+
+  const line = document.createElement('p');
+  line.className = 'finding-line';
+  line.textContent = String(finding.expectedText || '').trim() || voiceFindingReason(finding);
+
+  button.append(head, line);
+
+  const tools = document.createElement('div');
+  tools.className = 'finding-tools';
+  const why = document.createElement('span');
+  why.className = 'finding-why';
+  why.setAttribute('tabindex', '0');
+  why.setAttribute('role', 'note');
+  // 툴팁과 스크린리더가 같은 문구를 읽도록 한 값에서 낸다.
+  why.dataset.tooltip = voiceFindingReason(finding);
+  why.setAttribute('aria-label', `확인 사유: ${voiceFindingReason(finding)}`);
+  why.textContent = 'ⓘ';
   const done = document.createElement('button');
   done.type = 'button'; done.className = 'finding-done';
-  done.textContent = '확인 완료';
+  done.textContent = '확인';
+  done.title = '확인 완료로 표시';
   done.setAttribute('aria-label', `${finding.slideNumber}페이지 확인 완료로 표시`);
   done.addEventListener('click', () => clearFinding(finding));
-  row.append(button, done);
+  tools.append(why, done);
+
+  row.append(button, tools);
   button.addEventListener('click', () => {
     const page = voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
     selectReviewPage(page, voiceFindingReason(finding));
@@ -1354,7 +1383,22 @@ function renderJobEvent(event) {
     setBusy(true);
     setJobState("실행 중", "running");
     resetCancelButton($("#cancel-button"));
+    resetJobPace();
     updateStages("starting");
+  } else if (event.type === "unit") {
+    jobUnit = { index: event.index, total: event.total };
+    // 편이 바뀌면 속도 관측을 다시 시작한다. 레슨마다 길이가 달라 앞 편의
+    // 속도로 다음 편을 재면 남은 시간이 크게 어긋난다.
+    jobPace = null;
+    renderJobPace();
+  } else if (event.type === "voice-progress") {
+    if (creationState !== "running") return;
+    if (!jobPace || jobPace.total !== event.total) {
+      jobPace = { baseline: event.done, total: event.total, startedAt: Date.now(), done: event.done };
+    } else {
+      jobPace.done = event.done;
+    }
+    renderJobPace();
   } else if (event.type === "stage") {
     if (creationState !== "running") return;
     updateStages(event.stage, event.state === "done" && event.stage === "verify");
@@ -1399,6 +1443,37 @@ function renderJobEvent(event) {
     $("#job-name").value = suggestedName();
     updateProductionBrief();
   }
+}
+
+// 제작은 길다. 무엇을 하는 중인지만 알려주고 언제 끝나는지는 말해 주지 않으면
+// 자리를 뜰 수도, 기다릴 수도 없다.
+let jobPace = null;
+let jobUnit = null;
+
+function renderJobPace() {
+  const unit = jobUnit ? unitLabel(jobUnit) : "";
+  $("#job-unit").textContent = unit;
+  $("#job-unit").classList.toggle("hidden", !unit);
+  $("#job-eta").textContent = jobPace
+    ? etaLabel({
+        done: jobPace.done,
+        total: jobPace.total,
+        elapsedMs: Date.now() - jobPace.startedAt,
+        baseline: jobPace.baseline,
+      })
+    : "";
+}
+
+function resetJobPace() {
+  jobPace = null;
+  jobUnit = null;
+  renderJobPace();
+}
+
+// 청크 하나가 몇십 초 걸리므로, 이벤트 사이에도 남은 시간이 줄어드는 것이
+// 보이도록 주기적으로 다시 그린다.
+if (typeof setInterval === "function") {
+  setInterval(() => { if (jobPace) renderJobPace(); }, 5_000);
 }
 
 async function initialize() {

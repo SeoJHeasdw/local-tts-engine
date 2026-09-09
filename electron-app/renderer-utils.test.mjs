@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   buildChapterRanges,
+  etaLabel,
+  formatRemaining,
+  unitLabel,
   filterOutputItems,
   outputKind,
   formatVoiceTimestamp,
@@ -124,4 +127,37 @@ test('뒤로·앞으로 이동과 이동 후 새 화면 선택은 브라우저�
   assert.equal(history.canForward,false);
   assert.equal(history.back(),'results'); assert.equal(history.back(),'new');
   assert.equal(history.back(),'new'); assert.equal(history.canBack,false);
+});
+
+test("남은 시간은 여태 걸린 속도로만 내고 분 단위로 말한다", () => {
+  // 30개 중 10개를 5분에 했으면 남은 20개는 약 10분.
+  assert.equal(etaLabel({ done: 10, total: 30, elapsedMs: 5 * 60_000 }), "약 10분 남음");
+  assert.equal(etaLabel({ done: 29, total: 30, elapsedMs: 29 * 1_000 }), "약 1분 미만 남음");
+  assert.equal(etaLabel({ done: 30, total: 30, elapsedMs: 60_000 }), "곧 완료");
+});
+
+test("측정할 것이 없으면 남은 시간을 지어내지 않는다", () => {
+  assert.equal(etaLabel({ done: 0, total: 30, elapsedMs: 0 }), "");
+  assert.equal(etaLabel({ done: 5, total: 0, elapsedMs: 60_000 }), "");
+  assert.equal(etaLabel({}), "");
+});
+
+test("이어받은 진행은 관측을 시작한 지점부터 센다", () => {
+  // 화면을 늦게 열어 12번째부터 봤다면, 그 뒤로 4개를 2분에 한 속도로 낸다.
+  assert.equal(
+    etaLabel({ done: 16, total: 24, elapsedMs: 2 * 60_000, baseline: 12 }),
+    "약 4분 남음",
+  );
+});
+
+test("한 시간을 넘으면 시간과 분으로 끊어 읽는다", () => {
+  assert.equal(formatRemaining(90 * 60_000), "1시간 30분");
+  assert.equal(formatRemaining(120 * 60_000), "2시간");
+  assert.equal(formatRemaining(0), "");
+});
+
+test("레슨 단위 진행은 여러 편일 때만 표시한다", () => {
+  assert.equal(unitLabel({ index: 3, total: 9 }), "레슨 3/9");
+  assert.equal(unitLabel({ index: 1, total: 1 }), "");
+  assert.equal(unitLabel({}), "");
 });

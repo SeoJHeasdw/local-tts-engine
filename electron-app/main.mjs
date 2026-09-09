@@ -270,12 +270,27 @@ async function assertRuntime(options, studio = runtimePaths(options.paths), requ
   }
 }
 
+// course_pilot prints "[자동 음성 검수 3/38] ..." as it works through a lesson.
+// That line is the only place the run says how far along it is, and the wait is
+// long enough that "언제 끝나는지" is a real question. Read it here, once, so
+// the renderer gets a number instead of parsing log text.
+const VOICE_PROGRESS_PATTERN = /\[자동 음성 검수 (\d+)\/(\d+)\]/g;
+
 function runProcess(stage, executable, args, { cwd = ROOT, capture = false } = {}) {
   const job = activeJob;
   return runJobProcess(job, stage, executable, args, {
     cwd, capture,
     env: { ...process.env, PYTHONPATH: path.join(ROOT, "src"), PYTHONUNBUFFERED: "1" },
-    emit: payload => { if (activeJob === job) emit(payload); },
+    emit: payload => {
+      if (activeJob !== job) return;
+      emit(payload);
+      if (payload.type !== "log" || payload.stream !== "stdout") return;
+      let match = null;
+      let last = null;
+      VOICE_PROGRESS_PATTERN.lastIndex = 0;
+      while ((match = VOICE_PROGRESS_PATTERN.exec(payload.text))) last = match;
+      if (last) emit({ type: "voice-progress", done: Number(last[1]), total: Number(last[2]) });
+    },
   });
 }
 
@@ -650,6 +665,7 @@ async function runPipeline(options) {
   for (const [index, unit] of units.entries()) {
     if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
     if (units.length > 1) {
+      emit({ type: "unit", index: index + 1, total: units.length, title: unit.title });
       emit({
         type: "log",
         stream: "stdout",

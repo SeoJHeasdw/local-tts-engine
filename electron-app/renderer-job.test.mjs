@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 
+import { etaLabel, unitLabel } from "./renderer/view-utils.mjs";
+
 const source = await fs.readFile(new URL("./renderer/app.js", import.meta.url), "utf8");
 function fixture(cancel = async () => false) {
   const nodes = new Map();
@@ -19,11 +21,12 @@ function fixture(cancel = async () => false) {
     showToast() {}, setJobState: text => { $("#job-state").textContent = text; }, showJobView() {},
     appendLog: text => { $("#job-log").textContent += text; }, loadOutputs() {}, renderCompleteVoiceFindings() {},
     updateStages: stage => { $("#current-stage").textContent = stage; },
+    etaLabel, unitLabel, setInterval: () => 0, Date,
   });
   vm.runInContext('let creationState="idle", latestTarget=null;\n'
     + source.slice(source.indexOf("function setBusy("), source.indexOf("function setJobState("))
     + source.slice(source.indexOf("function renderJobEvent("), source.indexOf("async function initialize("))
-    + ';globalThis.jobUi={renderJobEvent,requestJobCancellation,state:()=>creationState};', ctx);
+    + ';globalThis.jobUi={renderJobEvent,requestJobCancellation,state:()=>creationState,pace:()=>jobPace,unit:()=>jobUnit};', ctx);
   return { $, ui: ctx.jobUi, calls: () => calls };
 }
 
@@ -73,4 +76,46 @@ test("중지 통신이 실패하면 실행 상태와 재시도 버튼을 복구�
   assert.equal(ui.state(), "running");
   assert.equal($("#current-stage").textContent, "voice");
   assert.equal($("#cancel-button").disabled, false);
+});
+
+test("레슨으로 나눠 만들 때 전체 중 몇 번째인지 보여 준다", () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  assert.equal($("#job-unit").textContent, "", "한 편짜리에는 표시할 것이 없다");
+
+  ui.renderJobEvent({ type: "unit", index: 3, total: 9, title: "CH02 L03" });
+
+  assert.equal($("#job-unit").textContent, "레슨 3/9");
+});
+
+test("남은 시간은 관측을 시작한 지점부터 재고, 편이 바뀌면 다시 잰다", () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+
+  ui.renderJobEvent({ type: "voice-progress", done: 4, total: 24 });
+  assert.equal(ui.pace().baseline, 4, "화면을 늦게 열었어도 그 지점부터 센다");
+  assert.equal($("#job-eta").textContent, "", "아직 잰 구간이 없으면 지어내지 않는다");
+
+  ui.renderJobEvent({ type: "voice-progress", done: 8, total: 24 });
+  assert.equal(ui.pace().done, 8);
+
+  // 편이 바뀌면 앞 편의 속도를 물려주지 않는다. 레슨마다 길이가 달라
+  // 그대로 재면 남은 시간이 크게 어긋난다.
+  ui.renderJobEvent({ type: "unit", index: 4, total: 9, title: "CH02 L04" });
+  assert.equal(ui.pace(), null);
+  assert.equal($("#job-eta").textContent, "");
+});
+
+test("작업을 새로 시작하면 이전 작업의 진행 표시가 남지 않는다", () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  ui.renderJobEvent({ type: "unit", index: 3, total: 9, title: "CH02 L03" });
+  ui.renderJobEvent({ type: "voice-progress", done: 8, total: 24 });
+
+  ui.renderJobEvent({ type: "started", options: { name: "ch03" } });
+
+  assert.equal(ui.unit(), null);
+  assert.equal(ui.pace(), null);
+  assert.equal($("#job-unit").textContent, "");
+  assert.equal($("#job-eta").textContent, "");
 });

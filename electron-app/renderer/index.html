@@ -10,7 +10,7 @@
   </head>
   <body>
     <div class="window-drag" aria-hidden="true"></div>
-    <div class="window-navigation" aria-label="화면 이동"><button type="button" id="window-back" aria-label="뒤로가기" title="뒤로가기" disabled>←</button><button type="button" id="window-forward" aria-label="앞으로가기" title="앞으로가기" disabled>→</button></div>
+    <div class="window-navigation" aria-label="화면 이동"><button type="button" class="panel-toggle" id="sidebar-toggle" aria-expanded="true" aria-controls="main-nav" title="사이드바 접기" aria-label="사이드바 접기"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="6.5" y1="2.5" x2="6.5" y2="13.5" stroke="currentColor" stroke-width="1.3"/></svg></button><span class="window-nav-divider" aria-hidden="true"></span><button type="button" id="window-back" aria-label="뒤로가기" title="뒤로가기" disabled>←</button><button type="button" id="window-forward" aria-label="앞으로가기" title="앞으로가기" disabled>→</button></div>
     <div class="shell">
       <aside class="sidebar">
         <div class="brand">
@@ -19,7 +19,6 @@
             <strong>Voice Studio</strong>
             <small>LOCAL PRODUCTION</small>
           </div>
-          <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-expanded="true" aria-controls="main-nav" title="사이드바 접기" aria-label="사이드바 접기">‹</button>
         </div>
 
         <nav id="main-nav" aria-label="주 메뉴">
@@ -134,6 +133,10 @@
               <div class="now-making">
                 <span class="spinner"></span>
                 <div><small>현재 단계</small><strong id="current-stage">준비 중</strong></div>
+                <div class="job-pace" id="job-pace">
+                  <span class="job-unit hidden" id="job-unit"></span>
+                  <span class="job-eta" id="job-eta"></span>
+                </div>
               </div>
               <ol class="stage-list">
                 <li data-stage="voice"><span>1</span><div><strong>목소리 만들기</strong><small>대본을 자연스러운 음성으로 변환</small></div><b></b></li>

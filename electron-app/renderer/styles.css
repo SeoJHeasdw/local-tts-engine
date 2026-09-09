@@ -621,7 +621,8 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 .review-sidebar .card { padding: var(--s5); }
 .review-sidebar h2 { font-size: var(--fs-lg); margin: 0 0 var(--s3); font-weight: var(--fw-semi); }
 .review-sidebar p, #review-player-status { color: var(--text-3); font-size: var(--fs-sm); line-height: var(--lh-body); }
-#review-findings-list { padding: 0; margin: 0; list-style: none; max-height: 230px; overflow: auto; display: grid; gap: var(--s2); }
+/* 항목이 문장까지 안고 있어 한 줄이 높다. 두세 개는 스크롤 없이 보이게 둔다. */
+#review-findings-list { padding: 0; margin: 0; list-style: none; max-height: 380px; overflow: auto; display: grid; gap: var(--s2); }
 #review-finding-count { color: var(--lime); }
 #review-form .segmented { margin: var(--s4) 0; }
 #review-mode-tabs { display: flex; flex-wrap: wrap; gap: var(--s0); }
@@ -1120,25 +1121,12 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
    폭은 --sidebar-w 하나로 정해지므로, 접기는 그 값만 바꾸고 글자를 감춘다.
    아이콘 자리는 펼침·접힘에서 같은 x좌표에 남아 메뉴가 튀어 보이지 않는다.
    ========================================================================== */
-.brand { position: relative; }
 .brand-copy { min-width: 0; overflow: hidden; }
-.sidebar-toggle {
-  position: absolute; right: calc(var(--s2) * -1); top: 2px;
-  width: 22px; height: 22px; display: grid; place-items: center;
-  border: 1px solid var(--line); border-radius: var(--r-sm);
-  background: var(--surface); color: var(--text-3);
-  font-size: var(--fs-sm); line-height: 1; cursor: pointer;
-}
-.sidebar-toggle:hover { color: var(--text); border-color: var(--line-2); }
 
 .sidebar-collapsed { --sidebar-w: var(--sidebar-w-collapsed); }
 .sidebar-collapsed .sidebar { padding-left: var(--s3); padding-right: var(--s3); }
-.sidebar-collapsed .brand {
-  flex-direction: column; align-items: center; gap: var(--s2);
-  padding: 0 0 var(--s5);
-}
+.sidebar-collapsed .brand { justify-content: center; padding: 0 0 var(--s5); }
 .sidebar-collapsed .brand-copy { display: none; }
-.sidebar-collapsed .sidebar-toggle { position: static; }
 .sidebar-collapsed .nav-item {
   grid-template-columns: 1fr; justify-items: center; padding: var(--s3) 0;
 }
@@ -1177,3 +1165,76 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
   font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
 }
 .findings-cleared button:hover { color: var(--text); }
+
+/* ============================================================================
+   창 막대 — 패널 토글과 화면 이동
+   ----------------------------------------------------------------------------
+   사이드바를 여닫는 버튼은 사이드바 안이 아니라 창 막대에 둔다. 접힌 뒤에도
+   같은 자리에 있어야 다시 펴는 곳을 찾지 않는다.
+   ========================================================================== */
+.panel-toggle { color: var(--text-3); }
+.panel-toggle:hover:not(:disabled) { color: var(--text); }
+.window-nav-divider {
+  width: 1px; height: 14px; margin: 0 var(--s1);
+  background: var(--line-2); -webkit-app-region: no-drag;
+}
+
+/* ============================================================================
+   확인 항목 — 짧은 것은 윗줄, 문장은 아랫줄
+   ----------------------------------------------------------------------------
+   페이지·시각·사유·대본 문장을 한 줄에 늘어놓으면 가장 중요한 문장이 가장
+   먼저 잘린다. 짧고 훑어보는 값만 윗줄에 두고, 문장에는 줄 하나를 통째로 준다.
+   사유는 판단이 아니라 근거라 아이콘 툴팁으로 접는다.
+   ========================================================================== */
+#review-findings-list li:has(> .voice-finding) {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s2); align-items: start;
+}
+.voice-finding {
+  display: grid; gap: var(--s2); align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+}
+.finding-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
+}
+.finding-head strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--text); }
+.finding-time {
+  color: var(--text-3); font: var(--fs-micro) var(--mono);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+li[data-severity="failed"] .finding-time { color: var(--danger); }
+li[data-severity="warning"] .finding-time { color: var(--warn); }
+.finding-line {
+  margin: 0; padding-top: var(--s2); border-top: 1px solid var(--line);
+  color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-body);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+.finding-tools { display: flex; flex-direction: column; align-items: center; gap: var(--s1); }
+.finding-why {
+  display: grid; place-items: center; width: 22px; height: 22px;
+  border-radius: var(--r-sm); color: var(--text-3);
+  font-size: var(--fs-xs); cursor: help; user-select: none;
+}
+.finding-why:hover, .finding-why:focus-visible { color: var(--warn); background: var(--warn-wash); }
+/* 목록이 좁아 기본 툴팁 위치는 카드 밖으로 나간다. 왼쪽으로 물린다. */
+.finding-why::after { right: 0; left: auto; min-width: 200px; }
+.finding-done {
+  height: 24px; padding: 0 var(--s2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-micro);
+}
+.finding-done:hover { color: var(--lime); border-color: var(--lime-edge); }
+
+/* ============================================================================
+   제작 진행 — 몇 번째 편인지와 남은 시간
+   ========================================================================== */
+.now-making { flex-wrap: wrap; }
+.job-pace { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+.job-unit {
+  padding: var(--s1) var(--s2); border-radius: var(--r-full);
+  background: var(--lime-soft); color: var(--lime);
+  font: var(--fw-semi) var(--fs-micro) var(--mono); white-space: nowrap;
+}
+.job-eta {
+  color: var(--text-3); font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
