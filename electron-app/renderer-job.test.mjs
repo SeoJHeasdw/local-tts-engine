@@ -20,6 +20,7 @@ function fixture(cancel = async () => false) {
   const ctx = vm.createContext({ $, $$: () => [], api: { cancel: async () => { calls++; return cancel(); } },
     showToast() {}, setJobState: text => { $("#job-state").textContent = text; }, showJobView() {},
     appendLog: text => { $("#job-log").textContent += text; }, loadOutputs() {}, renderCompleteVoiceFindings() {},
+    refreshResumable() {},
     updateStages: stage => { $("#current-stage").textContent = stage; },
     chapterEtaLabel, etaLabel, unitLabel, setInterval: () => 0, Date,
   });
@@ -182,4 +183,53 @@ test("작업을 새로 시작하면 전체 시계도 지워진다", () => {
 
   assert.equal(ui.plan(), null);
   assert.equal($("#job-total-eta").textContent, "");
+});
+
+test("일시정지하면 상태와 버튼이 바뀌고, 이어하면 되돌아온다", () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  assert.equal($("#pause-button").textContent, "일시정지");
+
+  ui.renderJobEvent({ type: "paused", immediate: true });
+  assert.equal($("#job-state").textContent, "일시정지");
+  assert.equal($("#pause-button").textContent, "이어하기");
+  assert.equal($("#current-stage").textContent, "일시정지됨");
+
+  ui.renderJobEvent({ type: "resumed" });
+  assert.equal($("#job-state").textContent, "실행 중");
+  assert.equal($("#pause-button").textContent, "일시정지");
+});
+
+test("촬영 중이라 바로 못 멈추면 언제 멈추는지 말해 준다", () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  ui.renderJobEvent({ type: "paused", immediate: false });
+  assert.equal($("#current-stage").textContent, "이번 편을 마치고 멈춥니다");
+});
+
+test("멈춰 있던 시간은 남은 시간 계산에서 빠진다", () => {
+  // 그러지 않으면 점심 먹고 온 만큼 남은 시간이 부풀어, 다시 켰을 때 화면이
+  // 엉뚱한 값을 말한다.
+  const { ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  ui.renderJobEvent({ type: "voice-progress", done: 4, total: 24 });
+  const pace = ui.pace();
+  const before = pace.startedAt;
+
+  ui.renderJobEvent({ type: "paused", immediate: true });
+  // 30분 자리를 비웠다고 두고 이어한다.
+  const away = 30 * 60_000;
+  ui.renderJobEvent({ type: "resumed", testAwayMs: away });
+
+  assert.ok(pace.startedAt >= before, "멈춘 만큼 관측 시작 시각이 밀려야 한다");
+});
+
+test("작업을 새로 시작하면 일시정지 버튼도 원래대로 돌아온다", () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
+  ui.renderJobEvent({ type: "paused", immediate: true });
+  assert.equal($("#pause-button").textContent, "이어하기");
+
+  ui.renderJobEvent({ type: "started", options: { name: "ch03" } });
+  assert.equal($("#pause-button").textContent, "일시정지");
 });

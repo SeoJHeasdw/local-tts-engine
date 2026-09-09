@@ -28,6 +28,7 @@ import {
   concatTimelines,
   normalizeComposeClips,
   pageVoicePatchesPlan,
+  pendingUnits,
   timeRangeForPages,
   assertPageReplaceable,
   pageRangeFromTimeline,
@@ -41,12 +42,44 @@ import {
   resolveRuntimeTools,
 } from "./runtime-config.mjs";
 
-import { cancelJobProcesses, runJobProcess } from "./job-process.mjs";
+import { cancelJobProcesses, pauseJobProcesses, resumeJobProcesses, runJobProcess, stopJobProcesses } from "./job-process.mjs";
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(APP_DIR);
 const RENDERER_DIR = path.join(APP_DIR, "renderer");
 const APP_SETTINGS_PATH = path.join(ROOT, "artifacts/app-settings.json");
+// 한 챕터를 만드는 데 두 시간 반이 걸린다. 앱이 꺼지면 그 시간이 통째로 사라지는
+// 것을 막으려면 진행이 프로세스가 아니라 디스크에 남아 있어야 한다. 끝난 편의
+// 이름만 적어 두면 되는데, 끝난 편은 검증까지 마친 영상이라 다시 만들 이유가
+// 없기 때문이다.
+const ACTIVE_JOB_PATH = path.join(ROOT, "artifacts/active-job.json");
+
+async function writeActiveJob(record) {
+  await fs.mkdir(path.dirname(ACTIVE_JOB_PATH), { recursive: true });
+  await fs.writeFile(ACTIVE_JOB_PATH, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+}
+
+async function clearActiveJob() {
+  await fs.rm(ACTIVE_JOB_PATH, { force: true }).catch(() => {});
+}
+
+async function readActiveJob() {
+  return fs.readFile(ACTIVE_JOB_PATH, "utf8").then(JSON.parse).catch(() => null);
+}
+
+// 끝난 편의 표식은 그 편이 스스로 남긴 검증 결과다. 별도 장부를 두면 장부와
+// 실제 결과가 어긋날 수 있어, 결과 자체를 근거로 삼는다.
+async function finishedUnitNames(units, studio) {
+  const checked = await Promise.all(units.map(async (unit) => {
+    const report = await fs
+      .readFile(path.join(studio.captionOutputRoot, unit.name, "validation-report.json"), "utf8")
+      .then(JSON.parse)
+      .catch(() => null);
+    return report?.summary?.ok && report?.videoPath ? unit.name : null;
+  }));
+  return checked.filter(Boolean);
+}
+
 const FINETUNE_RUN_ROOT = path.join(ROOT, "artifacts/finetune-runs");
 const FINETUNE_TRAIN_JSONL = path.join(ROOT, "artifacts/finetune-datasets/jaeho-ko-v1/official/train.jsonl");
 const ADAPTER = path.join(ROOT, "artifacts/finetune-runs/2026-08-25/jaeho-ko-r16-v1/adapters");
@@ -645,9 +678,16 @@ async function runPipeline(options) {
   const project = path.join(originalStudio.captionOutputRoot, options.name, ".production-input");
   // Own the directory before starting, including cancellation during the copy.
   // A pre-existing directory belongs to a previous run and must not be removed.
-  if (await safeStat(project)) throw new Error(`제작 입력 폴더가 이미 있습니다: ${project}`);
+  const resuming = Boolean(options.resumeFrom);
+  const snapshotExists = Boolean(await safeStat(project));
+  // 이어하는 중이라면 이 폴더는 지난 실행이 얼려 둔 바로 그 입력이다. 다시
+  // 만들면 '모든 편이 같은 입력을 쓴다'는 보장이 깨지므로 그대로 쓴다.
+  if (snapshotExists && !resuming) throw new Error(`제작 입력 폴더가 이미 있습니다: ${project}`);
   job.productionInputDir = project;
-  await runProcess("snapshot", requireRuntimeTool("node", "Node.js"), [
+  if (snapshotExists && resuming) {
+    emit({ type: "log", stream: "stdout",
+      text: "지난 실행이 얼려 둔 제작 입력을 그대로 이어서 사용합니다.\n" });
+  } else await runProcess("snapshot", requireRuntimeTool("node", "Node.js"), [
     path.join(ROOT, "scripts/prepare-production-input.mjs"),
     JSON.stringify({ root: originalStudio.deckRoot, destination: project,
       from: options.startPage, to: options.endPage ?? undefined,
@@ -676,9 +716,28 @@ async function runPipeline(options) {
       })),
     });
   }
+  const finished = units.length > 1 ? await finishedUnitNames(units, studio) : [];
+  const remaining = pendingUnits(units, finished);
+  if (finished.length) {
+    emit({ type: "log", stream: "stdout",
+      text: `이미 완성된 ${finished.length}편은 건너뜁니다. ${remaining.length}편을 이어서 만듭니다.\n` });
+  }
   const reports = [];
+  await writeActiveJob({
+    schemaVersion: 1, id: job.id, startedAt: job.startedAt, options,
+    unitNames: units.map((unit) => unit.name), completed: [...finished],
+  });
   for (const [index, unit] of units.entries()) {
     if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
+    if (finished.includes(unit.name)) continue;
+    // 일시정지는 편 사이에서 확정된다. 앱이 꺼져도 이어할 수 있는 지점이 곧
+    // 여기이므로, 멈추는 자리와 이어붙이는 자리를 같게 둔다.
+    while (job.pauseRequested && !job.cancelled) {
+      if (job.state !== "paused") { job.state = "paused"; emit({ type: "paused" }); }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
+    if (job.state === "paused") { job.state = "running"; emit({ type: "resumed" }); }
     if (units.length > 1) {
       emit({ type: "unit", index: index + 1, total: units.length, title: unit.title });
       emit({
@@ -689,6 +748,13 @@ async function runPipeline(options) {
     }
     const report = await runPipelineUnit(unit, studio, input.site);
     if (!report) return;
+    if (units.length > 1) {
+      finished.push(unit.name);
+      await writeActiveJob({
+        schemaVersion: 1, id: job.id, startedAt: job.startedAt, options,
+        unitNames: units.map((item) => item.name), completed: [...finished],
+      }).catch(() => {});
+    }
     reports.push(report);
   }
   if (activeJob !== job) return;
@@ -698,7 +764,36 @@ async function runPipeline(options) {
   if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
   job.state = "done";
   job.stage = "done";
+  await clearActiveJob();
   emit({ type: "complete", report });
+}
+
+function launchPipeline(options) {
+  activeJob = {
+    id: crypto.randomUUID(),
+    kind: "create",
+    options,
+    state: "running",
+    stage: "starting",
+    child: null,
+    children: new Set(),
+    cancelled: false,
+    startedAt: new Date().toISOString(),
+  };
+  const snapshot = jobSnapshot();
+  emit({ type: "started", job: snapshot, options });
+  const job = activeJob;
+  runPipeline(options).catch(async (error) => {
+    await cleanupCaptureSite(job);
+    if (activeJob !== job) return;
+    job.state = job.cancelled ? "cancelled" : "failed";
+    job.error = error.message;
+    // 중지는 그만두겠다는 뜻이므로 이어할 기록을 지운다. 실패는 다르다. 원인을
+    // 고치고 이어서 만들 수 있어야 두 시간이 날아가지 않는다.
+    if (job.cancelled) await clearActiveJob();
+    emit({ type: "failed", cancelled: job.cancelled, message: error.message });
+  }).finally(() => cleanupCaptureSite(job));
+  return snapshot;
 }
 
 async function cleanupCaptureSite(job) {
@@ -1938,28 +2033,82 @@ function registerIpc() {
     // 엉뚱한 레슨을 만드는 대신 목록 새로고침을 요청한다.
     options.inputStartId = catalog.pages.find((p) => p.page === options.startPage)?.slideId;
     options.inputEndId = catalog.pages.find((p) => p.page === options.endPage)?.slideId;
-    activeJob = {
-      id: crypto.randomUUID(),
-      kind: "create",
-      options,
-      state: "running",
-      stage: "starting",
-      child: null,
-      children: new Set(),
-      cancelled: false,
-      startedAt: new Date().toISOString(),
+    return launchPipeline(options);
+  });
+
+  ipcMain.handle("studio:resume-job", async (event) => {
+    guard(event);
+    if (activeJob && ["running", "cancelling"].includes(activeJob.state)) {
+      throw new Error("이미 실행 중인 작업이 있습니다.");
+    }
+    const record = await readActiveJob();
+    if (!record?.options?.name) throw new Error("이어서 만들 작업이 없습니다.");
+    const settings = await readAppSettings();
+    const studio = runtimePaths(settings.paths);
+    // 지난 실행에서 이미 정규화하고 카탈로그로 확인한 옵션이다. 그때 얼려 둔
+    // 입력을 그대로 쓰므로 페이지를 다시 풀지 않는다. 도구만 다시 확인한다.
+    const options = { ...record.options, resumeFrom: record.completed || [] };
+    await assertRuntime(options, studio, {
+      node: true,
+      productionInput: true,
+      ffmpeg: options.deliverable === "video",
+    });
+    return launchPipeline(options);
+  });
+
+  ipcMain.handle("studio:pause", async (event) => {
+    guard(event);
+    if (!activeJob || activeJob.kind !== "create" || activeJob.state !== "running") return false;
+    activeJob.pauseRequested = true;
+    // 지금 이 Mac 을 쓰려고 멈추는 것이므로, 다음 편을 기다리지 않고 돌고 있는
+    // 프로세스를 바로 재운다. 편 경계에서의 확정은 루프가 따로 처리한다.
+    const stopped = pauseJobProcesses(activeJob);
+    emit({ type: "paused", immediate: stopped });
+    const record = await readActiveJob();
+    if (record) await writeActiveJob({ ...record, paused: true }).catch(() => {});
+    return true;
+  });
+
+  ipcMain.handle("studio:resume", async (event) => {
+    guard(event);
+    if (!activeJob || activeJob.kind !== "create" || !activeJob.pauseRequested) return false;
+    activeJob.pauseRequested = false;
+    resumeJobProcesses(activeJob);
+    if (activeJob.state === "paused") activeJob.state = "running";
+    emit({ type: "resumed" });
+    const record = await readActiveJob();
+    if (record) await writeActiveJob({ ...record, paused: false }).catch(() => {});
+    return true;
+  });
+
+  // 앱이 꺼졌다 켜지면 여기서 남은 일을 알려 준다. 실행 중인 작업이 있으면
+  // 이어할 것이 없다.
+  ipcMain.handle("studio:get-resumable", async (event) => {
+    guard(event);
+    if (activeJob && ["running", "cancelling"].includes(activeJob.state)) return null;
+    const record = await readActiveJob();
+    if (!record?.options?.name) return null;
+    const settings = await readAppSettings();
+    const studio = runtimePaths(settings.paths);
+    const units = (record.unitNames || []).map((name) => ({ name }));
+    const finished = units.length ? await finishedUnitNames(units, studio) : [];
+    const remaining = units.length ? pendingUnits(units, finished).length : 1;
+    if (units.length && remaining === 0) { await clearActiveJob(); return null; }
+    return {
+      name: record.options.name,
+      title: record.options.title || record.options.name,
+      startedAt: record.startedAt,
+      total: units.length,
+      done: finished.length,
+      remaining,
+      paused: Boolean(record.paused),
     };
-    const snapshot = jobSnapshot();
-    emit({ type: "started", job: snapshot, options });
-    const job = activeJob;
-    runPipeline(options).catch(async (error) => {
-      await cleanupCaptureSite(job);
-      if (activeJob !== job) return;
-      job.state = job.cancelled ? "cancelled" : "failed";
-      job.error = error.message;
-      emit({ type: "failed", cancelled: job.cancelled, message: error.message });
-    }).finally(() => cleanupCaptureSite(job));
-    return snapshot;
+  });
+
+  ipcMain.handle("studio:discard-resumable", async (event) => {
+    guard(event);
+    await clearActiveJob();
+    return true;
   });
 
   ipcMain.handle("studio:cancel", async (event) => {

@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld("ttsStudio", {
   startEdit: (options) => ipcRenderer.invoke("studio:start-edit", options),
   start: (options) => ipcRenderer.invoke("studio:start", options),
   cancel: () => ipcRenderer.invoke("studio:cancel"),
+  pause: () => ipcRenderer.invoke("studio:pause"),
+  resume: () => ipcRenderer.invoke("studio:resume"),
+  getResumable: () => ipcRenderer.invoke("studio:get-resumable"),
+  resumeJob: () => ipcRenderer.invoke("studio:resume-job"),
+  discardResumable: () => ipcRenderer.invoke("studio:discard-resumable"),
   reveal: (target) => ipcRenderer.invoke("studio:reveal", target),
   open: (target) => ipcRenderer.invoke("studio:open", target),
   onJobEvent: (callback) => {

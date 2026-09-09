@@ -1300,3 +1300,19 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
   margin: 0; padding: var(--s6); text-align: center;
   border: 1px dashed var(--line); border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm);
 }
+
+/* 일시정지와 이어하기. 두 시간짜리 작업이 앱과 함께 사라지지 않는다는 것을
+   화면이 먼저 말해 준다. */
+.job-controls { display: flex; gap: var(--s2); }
+.job-controls .cancel-button { width: auto; flex: 1; }
+.job-controls .secondary-small { flex: 0 0 auto; }
+.job-state.paused { background: var(--warn-soft); color: var(--warn); }
+
+.resume-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s4);
+  flex-wrap: wrap; margin-bottom: var(--s4); padding: var(--s4) var(--s5);
+  border: 1px solid var(--warn-edge); border-radius: var(--r-md); background: var(--warn-wash);
+}
+.resume-banner strong { display: block; font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.resume-banner small { display: block; margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
+.resume-actions { display: flex; gap: var(--s2); }

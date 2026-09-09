@@ -18,11 +18,52 @@ export function stopJobProcesses(job, signal = "SIGTERM") {
   return signalled;
 }
 
+// 지금 이 Mac 을 잠깐 쓰려고 멈추는 것과, 앱을 껐다 켠 뒤 이어하는 것은 서로
+// 다른 일이다. 여기는 앞쪽만 맡는다. SIGSTOP 은 프로세스를 스케줄에서 빼므로
+// CPU 와 GPU 가 즉시 풀리고, 열린 파일과 진행 상태는 그대로 남는다. 대신 앱이
+// 종료되면 자식도 함께 사라지므로, 재시작을 넘기는 일은 디스크에 남긴 진행
+// 기록이 맡는다.
+export function pauseJobProcesses(job) {
+  if (!job || job.state !== "running" || job.cancelled) return false;
+  if (job.paused) return true;
+  // 멈춘 뒤에 되살릴 수 없으면 멈추지 않느니만 못하다. 하나라도 신호가 닿아야
+  // 일시정지로 친다.
+  if (!signalJobProcesses(job, "SIGSTOP")) return false;
+  job.paused = true;
+  job.pausedAt = Date.now();
+  return true;
+}
+
+export function resumeJobProcesses(job) {
+  if (!job || !job.paused) return false;
+  signalJobProcesses(job, "SIGCONT");
+  job.paused = false;
+  job.pausedMs = Number(job.pausedMs || 0) + (Date.now() - Number(job.pausedAt || Date.now()));
+  job.pausedAt = null;
+  return true;
+}
+
+function signalJobProcesses(job, signal) {
+  let delivered = 0;
+  for (const child of job?.children || []) {
+    if (!child.pid) continue;
+    try {
+      process.kill(-child.pid, signal);
+      delivered++;
+    } catch {
+      try { if (child.kill(signal)) delivered++; } catch { /* already finished */ }
+    }
+  }
+  return delivered;
+}
+
 export function cancelJobProcesses(job, { forceAfterMs = 3000, onForce = () => {} } = {}) {
   if (!job || !["running", "cancelling"].includes(job.state)) return false;
   if (job.cancelled) return true;
   job.cancelled = true;
   job.state = "cancelling";
+  // 멈춰 있는 프로세스는 SIGTERM 을 처리할 기회를 얻지 못한다. 먼저 깨운다.
+  if (job.paused) resumeJobProcesses(job);
   stopJobProcesses(job);
   job.stopTimer = setTimeout(() => {
     if (stopJobProcesses(job, "SIGKILL")) onForce();

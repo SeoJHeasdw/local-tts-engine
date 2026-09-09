@@ -814,6 +814,43 @@ $('#sidebar-toggle').addEventListener('click', () => {
 try { applySidebarCollapsed(localStorage.getItem(SIDEBAR_KEY) === '1'); }
 catch { applySidebarCollapsed(false); }
 
+// 앱이 꺼져도 두 시간을 잃지 않는다는 약속은, 켰을 때 이어할 것이 있다고
+// 먼저 말해 주어야 지켜진다.
+async function refreshResumable() {
+  try {
+    const pending = await api.getResumable();
+    $("#resume-banner").classList.toggle("hidden", !pending);
+    if (!pending) return;
+    $("#resume-title").textContent = pending.paused
+      ? "일시정지된 작업이 있습니다"
+      : "이어서 만들 작업이 있습니다";
+    $("#resume-detail").textContent = pending.total > 1
+      ? `${pending.title} · ${pending.total}편 중 ${pending.done}편 완료 · ${pending.remaining}편 남음`
+      : `${pending.title} · 처음부터 다시 만듭니다`;
+  } catch { $("#resume-banner").classList.add("hidden"); }
+}
+
+$("#pause-button").addEventListener("click", async () => {
+  const paused = $("#pause-button").textContent === "이어하기";
+  try { await (paused ? api.resume() : api.pause()); }
+  catch (error) { showToast(error.message, "error"); }
+});
+
+$("#resume-continue").addEventListener("click", async () => {
+  try {
+    $("#resume-banner").classList.add("hidden");
+    await api.resumeJob();
+  } catch (error) {
+    showToast(error.message, "error");
+    await refreshResumable();
+  }
+});
+
+$("#resume-discard").addEventListener("click", async () => {
+  try { await api.discardResumable(); await refreshResumable(); }
+  catch (error) { showToast(error.message, "error"); }
+});
+
 function optionPayload() {
   const lesson = productionMode === "lesson" ? selectedLesson() : null;
   const chapter = productionMode === "chapter" ? selectedChapter() : null;
@@ -1550,6 +1587,23 @@ function renderJobEvent(event) {
     updateStages(event.stage, event.state === "done" && event.stage === "verify");
   } else if (event.type === "log") {
     appendLog(event.text);
+  } else if (event.type === "paused") {
+    setJobState("일시정지", "paused");
+    $("#pause-button").textContent = "이어하기";
+    $("#current-stage").textContent = event.immediate ? "일시정지됨" : "이번 편을 마치고 멈춥니다";
+    // 멈춰 있는 동안은 시간을 세지 않는다. 그러지 않으면 남은 시간이 멈춘
+    // 만큼 부풀어 다시 켰을 때 엉뚱한 값을 말한다.
+    jobPausedAt = Date.now();
+  } else if (event.type === "resumed") {
+    setJobState("실행 중", "running");
+    $("#pause-button").textContent = "일시정지";
+    if (jobPausedAt) {
+      const away = Date.now() - jobPausedAt;
+      if (jobPace) jobPace.startedAt += away;
+      if (jobPlan?.unitStartedAt) jobPlan.unitStartedAt += away;
+      jobPausedAt = null;
+    }
+    renderJobPace();
   } else if (event.type === "cancelling") {
     creationState = "cancelling";
     setJobState("중지 중", "running");
@@ -1557,6 +1611,7 @@ function renderJobEvent(event) {
     $("#cancel-button").disabled = true;
     $("#cancel-button").textContent = "중지 중…";
   } else if (event.type === "failed") {
+    refreshResumable();
     creationState = event.cancelled ? "cancelled" : "failed";
     setBusy(false);
     resetCancelButton($("#cancel-button"));
@@ -1567,6 +1622,7 @@ function renderJobEvent(event) {
     $("#job-log").closest("details").open = true;
     loadOutputs();
   } else if (event.type === "complete") {
+    refreshResumable();
     creationState = "done";
     setBusy(false);
     resetCancelButton($("#cancel-button"));
@@ -1601,6 +1657,7 @@ function renderJobEvent(event) {
 let jobPace = null;
 let jobUnit = null;
 let jobPlan = null;
+let jobPausedAt = null;
 
 // 목소리 후보도 하나에 수십 초씩 걸린다. 몇 개 남았는지만 알려주는 것과
 // 얼마나 더 기다려야 하는지 알려주는 것은 다르다.
@@ -1670,6 +1727,8 @@ function resetJobPace() {
   jobPace = null;
   jobUnit = null;
   jobPlan = null;
+  jobPausedAt = null;
+  $("#pause-button").textContent = "일시정지";
   renderJobPace();
 }
 
@@ -1689,6 +1748,7 @@ async function initialize() {
   $("#job-name").value = suggestedName();
   $("#text-voice-name").value = suggestedTextVoiceName();
   api.onJobEvent(handleJobEvent);
+  refreshResumable();
   const [status, settings] = await Promise.all([api.getStatus(), api.getSettings()]);
   renderSettings(settings);
   catalogPages = status.catalog?.pages || [];

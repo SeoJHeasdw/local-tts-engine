@@ -719,3 +719,17 @@ export function normalizeComposeClips(clips = [], durationsMs = []) {
 export function composeTotalMs(segments = []) {
   return segments.reduce((total, segment) => total + Number(segment.lengthMs || 0), 0);
 }
+
+/**
+ * Decide which units of an interrupted chapter still need making.
+ *
+ * A finished unit is a whole validated video, so skipping it on resume is not
+ * reuse of a cached fragment — it is not redoing work that is already done and
+ * checked. That distinction is why resume stops at unit boundaries: inside a
+ * unit there is no such checkpoint, and this production deliberately runs with
+ * caching off.
+ */
+export function pendingUnits(units = [], finishedNames = []) {
+  const finished = new Set(finishedNames.map(String));
+  return units.filter((unit) => !finished.has(String(unit?.name)));
+}

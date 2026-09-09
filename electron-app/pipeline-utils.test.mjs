@@ -26,6 +26,7 @@ import {
   voiceQualityFindings,
   composeTotalMs,
   normalizeComposeClips,
+  pendingUnits,
 } from "./pipeline-utils.mjs";
 
 test("기본 작업은 제작 LoRA v1 0.6과 레슨 전체 제작이다", () => {
@@ -491,4 +492,13 @@ test("빈 목록과 뒤집힌 구간은 렌더 전에 거절한다", () => {
   assert.throws(() => normalizeComposeClips([], []), /하나 이상/);
   assert.throws(() => normalizeComposeClips([{ inMs: 5_000, outMs: 2_000 }], [10_000]), /끝 지점/);
   assert.throws(() => normalizeComposeClips([{}], [0]), /길이를 읽지 못했습니다/);
+});
+
+test("이어하기는 이미 끝난 편만 건너뛴다", () => {
+  const units = [{ name: "ch02-l01" }, { name: "ch02-l02" }, { name: "ch02-l03" }];
+  assert.deepEqual(pendingUnits(units, ["ch02-l01"]).map((unit) => unit.name), ["ch02-l02", "ch02-l03"]);
+  // 순서가 섞여 들어와도 남은 편의 순서는 원래대로 지킨다.
+  assert.deepEqual(pendingUnits(units, ["ch02-l03", "ch02-l01"]).map((unit) => unit.name), ["ch02-l02"]);
+  assert.deepEqual(pendingUnits(units, []).length, 3);
+  assert.deepEqual(pendingUnits(units, ["ch02-l01", "ch02-l02", "ch02-l03"]).length, 0);
 });
