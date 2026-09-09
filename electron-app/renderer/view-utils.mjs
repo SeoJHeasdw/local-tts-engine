@@ -1,3 +1,6 @@
+import { omissionEvidence, textWords } from './transcript-evidence.mjs';
+export { findingStatus } from './transcript-evidence.mjs';
+
 export function buildChapterRanges(pages = []) {
   const chapters = new Map();
   for (const page of pages) {
@@ -75,6 +78,8 @@ export function voiceFindingLabel(finding = {}) {
 }
 
 export function voiceFindingReason(finding = {}) {
+  const omissions = omissionEvidence(finding);
+  if (omissions.length) return `받아쓰기에서 구절 누락: ${omissions.map(check => `“${check.text}”`).join(', ')}`;
   const terms = (finding.terms || []).map((item) => item.term).filter(Boolean);
   const reasons = (finding.reasons || []).filter(Boolean);
   const base = reasons.join(", ") || "자동 음성 검수 점수 미달";
@@ -89,7 +94,7 @@ export function summarizeVoiceFindings(findings = []) {
   const warned = findings.filter((finding) => finding.severity === "warning");
   if (!findings.length) return { total: 0, failed: 0, warned: 0, title: "", tone: "ok" };
   const parts = [];
-  if (failed.length) parts.push(`재생성 권장 ${failed.length}곳`);
+  if (failed.length) parts.push(`재생성 필요 ${failed.length}곳`);
   if (warned.length) parts.push(`확인 권장 ${warned.length}곳`);
   return {
     total: findings.length,
@@ -105,6 +110,23 @@ export function voiceFindingSummaryLine(findings = []) {
   if (!summary.total) return "";
   const first = findings[0];
   return `${voiceFindingLabel(first)} · ${first.slideNumber}페이지${summary.total > 1 ? ` 외 ${summary.total - 1}곳` : ""}`;
+}
+
+export function completionFindings(report = {}) {
+  if (report.units?.length > 1) return report.units.flatMap(unit => (unit.voiceFindings || []).map(finding => ({
+    ...finding, target: unit.target, displayName: unit.displayName || unit.name,
+  })));
+  return report.voiceFindings || [];
+}
+
+export function completionSummary(report, durationLabel) {
+  const units = report.units?.length || 1;
+  const count = summarizeVoiceFindings(completionFindings(report));
+  const files = report.summary?.ok ? '파일 검사 통과' : '파일 검사 실패';
+  const voice = count.total ? count.title
+    : report.voiceQuality?.clean === true ? '목소리 검수 통과'
+      : report.voiceQuality ? '목소리 검수 결과 확인 필요' : '목소리 검수 기록 없음';
+  return `${units > 1 ? `${units}개 영상 · ` : ''}${durationLabel}${units > 1 ? ' 합계' : ''} · ${files} · ${voice}`;
 }
 
 export function createViewHistory(initial = 'new') {
@@ -281,10 +303,11 @@ export function findingTerms(finding = {}) {
 }
 
 export function findingExcerpt(finding = {}, radius = 16) {
-  const text = String(finding.expectedText || "").trim();
-  const [term] = findingTerms(finding);
+  const text = String(finding.expectedText || "");
+  const omission = omissionEvidence(finding)[0];
+  const term = omission?.text || findingTerms(finding)[0];
   if (!text) return null;
-  const index = term ? text.indexOf(term) : -1;
+  const index = omission ? omission.expectedStart : term ? text.indexOf(term) : -1;
   if (index === -1) {
     return { before: "", term: "", after: text.length > radius * 3 ? `${text.slice(0, radius * 3)}…` : text };
   }
@@ -307,11 +330,32 @@ export function findingExcerpt(finding = {}, radius = 16) {
  */
 export function findingSeek(finding = {}, page = null, leadInMs = 700, tailMs = 500) {
   const fallback = { startMs: Number(finding.startMs) || 0, endMs: Number(finding.endMs) || 0 };
-  const words = page?.words || [];
+  const words = (page?.words || []).filter(w => Number(w.startMs) >= fallback.startMs && Number(w.endMs) <= fallback.endMs);
+  const omission = omissionEvidence(finding)[0];
+  if (omission && words.length) {
+    // The absent words can have zero-duration forced alignments. Locate the
+    // containing sentence in script order and play its context, never pretend
+    // those forced timestamps prove the missing words were spoken.
+    const text = String(finding.expectedText);
+    const stops = [0, ...[...text.matchAll(/[.!?。！？]\s+/g)].map(m => m.index + m[0].length), text.length];
+    const start = Math.max(...stops.filter(p => p <= omission.expectedStart));
+    const end = Math.min(...stops.filter(p => p >= omission.expectedEnd));
+    const needle = textWords(text.slice(start, end));
+    const hay = words.flatMap(word => textWords(word.text).map(token => ({...token, word})));
+    const hits = [];
+    for (let i = 0; i + needle.length <= hay.length; i++)
+      if (needle.length && needle.every((token, n) => token.key === hay[i+n].key)) hits.push(i);
+    if (hits.length !== 1) return fallback;
+    const from = hay[hits[0]].word, to = hay[hits[0] + needle.length - 1].word;
+    if (!(Number(to.endMs) > Number(from.startMs))) return fallback;
+    return {startMs: Math.max(fallback.startMs, Number(from.startMs) - leadInMs),
+      endMs: Math.min(fallback.endMs, Number(to.endMs) + tailMs), word: omission.text, basis: 'sentence-context'};
+  }
   const terms = findingTerms(finding);
   if (!words.length || !terms.length) return fallback;
-  const hit = words.find((word) => terms.some((term) => term && String(word.text || "").includes(term)))
-    || words.find((word) => terms.some((term) => term && term.includes(String(word.text || "")) && String(word.text || "").length > 1));
+  const hits = words.filter((word) => terms.some((term) => term && String(word.text || "").includes(term)));
+  const alternatives = hits.length ? hits : words.filter((word) => terms.some((term) => term && term.includes(String(word.text || "")) && String(word.text || "").length > 1));
+  const hit = alternatives.length === 1 ? alternatives[0] : null;
   if (!hit) return fallback;
   return {
     startMs: Math.max(Number(page.startMs) || 0, Number(hit.startMs) - leadInMs),

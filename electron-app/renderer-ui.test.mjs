@@ -119,7 +119,8 @@ test("후보를 만들 때는 생성기와 판독기가 함께 올라가므로 �
   const block = main.slice(main.indexOf("async function runVoiceCandidates("), main.indexOf("async function runTextVoiceCandidates("));
   assert.doesNotMatch(block, /mapWithConcurrency/);
   assert.match(block, /qualityAttempts: 1/);
-  assert.match(block, /assertPageReplaceable\(chosenRecord\(options\.videoToken, "video"\), options\)/);
+  assert.match(block, /const video = chosenRecord\(options\.videoToken, "video"\)/);
+  assert.match(block, /assertPageReplaceable\(video, options\)/);
 });
 
 test("완성 영상은 자기 타임라인을 데리고 발행된다", async () => {

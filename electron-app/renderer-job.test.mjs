@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 
-import { chapterEtaLabel, etaLabel, unitLabel } from "./renderer/view-utils.mjs";
+import { chapterEtaLabel, etaLabel, unitLabel, completionFindings, completionSummary } from "./renderer/view-utils.mjs";
 
 const source = await fs.readFile(new URL("./renderer/app.js", import.meta.url), "utf8");
 function fixture(cancel = async () => false) {
@@ -21,8 +21,9 @@ function fixture(cancel = async () => false) {
     showToast() {}, setJobState: text => { $("#job-state").textContent = text; }, showJobView() {},
     appendLog: text => { $("#job-log").textContent += text; }, loadOutputs() {}, renderCompleteVoiceFindings() {},
     refreshResumable() {},
+    formatDuration: ms => `${ms}ms`, suggestedName: () => 'next', updateProductionBrief() {},
     updateStages: stage => { $("#current-stage").textContent = stage; },
-    chapterEtaLabel, etaLabel, unitLabel, setInterval: () => 0, Date,
+    chapterEtaLabel, etaLabel, unitLabel, completionFindings, completionSummary, setInterval: () => 0, Date,
   });
   vm.runInContext('let creationState="idle", latestTarget=null;\n'
     + source.slice(source.indexOf("function setBusy("), source.indexOf("function setJobState("))
@@ -232,4 +233,15 @@ test("작업을 새로 시작하면 일시정지 버튼도 원래대로 돌아�
 
   ui.renderJobEvent({ type: "started", options: { name: "ch03" } });
   assert.equal($("#pause-button").textContent, "일시정지");
+});
+
+test('챕터 완료 이벤트에서 두 번째 레슨의 누락도 완료 안내에 남는다', () => {
+  const { $, ui }=fixture();
+  ui.renderJobEvent({type:'started',options:{name:'chapter'}});
+  ui.renderJobEvent({type:'complete',report:{durationMs:3000,summary:{ok:true,passed:2},target:{name:'first'},
+    voiceFindings:[],units:[{name:'first',voiceFindings:[]},{name:'second',target:{name:'second'},
+      voiceFindings:[{slideNumber:196,startMs:281475,endMs:309085,severity:'failed'}]}]}});
+  assert.match($('#complete-summary').textContent,/재생성 필요 1곳/);
+  assert.doesNotMatch($('#complete-summary').textContent,/모든 결과 검증 통과/);
+  assert.equal($('#job-state').textContent,'제작 완료 · 확인 필요');
 });

@@ -230,7 +230,16 @@
               <video id="review-player" controls preload="metadata" aria-label="검수 영상"></video>
               <p id="review-player-status" role="status">영상을 선택하면 재생과 페이지 탐색이 열립니다.</p>
               <div class="review-playback"><button type="button" class="secondary-small" id="review-back">5초 전</button><strong id="review-current-page">페이지 확인 전</strong><button type="button" class="primary-small" id="review-select-page" disabled>이 페이지 수정</button></div>
-              <div class="review-fine-controls"><button type="button" class="secondary-small" id="review-fine-back">0.05초 전</button><button type="button" class="secondary-small" id="review-fine-next">0.05초 뒤</button><label>재생 속도 <select id="review-speed" aria-label="검수 재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="0.75">0.75배</option><option value="1" selected>1배</option><option value="1.25">1.25배</option><option value="1.5">1.5배</option><option value="1.75">1.75배</option><option value="2">2배</option><option value="3">3배</option></select></label></div>
+              <div class="review-fine-controls"><button type="button" class="secondary-small" id="review-fine-back">0.01초 전</button><button type="button" class="secondary-small" id="review-fine-next">0.01초 뒤</button><label>재생 속도 <select id="review-speed" aria-label="검수 재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="0.75">0.75배</option><option value="1" selected>1배</option><option value="1.25">1.25배</option><option value="1.5">1.5배</option><option value="1.75">1.75배</option><option value="2">2배</option><option value="3">3배</option></select></label></div>
+              <section id="review-region-wave" class="region-wave hidden" aria-label="음성 구간 선택">
+                <div class="wave-tools"><span id="review-wave-window"></span><button type="button" id="review-wave-in">확대</button><button type="button" id="review-wave-out">축소</button><button type="button" id="review-wave-selection">선택 구간 맞춤</button><button type="button" id="review-wave-current">재생 위치로</button></div>
+                <div id="review-wave-track" class="wave-track">
+                  <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><path id="review-wave-path"/></svg>
+                  <div id="review-wave-selection-band" class="wave-selection"></div><div id="review-wave-cursor" class="wave-cursor"></div>
+                  <button type="button" class="wave-handle start" id="review-wave-start" aria-label="선택 시작, 좌우 방향키로 0.01초 이동">시작</button><button type="button" class="wave-handle end" id="review-wave-end" aria-label="선택 끝, 좌우 방향키로 0.01초 이동">끝</button>
+                </div>
+                <p id="review-wave-note">파형의 시작·끝 손잡이를 끌거나 시간을 입력하세요.</p>
+              </section>
               <div id="review-pages" class="review-pages" aria-label="영상 페이지 탐색"></div>
               <section class="polish-diff hidden" id="polish-diff" aria-label="원문과 받아쓰기 대조">
                 <div class="diff-row"><span>대본 원문</span><p id="polish-expected"></p></div>
@@ -243,14 +252,31 @@
               <section class="card review-findings"><h2>확인할 부분 <span id="review-finding-count">0</span></h2><p id="review-findings-note">자동 검수 결과는 참고용입니다. 아래 목록에 없어도 직접 수정할 수 있습니다.</p><ul id="review-findings-list"></ul></section>
               <form class="card" id="review-form">
                 <h2 id="review-selection-title">수정할 부분을 선택하세요</h2><p id="review-selection-reason">영상을 멈추고 ‘이 페이지 수정’을 누르세요.</p>
-                <div class="segmented" id="review-mode-tabs"><button type="button" data-repair-mode="regenerate" class="selected">페이지 재생성</button><button type="button" data-repair-mode="mute">짧은 소리 제거</button><button type="button" data-repair-mode="replace">짧은 소리 교체</button></div>
+                <div class="segmented" id="review-mode-tabs"><button type="button" data-repair-mode="regenerate" class="selected">페이지 재생성</button><button type="button" data-repair-mode="mute">짧은 소리 제거</button><button type="button" data-repair-mode="replace">구간 음성 교체</button></div>
                 <div id="edit-voice-panel">
                   <input id="voice-start-page" type="hidden" value="1"><input id="voice-end-page" type="hidden" value="1">
                   <p id="voice-page-meta">선택 페이지의 전체 음성을 새로 만듭니다.</p>
                   <button type="button" class="secondary-small" id="review-original">선택 페이지 원본 듣기</button>
-                  <details class="advanced-options"><summary>후보·길이 설정</summary><div><label class="field"><span>비교할 후보 수</span><input id="voice-candidate-count" type="number" min="2" max="8" value="3"></label><label class="field"><span>길이가 달라질 때</span><select id="voice-duration-policy"><option value="match-audio">새 음성 길이에 화면 맞춤</option><option value="keep-video">화면 길이 유지</option></select></label><p>화면 길이를 유지하면 긴 음성은 끝이 잘릴 수 있습니다.</p></div></details>
+                  <details class="advanced-options"><summary>후보·길이 설정</summary><div><label class="field"><span>비교할 후보 수</span><input id="voice-candidate-count" type="number" min="2" max="8" value="3"></label><label class="field"><span>길이가 달라질 때</span><select id="voice-duration-policy"><option value="match-audio">새 음성 길이에 화면 맞춤</option><option value="keep-video">화면 길이 유지</option></select></label><p>기존 길이보다 긴 음성은 자르지 않고 적용을 멈춥니다. 새 음성 길이에 화면 맞춤을 선택하세요.</p></div></details>
                 </div>
-                <div id="review-mute-panel" class="hidden"><p id="review-region-description">불필요한 소리만 무음으로 바꿉니다. 영상 길이와 자막 시각은 유지됩니다.</p><div class="time-grid"><label class="field"><span>시작 · 초</span><input id="review-mute-start" type="number" min="0" step="0.001" value="0"><button type="button" class="secondary-small" id="review-mark-start">현재 위치</button></label><label class="field"><span>끝 · 초</span><input id="review-mute-end" type="number" min="0" step="0.001" value="0.2"><button type="button" class="secondary-small" id="review-mark-end">현재 위치</button></label></div><button type="button" class="secondary-small" id="review-range-play">선택 구간 앞뒤 듣기</button><p id="review-region-limit">0.05~2초 구간을 선택하세요. 정상 발화가 포함되지 않았는지 먼저 확인하세요.</p><div id="review-replacement-panel" class="hidden"><button type="button" class="secondary-small" id="pick-region-audio">교체할 음성 선택</button><p id="region-audio-name">WAV·M4A·MP3 파일을 선택하세요.</p><audio id="region-audio-preview" controls preload="metadata" class="hidden" aria-label="교체할 짧은 음성"></audio><p>‘목소리 만들기’에서 짧은 문장을 생성한 뒤 선택할 수도 있습니다. 자막은 유지되므로 원문과 같은 말로 준비하세요. 선택 구간보다 긴 파일은 적용하지 않습니다.</p></div></div>
+                <div id="review-mute-panel" class="hidden">
+                  <p id="review-region-description">불필요한 소리를 무음으로 바꿉니다.</p>
+                  <div class="time-grid region-times">
+                    <label class="field"><span>시작 · 분:초.밀리초</span><input id="review-mute-start" type="text" inputmode="decimal" value="0:00.000" autocomplete="off" aria-describedby="review-region-error"><span class="time-adjust"><button type="button" id="review-start-back" aria-label="시작 0.01초 앞">−0.01</button><button type="button" id="review-mark-start">현재 위치</button><button type="button" id="review-start-next" aria-label="시작 0.01초 뒤">+0.01</button></span></label>
+                    <label class="field"><span>끝 · 분:초.밀리초</span><input id="review-mute-end" type="text" inputmode="decimal" value="0:00.200" autocomplete="off" aria-describedby="review-region-error"><span class="time-adjust"><button type="button" id="review-end-back" aria-label="끝 0.01초 앞">−0.01</button><button type="button" id="review-mark-end">현재 위치</button><button type="button" id="review-end-next" aria-label="끝 0.01초 뒤">+0.01</button></span></label>
+                  </div>
+                  <p id="review-region-duration" aria-live="polite"></p><p id="review-region-error" class="region-error" role="status"></p>
+                  <div class="region-listen"><button type="button" class="secondary-small" id="review-range-exact">선택 구간 듣기</button><button type="button" class="secondary-small" id="review-range-play">앞뒤 포함 듣기</button><button type="button" class="secondary-small" id="review-range-page">페이지 전체 선택</button></div>
+                  <p id="review-region-limit">0.05~2초 구간을 선택하세요.</p>
+                  <div id="review-replacement-panel" class="hidden">
+                    <button type="button" class="secondary-small" id="pick-region-audio">교체할 음성 선택</button><p id="region-audio-name">WAV·M4A·MP3 파일을 선택하세요.</p>
+                    <audio id="region-audio-preview" controls preload="metadata" class="hidden" aria-label="교체 음성 원본"></audio>
+                    <label class="field"><span>길이가 달라질 때</span><select id="review-region-fit"><option value="match-audio">새 음성 길이에 화면·자막 맞춤</option><option value="keep-video">기존 구간 길이 유지</option></select></label>
+                    <p id="review-region-impact" aria-live="polite"></p><p>원문과 같은 말을 담은 음성을 선택하세요. 새 길이에 맞추면 선택 구간의 화면·자막도 같은 비율로 조정됩니다. 대본으로 새 목소리를 만들려면 페이지 재생성을 사용하세요.</p>
+                  </div>
+                  <button type="button" class="secondary-small" id="review-result-play">수정 후 앞뒤 듣기</button>
+                  <p id="review-preview-note" role="status"></p><audio id="review-preview-player" controls class="hidden" aria-label="수정 구간 미리듣기"></audio>
+                </div>
                 <button class="primary-button full" id="start-review-button" type="submit" disabled><span id="start-review-label">새 목소리 후보 만들기</span><span>→</span></button>
                 <p class="review-save-note">후보를 듣고 선택한 뒤 새 버전으로 저장합니다. 원본은 보관됩니다.</p>
               </form>

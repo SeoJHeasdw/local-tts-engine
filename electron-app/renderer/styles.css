@@ -635,6 +635,26 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 .review-save-note { font-size: var(--fs-xs); color: var(--text-3); }
 #region-audio-preview { width: 100%; margin-top: var(--s3); }
 #review-replacement-panel { border-top: 1px solid var(--line); padding-top: var(--s4); margin-top: var(--s4); }
+.region-times { grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: var(--s2); }
+.region-times input { min-width: 0; width: 100%; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.time-adjust { display:flex; gap:2px; }
+.time-adjust button { flex:1; min-width:0; padding:6px 2px; font-size:11px; }
+.region-listen,.wave-tools { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s2); }
+.wave-tools span { margin-right:auto; color:var(--text-2); font:var(--fs-xs) var(--mono); }
+.wave-tools button { padding:6px 9px; font-size:var(--fs-xs); }
+.region-wave { margin:var(--s4) 0; border-top:1px solid var(--line); padding-top:var(--s3); }
+.wave-track { position:relative; height:110px; margin:var(--s3) 20px; background:var(--nav); border:1px solid var(--line); touch-action:none; }
+.wave-track svg { width:100%; height:100%; display:block; }
+.wave-track path { stroke:var(--text-3); stroke-width:1; fill:none; }
+.wave-selection { position:absolute; top:0; bottom:0; background:color-mix(in srgb,var(--lime) 15%,transparent); pointer-events:none; }
+.wave-cursor { position:absolute; top:0; bottom:0; width:1px; background:var(--text); pointer-events:none; }
+.wave-handle { position:absolute; top:0; height:100%; width:28px; padding:0; transform:translateX(-50%); border:0; border-left:2px solid var(--lime); border-radius:0; color:var(--lime); background:color-mix(in srgb,var(--lime) 10%,transparent); font-size:11px; cursor:ew-resize; touch-action:none; }
+.wave-handle:focus-visible { outline:2px solid var(--text); }
+#review-wave-note,#review-preview-note { font-size:var(--fs-xs); color:var(--text-3); }
+#review-region-error { color:var(--danger); margin:var(--s2) 0; }
+#review-region-error:empty,#review-preview-note:empty { display:none; }
+#review-region-duration,#review-region-impact { font-variant-numeric:tabular-nums; color:var(--text-2); }
+#review-preview-player { width:100%; margin-top:var(--s2); }
 
 /* ============================================================================
    영상 편집
@@ -1198,6 +1218,8 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
   display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
 }
 .finding-head strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--text); }
+.finding-status { margin: 0; font-size: var(--fs-xs); line-height: var(--lh-body); color: var(--warn); }
+li[data-severity="failed"] .finding-status { color: var(--danger); }
 .finding-time {
   color: var(--text-3); font: var(--fs-micro) var(--mono);
   font-variant-numeric: tabular-nums; white-space: nowrap;

@@ -39,6 +39,7 @@ from .korean_phonetics import (
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
 from .pronunciation import apply_pronunciation
 from .prosody import PAUSE_WARNING, confirm_pause_checks, interior_silences, pause_checks
+from .transcript_coverage import clause_omissions
 
 
 ASR_REPOSITORY = "mlx-community/whisper-large-v3-turbo-asr-fp16"
@@ -46,8 +47,9 @@ ASR_LICENSE = "MIT"
 MAX_AUTOMATIC_ATTEMPTS = 4
 # The gate that can fail a page reads pronunciation, not spelling. Measured on
 # this course: a transcript differing only in how it writes a term sits at or
-# below 0.03, while a dropped clause or a genuinely different reading starts at
-# 0.35. Orthographic distance does not separate the two — an unmapped acronym in
+# below 0.03. A local clause deletion can also sit below this gate (CH02 L04:
+# 0.087886); lexical counts and clause coverage handle that case separately.
+# Orthographic distance does not separate the two — an unmapped acronym in
 # a short chunk reaches 0.15 there — which is what made correct pages fail.
 MAX_PHONETIC_ERROR_RATE = 0.10
 MIN_SPEAKING_CHARACTERS_PER_SECOND = 1.0
@@ -464,9 +466,11 @@ def evaluate_candidate(
         dictionary,
         required_pronunciations,
     )
+    content_checks = clause_omissions(expected_text, recognized_text, dictionary)
     checks = [*required_checks, *lexical_checks]
     failures: list[str] = []
     warnings: list[str] = []
+    failures.extend(dict.fromkeys(check["reason"] for check in content_checks))
     if not expected:
         failures.append("비교할 발음문 없음")
     if per > MAX_PHONETIC_ERROR_RATE:
@@ -506,6 +510,7 @@ def evaluate_candidate(
         "requiredPronunciations": list(required_pronunciations),
         "pronunciationChecks": checks,
         "lexicalChecks": lexical_checks,
+        "contentChecks": content_checks,
         "missingPronunciations": unheard,
         "characterErrorRate": round(cer, 6),
         "phoneticErrorRate": round(per, 6),

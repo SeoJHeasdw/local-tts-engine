@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("ttsStudio", {
   setClearedFindings: (target, keys) => ipcRenderer.invoke("studio:set-cleared-findings", target, keys),
   pickVideos: (multiple) => ipcRenderer.invoke("studio:pick-videos", Boolean(multiple)),
   pickAudio: () => ipcRenderer.invoke("studio:pick-audio"),
+  reviewWaveform: options => ipcRenderer.invoke('studio:review-waveform',options),
+  reviewPreview: options => ipcRenderer.invoke('studio:review-preview',options),
   registerDroppedFiles: (files, kind) => {
     const paths = Array.from(files || []).map((file) => webUtils.getPathForFile(file)).filter(Boolean);
     return ipcRenderer.invoke("studio:register-dropped-files", paths, kind);

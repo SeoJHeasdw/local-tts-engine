@@ -1,11 +1,15 @@
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
+import {parseRegionTime,formatRegionTime,regionIssue,regionImpact,regionWindow,timeAtFraction} from './region-utils.mjs';
 import {
   buildChapterRanges,
   chapterEtaLabel,
   createViewHistory,
+  completionFindings,
+  completionSummary,
   findingExcerpt,
   findingKeyOf,
   findingSeek,
+  findingStatus,
   groupOutputs,
   etaLabel,
   filterOutputItems,
@@ -401,6 +405,81 @@ let latestCompleteReview = null;
 let pendingCandidateContext = null;
 let reviewResumeMs = 0;
 const reviewPlayer = $('#review-player');
+let reviewRangeEdited=false, reviewWaveWindow={start:0,end:10}, reviewWaveRequest=0;
+let regionPreviewRequest=0, regionPreviewBusy=false;
+
+function readReviewRegion() {
+  return {start:parseRegionTime($('#review-mute-start').value),end:parseRegionTime($('#review-mute-end').value),
+    duration:Number(voiceVideo?.durationMs)/1000 || Number(reviewPlayer.duration) || Number(voiceVideo?.pages?.at(-1)?.endMs)/1000 || 0,
+    mode:reviewMode,audioDuration:regionAudio ? Number(regionAudio.durationMs)/1000 : null,
+    fit:$('#review-region-fit').value || 'match-audio'};
+}
+function invalidateRegionPreview() {
+  regionPreviewRequest++; regionPreviewBusy=false;
+  $('#review-preview-player').pause(); $('#review-preview-player').removeAttribute('src');
+  $('#review-preview-player').classList.add('hidden'); $('#review-preview-note').textContent='';
+}
+function setReviewRegion(start,end,{edited=true}={}) {
+  $('#review-mute-start').value=formatRegionTime(start); $('#review-mute-end').value=formatRegionTime(end);
+  reviewRangeEdited=edited; invalidateRegionPreview(); updateReviewAction(); drawReviewWaveSelection();
+}
+function drawReviewWaveSelection() {
+  const r=readReviewRegion(),width=reviewWaveWindow.end-reviewWaveWindow.start;
+  if(!(width>0))return;
+  const position=t=>Math.max(0,Math.min(100,(t-reviewWaveWindow.start)/width*100));
+  if(Number.isFinite(r.start)&&Number.isFinite(r.end)){
+    const from=position(r.start),to=position(r.end);
+    $('#review-wave-selection-band').style.left=`${from}%`; $('#review-wave-selection-band').style.width=`${Math.max(0,to-from)}%`;
+    for(const side of ['start','end']){
+      $('#review-wave-'+side).style.left=`${position(r[side])}%`;
+      $('#review-wave-'+side).setAttribute('aria-label',`선택 ${side==='start'?'시작':'끝'} ${formatRegionTime(r[side])}, 방향키로 0.01초 이동`);
+    }
+  }
+  $('#review-wave-cursor').style.left=`${position(reviewPlayer.currentTime)}%`;
+}
+async function showReviewWave(center,span=10) {
+  const duration=readReviewRegion().duration;
+  if(!voiceVideo||!(duration>0))return;
+  reviewWaveWindow=regionWindow(Number.isFinite(center)?center:reviewPlayer.currentTime,Number.isFinite(span)?span:10,duration);
+  $('#review-wave-window').textContent=`${formatRegionTime(reviewWaveWindow.start)}–${formatRegionTime(reviewWaveWindow.end)}`;
+  drawReviewWaveSelection(); $('#review-wave-path').setAttribute('d','');
+  const request=++reviewWaveRequest,token=voiceVideo.token;
+  if(!api.reviewWaveform){$('#review-wave-note').textContent='앱을 다시 열면 파형을 불러올 수 있습니다.';return;}
+  $('#review-wave-note').textContent='파형을 불러오고 있습니다.';
+  try{
+    const wave=await api.reviewWaveform({videoToken:token,...reviewWaveWindow});
+    if(request!==reviewWaveRequest||token!==voiceVideo?.token)return;
+    const peak=Math.max(.001,...wave.peaks);
+    $('#review-wave-path').setAttribute('d',wave.peaks.map((value,i)=>{
+      const x=((i+.5)*1000/wave.peaks.length).toFixed(2),height=value/peak*46;
+      return `M${x},${(50-height).toFixed(2)}V${(50+height).toFixed(2)}`;
+    }).join(''));
+    $('#review-wave-note').textContent='시작·끝 손잡이를 끌어 선택하세요. 방향키와 시간 입력으로 미세 조정할 수 있습니다.';
+  }catch(error){if(request===reviewWaveRequest)$('#review-wave-note').textContent=error.message;}
+}
+function changeRegionBoundary(side,value) {
+  const r=readReviewRegion();
+  if(!Number.isFinite(value))return;
+  $('#review-mute-'+side).value=formatRegionTime(Math.max(0,Math.min(r.duration,value)));
+  reviewRangeEdited=true; invalidateRegionPreview(); updateReviewAction(); drawReviewWaveSelection();
+}
+async function previewReviewRegion(after=false,context=.6) {
+  const r=readReviewRegion(),problem=regionIssue(after?r:{...r,mode:'replace',audioDuration:null});
+  if(problem||regionPreviewBusy||!voiceVideo||(after&&reviewMode==='replace'&&!regionAudio))return;
+  if(!api.reviewPreview){showToast('앱을 다시 열어 미리듣기를 사용하세요.','error');return;}
+  reviewPlayer.pause(); $('#region-audio-preview').pause(); $('#review-preview-player').pause();
+  const request=++regionPreviewRequest,token=voiceVideo.token;
+  regionPreviewBusy=true; $('#review-preview-note').textContent='미리듣기를 준비하고 있습니다.'; updateReviewAction();
+  try{
+    const preview=await api.reviewPreview({videoToken:token,audioToken:regionAudio?.token,start:r.start,end:r.end,
+      mode:after?reviewMode:'original',durationPolicy:r.fit,context});
+    if(request!==regionPreviewRequest||token!==voiceVideo?.token)return;
+    const player=$('#review-preview-player');player.src=preview.audioUrl;player.playbackRate=Number($('#review-speed').value)||1;player.classList.remove('hidden');
+    $('#review-preview-note').textContent=after?'수정 후 미리듣기 · 아직 저장하지 않았습니다.':context?'선택 구간 앞뒤 각 0.6초를 포함합니다.':'선택한 시작·끝으로 정확히 잘라 듣습니다.';
+    await player.play();
+  }catch(error){if(request===regionPreviewRequest)$('#review-preview-note').textContent=error.message;}
+  finally{if(request===regionPreviewRequest){regionPreviewBusy=false;updateReviewAction();}}
+}
 
 // 고른 교체는 바로 파일로 굽지 않고 여기 모인다. 예전에는 한 곳을 고칠 때마다
 // 영상 전체를 다시 굽고 새 파일을 남긴 뒤 그 파일을 처음부터 다시 열었다.
@@ -477,10 +556,7 @@ function showFindingDiff(finding) {
   panel.classList.remove('hidden');
   $('#polish-expected').textContent = expected || '(원문 없음)';
   $('#polish-recognized').textContent = recognized || '(받아쓰기 없음)';
-  const terms = (finding?.terms || []).map((term) => term.term).filter(Boolean);
-  $('#polish-diff-note').textContent = terms.length
-    ? `걸린 단어: ${terms.join(', ')}`
-    : (finding?.reasons || []).join(' · ');
+  $('#polish-diff-note').textContent = `${findingStatus(finding)} · ${voiceFindingReason(finding)}. 받아쓰기는 판독 근거이며, 실제 음성을 함께 확인하세요.`;
 }
 
 function queueSelectedCandidate(token, name) {
@@ -534,7 +610,13 @@ function renderCompleteVoiceFindings(findings = [], target = null) {
   $('#review-latest').classList.toggle('hidden', !target);
   $('#voice-quality-list').classList.toggle('hidden', Boolean(target));
   $('#voice-quality-list').replaceChildren(...(target ? [] : findings.map(finding => {
-    const item = document.createElement('li'); item.textContent = `${voiceFindingLabel(finding)} · ${finding.slideNumber}페이지 · ${voiceFindingReason(finding)}`; return item;
+    const item = document.createElement('li');
+    const label = `${finding.displayName ? `${finding.displayName} · ` : ''}${voiceFindingLabel(finding)} · ${finding.slideNumber}페이지 · ${voiceFindingReason(finding)}`;
+    if (finding.target) {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+      button.addEventListener('click', () => openReview(finding.target)); item.append(button);
+    } else item.textContent = label;
+    return item;
   })));
 }
 
@@ -614,7 +696,9 @@ function renderVoiceFindingRow(finding) {
   const title = document.createElement('strong'); title.textContent = `${finding.slideNumber}페이지`;
   const time = document.createElement('span');
   time.className = 'finding-time';
-  time.textContent = voiceFindingLabel(finding);
+  const page = voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
+    const at = findingSeek(finding, page);
+  time.textContent = voiceFindingLabel(at);
   head.append(title, time);
 
   // 대본을 통째로 말면 어느 낱말을 들어야 하는지가 오히려 묻힌다. 걸린 낱말과
@@ -635,7 +719,9 @@ function renderVoiceFindingRow(finding) {
   };
   paintExcerpt();
 
-  button.append(head, line);
+  const status = document.createElement('p'); status.className = 'finding-status';
+  status.textContent = findingStatus(finding);
+  button.append(head, status, line);
 
   const tools = document.createElement('div');
   tools.className = 'finding-tools';
@@ -676,13 +762,13 @@ function renderVoiceFindingRow(finding) {
 
   row.append(button, tools);
   button.addEventListener('click', () => {
-    const page = voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
     selectReviewPage(page, voiceFindingReason(finding));
     showFindingDiff(finding);
     // 항목의 구간은 청크 전체다. 그대로 옮기면 문단 첫머리에 떨어져 문제가 된
     // 낱말을 다시 찾아야 한다. 낱말 시각이 있으면 그 자리로 간다.
-    const at = findingSeek(finding, page);
     seekReview(at.startMs / 1000, at.endMs / 1000);
+    setReviewRegion(at.startMs/1000,at.endMs/1000);
+    if(reviewMode!=='regenerate')showReviewWave((at.startMs+at.endMs)/2000,(at.endMs-at.startMs)/1000+2);
   });
   return row;
 }
@@ -707,10 +793,13 @@ function setReviewVideo(video, target = null) {
   $$('audio,video').forEach(media => media.pause());
   voiceVideo = video; reviewTarget = target; reviewSelection = null; reviewStopAt = null;
   reviewMode = 'regenerate';
+  reviewWaveRequest++; invalidateRegionPreview(); reviewRangeEdited=false;
+  $('#review-region-wave').classList.add('hidden');
   $$('#review-mode-tabs button').forEach(button => button.classList.toggle('selected', button.dataset.repairMode === reviewMode));
   $('#edit-voice-panel').classList.remove('hidden');
   $('#review-mute-panel').classList.add('hidden');
-  $('#review-mute-start').value = '0'; $('#review-mute-end').value = '0.2';
+  $('#review-mute-start').value = '0:00.000'; $('#review-mute-end').value = '0:00.200';
+  $('#review-region-fit').value='match-audio';
   regionAudio = null;
   $('#region-audio-preview').removeAttribute('src');
   $('#region-audio-preview').classList.add('hidden');
@@ -752,6 +841,7 @@ function updateReviewPosition() {
   $('#review-script').textContent = page?.text || '페이지 타임라인이 없는 영상입니다.';
   $('#review-select-page').disabled = reviewBusy || !page;
   $$('#review-pages button').forEach(button => button.setAttribute('aria-current', String(Number(button.dataset.page) === page?.number)));
+  if(reviewMode!=='regenerate')drawReviewWaveSelection();
 }
 function selectReviewPage(page, reason = '') {
   if (!page || reviewBusy) return;
@@ -762,7 +852,17 @@ function selectReviewPage(page, reason = '') {
   updateVoicePageMeta(); updateReviewAction();
 }
 function updateReviewAction() {
-  $('#start-review-button').disabled = reviewBusy || !voiceVideo || (reviewMode === 'regenerate' && !reviewSelection) || (reviewMode === 'replace' && !regionAudio);
+  const r=readReviewRegion(),problem=reviewMode==='regenerate'?'':regionIssue(r);
+  $('#review-region-error').textContent=problem;
+  $('#review-region-duration').textContent=Number.isFinite(r.end-r.start)&&r.end>r.start?`선택 길이 ${(r.end-r.start).toFixed(3)}초`:'';
+  $('#review-region-impact').textContent=regionImpact(r.start,r.end,r.audioDuration,r.fit);
+  const valid=Boolean(voiceVideo)&&!problem&&!reviewBusy&&!regionPreviewBusy;
+  $('#start-review-button').disabled = !valid || (reviewMode === 'regenerate' && !reviewSelection) || (reviewMode === 'replace' && !regionAudio);
+  const canListen=Boolean(voiceVideo)&&!regionIssue({...r,mode:'replace',audioDuration:null})&&!reviewBusy&&!regionPreviewBusy;
+  for(const id of ['review-range-exact','review-range-play'])$('#'+id).disabled=!canListen;
+  $('#review-result-play').disabled=!valid||(reviewMode==='replace'&&!regionAudio);
+  $('#review-result-play').textContent=reviewMode==='mute'?'무음 처리 후 듣기':'교체 후 앞뒤 듣기';
+  $('#review-range-page').disabled=!voiceVideo?.pages?.length||reviewBusy;
   $('#review-original').disabled = !reviewSelection || reviewBusy;
   $('#start-review-label').textContent = reviewMode === 'mute' ? '선택 구간을 무음 처리한 새 버전 저장' : reviewMode === 'replace' ? '선택 구간의 음성을 교체한 새 버전 저장' : '새 목소리 후보 만들기';
   $('#review-form .review-save-note').textContent = reviewMode !== 'regenerate'
@@ -782,13 +882,19 @@ reviewPlayer.addEventListener('timeupdate', () => {
   updateReviewPosition();
   if (reviewStopAt != null && reviewPlayer.currentTime >= reviewStopAt) { reviewPlayer.pause(); reviewStopAt = null; }
 });
-reviewPlayer.addEventListener('loadedmetadata', () => { reviewPlayer.playbackRate = Number($('#review-speed').value); updateReviewPosition(); });
+reviewPlayer.addEventListener('loadedmetadata', () => {
+  reviewPlayer.playbackRate = Number($('#review-speed').value)||1;
+  if(reviewMode!=='regenerate'&&!reviewRangeEdited){const start=Math.min(reviewPlayer.currentTime,Math.max(0,readReviewRegion().duration-.2));setReviewRegion(start,Math.min(readReviewRegion().duration,start+.2),{edited:false});}
+  updateReviewPosition();updateReviewAction();
+});
 reviewPlayer.addEventListener('error', () => { $('#review-player-status').textContent = '영상을 열지 못했습니다. 원본 파일 위치를 확인해 주세요.'; });
 $('#review-select-page').addEventListener('click', () => selectReviewPage(currentReviewPage()));
 $('#review-back').addEventListener('click', () => seekReview(Math.max(0, reviewPlayer.currentTime - 5)));
-$('#review-fine-back').addEventListener('click', () => seekReview(Math.max(0, reviewPlayer.currentTime - .05)));
-$('#review-fine-next').addEventListener('click', () => seekReview(Math.min(reviewPlayer.duration || 0, reviewPlayer.currentTime + .05)));
-$('#review-speed').addEventListener('change', () => { reviewPlayer.playbackRate = Number($('#review-speed').value); });
+$('#review-fine-back').addEventListener('click', () => seekReview(Math.max(0, reviewPlayer.currentTime - .01)));
+$('#review-fine-next').addEventListener('click', () => seekReview(Math.min(readReviewRegion().duration, reviewPlayer.currentTime + .01)));
+$('#review-speed').addEventListener('change', () => {
+  for(const player of [reviewPlayer,$('#review-preview-player'),$('#region-audio-preview')])player.playbackRate=Number($('#review-speed').value)||1;
+});
 $('#review-original').addEventListener('click', () => reviewSelection && playReviewRange(reviewSelection.startMs / 1000, reviewSelection.endMs / 1000));
 $('#review-latest').addEventListener('click', () => latestCompleteReview && openReview(latestCompleteReview));
 $$('#review-mode-tabs button').forEach(button => button.addEventListener('click', () => {
@@ -797,8 +903,15 @@ $$('#review-mode-tabs button').forEach(button => button.addEventListener('click'
   $('#edit-voice-panel').classList.toggle('hidden', reviewMode !== 'regenerate');
   $('#review-mute-panel').classList.toggle('hidden', reviewMode === 'regenerate');
   $('#review-replacement-panel').classList.toggle('hidden', reviewMode !== 'replace');
-  $('#review-region-description').textContent = reviewMode === 'replace' ? '선택한 구간의 음성만 준비한 파일로 교체합니다. 화면과 자막 시각은 유지됩니다.' : '불필요한 소리만 무음으로 바꿉니다. 영상 길이와 자막 시각은 유지됩니다.';
-  $('#review-region-limit').textContent = reviewMode === 'replace' ? '0.05~10초 구간을 선택하세요. 짧은 파일은 나머지를 무음으로 채웁니다.' : '0.05~2초 구간을 선택하세요. 정상 발화가 포함되지 않았는지 먼저 확인하세요.';
+  $('#review-region-wave').classList.toggle('hidden',reviewMode==='regenerate');
+  $('#review-region-description').textContent = reviewMode === 'replace' ? '단어·구절의 음성을 준비한 파일로 교체합니다. 길이가 달라지면 화면·자막도 함께 조정할 수 있습니다.' : '불필요한 소리만 무음으로 바꿉니다. 영상 길이와 자막 시각은 유지됩니다.';
+  $('#review-region-limit').textContent = reviewMode === 'replace' ? '0.05~120초를 선택하세요. 누락을 복원할 때는 앞뒤 문맥을 포함한 같은 원문의 음성을 준비하세요.' : '0.05~2초를 선택하세요. 정상 발화가 포함되지 않았는지 앞뒤를 들어 보세요.';
+  invalidateRegionPreview();
+  if(reviewMode!=='regenerate'){
+    const duration=readReviewRegion().duration;
+    if(!reviewRangeEdited){const start=Math.min(reviewPlayer.currentTime,Math.max(0,duration-.2));setReviewRegion(start,Math.min(duration,start+(reviewMode==='mute'?.2:2)),{edited:false});}
+    const r=readReviewRegion();showReviewWave((r.start+r.end)/2,Math.max(5,r.end-r.start+2));
+  }
   updateReviewAction();
 }));
 $('#pick-region-audio').addEventListener('click', async () => {
@@ -807,23 +920,53 @@ $('#pick-region-audio').addEventListener('click', async () => {
     const [audio] = await api.pickAudio();
     if (!audio || reviewBusy || videoToken !== voiceVideo?.token) return;
     regionAudio = audio;
-    $('#region-audio-name').textContent = audio.name;
+    invalidateRegionPreview();
+    $('#region-audio-name').textContent = `${audio.name}${audio.durationMs?` · ${(audio.durationMs/1000).toFixed(3)}초`:''}`;
     $('#region-audio-preview').src = audio.audioUrl;
     $('#region-audio-preview').classList.remove('hidden');
     updateReviewAction();
   } catch (error) { showToast(error.message, 'error'); }
 });
-$('#review-mark-start').addEventListener('click', () => { reviewPlayer.pause(); $('#review-mute-start').value = reviewPlayer.currentTime.toFixed(3); });
-$('#review-mark-end').addEventListener('click', () => { reviewPlayer.pause(); $('#review-mute-end').value = reviewPlayer.currentTime.toFixed(3); });
-$('#review-range-play').addEventListener('click', () => playReviewRange(Math.max(0, Number($('#review-mute-start').value) - .6), Number($('#review-mute-end').value) + .6));
+for(const side of ['start','end']){
+  const field=$('#review-mute-'+side);
+  field.addEventListener('input',()=>{reviewRangeEdited=true;invalidateRegionPreview();updateReviewAction();drawReviewWaveSelection();});
+  field.addEventListener('blur',()=>{const value=parseRegionTime(field.value);if(Number.isFinite(value))field.value=formatRegionTime(value);});
+  field.addEventListener('keydown',event=>{if(!['ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();changeRegionBoundary(side,readReviewRegion()[side]+(event.key==='ArrowUp'?1:-1)*(event.shiftKey?.1:.01));});
+  $('#review-mark-'+side).addEventListener('click',()=>{reviewPlayer.pause();changeRegionBoundary(side,reviewPlayer.currentTime);});
+  for(const [suffix,delta] of [['back',-.01],['next',.01]])$('#review-'+side+'-'+suffix).addEventListener('click',()=>changeRegionBoundary(side,readReviewRegion()[side]+delta));
+  const handle=$('#review-wave-'+side);
+  handle.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight'].includes(event.key))return;event.preventDefault();changeRegionBoundary(side,readReviewRegion()[side]+(event.key==='ArrowRight'?1:-1)*(event.shiftKey?.1:.01));});
+  let pointer=null;
+  handle.addEventListener('pointerdown',event=>{if(reviewBusy)return;pointer=event.pointerId;handle.setPointerCapture(pointer);reviewPlayer.pause();});
+  handle.addEventListener('pointermove',event=>{
+    if(pointer!==event.pointerId||reviewBusy)return;
+    const rect=$('#review-wave-track').getBoundingClientRect(),r=readReviewRegion();
+    let value=timeAtFraction((event.clientX-rect.left)/rect.width,reviewWaveWindow);
+    value=side==='start'?Math.min(value,r.end-.05):Math.max(value,r.start+.05);
+    changeRegionBoundary(side,value);
+  });
+  for(const type of ['pointerup','pointercancel','lostpointercapture'])handle.addEventListener(type,()=>{pointer=null;});
+}
+$('#review-range-exact').addEventListener('click',()=>previewReviewRegion(false,0));
+$('#review-range-play').addEventListener('click',()=>previewReviewRegion(false,.6));
+$('#review-result-play').addEventListener('click',()=>previewReviewRegion(true,.6));
+$('#review-region-fit').addEventListener('change',()=>{invalidateRegionPreview();updateReviewAction();});
+$('#review-range-page').addEventListener('click',()=>{const page=currentReviewPage();if(!page)return;setReviewRegion(page.startMs/1000,page.endMs/1000);showReviewWave((page.startMs+page.endMs)/2000,(page.endMs-page.startMs)/1000+2);});
+for(const [id,factor] of [['review-wave-in',.5],['review-wave-out',2]])$('#'+id).addEventListener('click',()=>showReviewWave((reviewWaveWindow.start+reviewWaveWindow.end)/2,(reviewWaveWindow.end-reviewWaveWindow.start)*factor));
+$('#review-wave-selection').addEventListener('click',()=>{const r=readReviewRegion();if(Number.isFinite(r.start+r.end))showReviewWave((r.start+r.end)/2,r.end-r.start+.5);});
+$('#review-wave-current').addEventListener('click',()=>showReviewWave(reviewPlayer.currentTime));
+$('#review-wave-track').addEventListener('click',event=>{if(event.target.closest?.('.wave-handle'))return;const rect=$('#review-wave-track').getBoundingClientRect();seekReview(timeAtFraction((event.clientX-rect.left)/rect.width,reviewWaveWindow));});
+reviewPlayer.addEventListener('play',()=>{ $('#review-preview-player').pause();$('#region-audio-preview').pause(); });
 $('#review-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (!voiceVideo || reviewBusy) return;
   if (reviewMode === 'regenerate' && !reviewSelection) return;
   const name = `review-${Date.now()}`;
   if (reviewMode === 'replace' && !regionAudio) return;
+  const region=readReviewRegion();
+  if(reviewMode!=='regenerate'&&regionIssue(region)){updateReviewAction();return;}
   const payload = reviewMode !== 'regenerate'
-    ? {operation:reviewMode === 'replace' ? 'replace-region' : 'mute-region', name, videoToken:voiceVideo.token, audioToken:regionAudio?.token, muteStart:Number($('#review-mute-start').value), muteEnd:Number($('#review-mute-end').value)}
+    ? {operation:reviewMode === 'replace' ? 'replace-region' : 'mute-region', name, videoToken:voiceVideo.token, audioToken:regionAudio?.token, muteStart:region.start, muteEnd:region.end, durationPolicy:region.fit}
     : {operation:'voice-candidates', name, videoToken:voiceVideo.token, audioSource:'generate', originalStartMs:reviewSelection.startMs, originalEndMs:reviewSelection.endMs, sourceDisplayName:voiceVideo.name, startPage:reviewSelection.number, endPage:reviewSelection.number,
       candidateCount:Number($('#voice-candidate-count').value), durationPolicy:$('#voice-duration-policy').value};
   reviewResumeMs = reviewMode !== 'regenerate' ? Math.max(0, payload.muteStart * 1000 - 1000) : reviewSelection.startMs;
@@ -1161,6 +1304,7 @@ function setEditBusy(busy) {
   reviewBusy = busy;
   $("#review-form").querySelectorAll("input,select,button").forEach(el => { el.disabled = busy; });
   $("#pick-voice-video").disabled = busy;
+  $$('#review-region-wave button').forEach(button=>{button.disabled=busy;});
   updateReviewAction();
   updateReviewPosition();
   $("#start-edit-button").disabled = busy;
@@ -1738,14 +1882,10 @@ function renderJobEvent(event) {
     updateStages("verify", true);
     const report = event.report;
     latestTarget = report.target;
-    const findings = report.voiceFindings || [];
+    const findings = completionFindings(report);
     const unitCount = report.units?.length || 1;
-    const voiceLine = findings.length
-      ? ` · 목소리 확인 ${findings.length}곳`
-      : report.voiceQuality ? " · 목소리 검수 통과" : "";
-    $("#complete-summary").textContent = unitCount > 1
-      ? `${unitCount}개 영상 · ${formatDuration(report.durationMs)} 합계 · 모든 결과 검증 통과`
-      : `${formatDuration(report.durationMs)} · ${report.summary.passed}개 항목 모두 통과${voiceLine}`;
+    $("#complete-summary").textContent = completionSummary(report, formatDuration(report.durationMs));
+    if (findings.length) setJobState('제작 완료 · 확인 필요', 'idle');
     $("#open-latest").textContent = unitCount > 1 ? "첫 영상 열기" : "영상 열기";
     renderCompleteVoiceFindings(findings, report.videoPath ? report.target : null);
     loadOutputs();

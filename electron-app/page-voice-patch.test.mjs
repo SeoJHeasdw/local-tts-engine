@@ -487,3 +487,7 @@ test("자른 클립과 그대로 쓰는 클립을 섞어도 한 영상으로 이
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('기존 길이를 유지할 때 긴 새 음성을 잘라서 저장하지 않는다',()=>{
+  assert.throws(()=>pageVoicePatchPlan({videoDuration:10,targetStart:2,targetEnd:4,sourceStart:0,sourceEnd:3,matchAudio:false}),/끝을 자르지 않도록/);
+});

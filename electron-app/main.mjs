@@ -4,9 +4,11 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { audioEnvelope, makeRegionPreview, newPreviewDirectory, regionReplacementPlan, retimeCaptions, captionText, editedReviewContext } from './review-media.mjs';
 
 import {
   combineLessonCatalogs,
+  combineChapterReports,
   reviewPages,
   muteRegionFilter,
   replaceRegionPlan,
@@ -109,6 +111,9 @@ let runtimeTools = {
   ffprobe: null,
 };
 const selectedFiles = new Map();
+const reviewPreviewDirectories = [];
+let reviewPreviewBusy = false;
+let reviewWaveTask=Promise.resolve(), reviewWaveTicket=0;
 
 function normalizeStudioPaths(raw = {}) {
   const inputs = Object.fromEntries(
@@ -641,36 +646,6 @@ function chapterUnits(options, catalog) {
   }));
 }
 
-function combineChapterReports(options, reports) {
-  const checks = reports.flatMap((report) => report.checks || []);
-  const summary = summarizeChecks(checks);
-  return {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    name: options.name,
-    displayName: options.title,
-    mode: options.mode,
-    chapterMode: options.chapterMode,
-    durationMs: reports.reduce((total, report) => total + Number(report.durationMs || 0), 0),
-    videoPath: reports.length === 1 ? reports[0].videoPath : null,
-    audioPath: reports.length === 1 ? reports[0].audioPath : null,
-    target: reports[0]?.target || null,
-    voiceQuality: reports.length === 1 ? reports[0].voiceQuality : null,
-    voiceFindings: reports.length === 1 ? reports[0].voiceFindings || [] : [],
-    checks,
-    summary,
-    units: reports.map((report) => ({
-      name: report.name,
-      displayName: report.displayName,
-      durationMs: report.durationMs,
-      videoPath: report.videoPath || null,
-      audioPath: report.audioPath || null,
-      target: report.target,
-      summary: report.summary,
-      voiceFindings: report.voiceFindings || [],
-    })),
-  };
-}
 
 async function runPipeline(options) {
   const job = activeJob;
@@ -848,6 +823,8 @@ async function registerSelected(paths, kind, extras = []) {
       pageRange: null,
       ...(extras[index] || {}),
     };
+    const mediaProbe = await inspectMedia(value.path);
+    value.durationMs = Math.round(Number(mediaProbe.format?.duration || 0) * 1000);
     if (kind === "video" && !value.timelinePath) {
       const timelinePath = await findVideoTimeline(value.path);
       const timeline = timelinePath
@@ -872,12 +849,13 @@ async function registerSelected(paths, kind, extras = []) {
           // 확인 완료 표시는 결과에 적혀 있다. 다시 열어도 그대로 남아야 한다.
           value.clearedFindings = clearedFindingKeys(report);
           value.reviewTarget = report.target || null;
+          value.reportPath = reportPath;
           break;
         }
       }
     }
     selectedFiles.set(token, value);
-    return { token, kind, name: value.name, path: value.path, pageRange: value.pageRange, audioUrl: kind === "audio" ? pathToFileURL(value.path).href : null, pages: value.pages || [], voiceFindings: value.voiceFindings || [], clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null, videoUrl: kind === "video" ? pathToFileURL(value.path).href : null };
+    return { token, kind, name: value.name, path: value.path, durationMs: value.durationMs, pageRange: value.pageRange, audioUrl: kind === "audio" ? pathToFileURL(value.path).href : null, pages: value.pages || [], voiceFindings: value.voiceFindings || [], clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null, videoUrl: kind === "video" ? pathToFileURL(value.path).href : null };
   }));
 }
 
@@ -1056,6 +1034,11 @@ async function generateReplacementVoice(options, outputDir) {
     "--quality-attempts", String(options.qualityAttempts || DEFAULT_QUALITY_ATTEMPTS),
   ];
   if (options.seed) args.push("--seed", String(options.seed));
+  if (options.recoveryFindings?.length) {
+    const recoveryPath = path.join(outputDir, "recovery-findings.json");
+    await fs.writeFile(recoveryPath, `${JSON.stringify(options.recoveryFindings, null, 2)}\n`, "utf8");
+    args.push("--recovery-findings", recoveryPath);
+  }
   if (options.voiceMode !== "zero") {
     args.push("--adapter", options.adapterPath || ADAPTER, "--adapter-scale", String(options.adapterScale));
   }
@@ -1078,7 +1061,8 @@ async function generateReplacementVoice(options, outputDir) {
 }
 
 async function runVoiceCandidates(options, outputDir) {
-  assertPageReplaceable(chosenRecord(options.videoToken, "video"), options);
+  const video = chosenRecord(options.videoToken, "video");
+  assertPageReplaceable(video, options);
   const count = Math.min(8, Math.max(2, Math.round(Number(options.candidateCount ?? 3))));
   const digest = crypto.createHash("sha256").update(options.name).digest();
   const baseSeed = digest.readUInt32BE(0);
@@ -1091,7 +1075,11 @@ async function runVoiceCandidates(options, outputDir) {
     // One take per candidate: the point of candidates is a spread of readings
     // to choose between, not one reading retried until it scores well. They run
     // one at a time because each run holds the generator and the reader at once.
-    const generated = await generateReplacementVoice({ ...options, seed, qualityAttempts: 1 }, candidateDir);
+    // Retain one take per visible candidate. A recorded repeated omission can
+    // start with a split input instead of spending two new takes rediscovering
+    // it. Python requires an exact full-text match before using these hints.
+    const generated = await generateReplacementVoice({ ...options, seed, qualityAttempts: 1,
+      recoveryFindings: video.voiceFindings || [] }, candidateDir);
     candidates.push({ index: index + 1, seed, ...generated });
     emit({ type: "voice-item-complete", completed: candidates.length, total: count, name: `후보 ${index + 1}` });
   }
@@ -1476,7 +1464,14 @@ async function runMuteEdit(options, outputDir) {
   }
   const report = await validateEditVideo(output, "mute-region", [record.path], outputDir);
   report.repair = { startMs: Math.round(start * 1000), endMs: Math.round(end * 1000), fadeMs: 5 };
-  report.review = { status: "pending" };
+  const original=record.reportPath?await fs.readFile(record.reportPath,'utf8').then(JSON.parse):null;
+  Object.assign(report,editedReviewContext(original,start*1000,end*1000,(end-start)*1000,'mute-region'));
+  report.displayName=`${path.parse(record.name).name} — 짧은 소리 제거`;
+  if(record.timelinePath)report.timelinePath=path.join(outputDir,'timeline.json');
+  if(record.reportPath)for(const name of ['captions.json','captions.srt','captions.vtt']){
+    const file=path.join(path.dirname(record.reportPath),name);
+    if(await safeStat(file))await fs.copyFile(file,path.join(outputDir,name));
+  }
   await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`);
   return report;
 }
@@ -1487,21 +1482,40 @@ async function runRegionReplaceEdit(options, outputDir) {
   const [videoProbe, audioProbe] = await Promise.all([inspectMedia(video.path), inspectMedia(audio.path)]);
   if (!videoProbe.streams?.some(s => s.codec_type === "audio") || !audioProbe.streams?.some(s => s.codec_type === "audio")) throw new Error("영상과 교체 파일에 음성 트랙이 필요합니다.");
   const start = Number(options.muteStart), end = Number(options.muteEnd);
-  const filter = replaceRegionPlan(start, end, Number(videoProbe.format?.duration), Number(audioProbe.format?.duration));
+  const plan = regionReplacementPlan(start, end, Number(videoProbe.format?.duration), Number(audioProbe.format?.duration), options.durationPolicy);
   const output = path.join(outputDir, `${options.name}.mp4`);
   await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
     "-n", "-hide_banner", "-nostats", "-i", video.path, "-i", audio.path,
-    "-filter_complex", filter, "-map", "0:v:0", "-map", "[outa]",
-    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output,
+    "-filter_complex", plan.filter, "-map", plan.videoOutput, "-map", plan.audioOutput,
+    ...(plan.videoUnchanged ? ["-c:v", "copy"] : ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"]),
+    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", output,
   ]);
   if (video.timelinePath) {
-    await fs.copyFile(video.timelinePath, path.join(outputDir, "timeline.json"));
-    await fs.copyFile(video.timelinePath, path.join(outputDir, videoTimelineFileName(output)));
+    const oldTimeline = JSON.parse(await fs.readFile(video.timelinePath, 'utf8'));
+    const timeline = plan.deltaMs ? patchedTimeline(oldTimeline, Math.round(start*1000), Math.round(end*1000), Math.round(plan.replacementDuration*1000)) : oldTimeline;
+    if(plan.deltaMs) timeline.editTiming = {method:'proportional-region-retime', startMs:Math.round(start*1000), endMs:Math.round(end*1000)};
+    for (const name of ['timeline.json', videoTimelineFileName(output)]) await fs.writeFile(path.join(outputDir,name),`${JSON.stringify(timeline,null,2)}\n`);
   }
   const report = await validateEditVideo(output, "replace-region", [video.path, audio.path], outputDir);
-  report.repair = { startMs:Math.round(start*1000), endMs:Math.round(end*1000), audioDurationMs:Math.round(Number(audioProbe.format.duration)*1000), fadeMs:5 };
-  report.review = { status:"pending" };
+  report.plannedDurationMs=Math.round(Number(videoProbe.format.duration)*1000)+plan.deltaMs;
+  report.checks.push({label:'교체 후 예상 길이',ok:Math.abs(report.durationMs-report.plannedDurationMs)<=100});
+  report.summary=summarizeChecks(report.checks);
+  report.repair = { startMs:Math.round(start*1000), endMs:Math.round(end*1000), audioDurationMs:Math.round(Number(audioProbe.format.duration)*1000), fadeMs:5, durationPolicy:options.durationPolicy, deltaMs:plan.deltaMs };
+  if(video.timelinePath) report.timelinePath=path.join(outputDir,'timeline.json');
+  // Preserve the other review findings and their cleared status through an edit.
+  const original = video.reportPath ? await fs.readFile(video.reportPath,'utf8').then(JSON.parse) : null;
+  Object.assign(report,editedReviewContext(original,start*1000,end*1000,plan.replacementDuration*1000,'replace-region'));
+  report.displayName=`${path.parse(video.name).name} — 구간 음성 교체`;
+  const captionDir=video.reportPath ? path.dirname(video.reportPath) : path.dirname(video.timelinePath || video.path);
+  const oldCaptions=await fs.readFile(path.join(captionDir,'captions.json'),'utf8').then(JSON.parse).catch(()=>null);
+  if(oldCaptions){
+    const captions=retimeCaptions(oldCaptions,start*1000,end*1000,plan.replacementDuration*1000);
+    await fs.writeFile(path.join(outputDir,'captions.json'),`${JSON.stringify(captions,null,2)}\n`);
+    await fs.writeFile(path.join(outputDir,'captions.srt'),captionText(captions));
+    await fs.writeFile(path.join(outputDir,'captions.vtt'),captionText(captions,true));
+  }
   await fs.writeFile(path.join(outputDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  if(!report.summary.ok)throw new Error('교체 후 영상 길이 검증에 실패했습니다.');
   return report;
 }
 
@@ -1688,6 +1702,8 @@ async function listOutputs(studio, { includeLegacy = true, storeId = "current" }
         day: dayEntry.name,
         name: entry.name,
         operation: report.operation,
+        displayName: report.displayName || entry.name,
+        voiceFindings: report.voiceFindings || [],
         updatedAt: stat?.mtime.toISOString(),
         durationMs: report.durationMs || null,
         video: true,
@@ -1762,6 +1778,40 @@ async function setClearedFindings(target, keys, studio) {
 }
 
 function registerIpc() {
+  ipcMain.handle('studio:review-waveform',async(event,options={})=>{
+    guard(event);
+    const video=chosenRecord(options.videoToken,'video');
+    const start=Number(options.start),end=Number(options.end);
+    if(end>video.durationMs/1000+.001)throw new Error('파형 범위가 영상 밖입니다.');
+    const ticket=++reviewWaveTicket;
+    const task=reviewWaveTask.then(()=>{
+      if(ticket!==reviewWaveTicket)throw new Error('파형 선택이 변경되었습니다.');
+      return audioEnvelope(requireRuntimeTool('ffmpeg','FFmpeg'),video.path,start,end);
+    });
+    reviewWaveTask=task.catch(()=>{});
+    return task;
+  });
+  ipcMain.handle('studio:review-preview',async(event,options={})=>{
+    guard(event);
+    if(reviewPreviewBusy)throw new Error('미리듣기를 준비하고 있습니다.');
+    const video=chosenRecord(options.videoToken,'video');
+    if(!['original','mute','replace'].includes(options.mode))throw new Error('미리듣기 종류를 확인하세요.');
+    const audio=options.mode==='replace'?chosenRecord(options.audioToken,'audio'):null;
+    const context=Number(options.context??.6);
+    if(!Number.isFinite(context)||context<0||context>2)throw new Error('앞뒤 듣기 범위가 올바르지 않습니다.');
+    reviewPreviewBusy=true;
+    let directory;
+    try{
+      directory=await newPreviewDirectory();
+      const preview=await makeRegionPreview(requireRuntimeTool('ffmpeg','FFmpeg'),video.path,audio?.path,
+        {start:Number(options.start),end:Number(options.end),duration:video.durationMs/1000,
+          audioDuration:audio?.durationMs/1000,mode:options.mode,fit:options.durationPolicy==='match-audio'?'match-audio':'keep-video',context},directory);
+      reviewPreviewDirectories.push(directory);
+      if(reviewPreviewDirectories.length>8)await fs.rm(reviewPreviewDirectories.shift(),{recursive:true,force:true});
+      return {audioUrl:pathToFileURL(preview.file).href};
+    }catch(error){if(directory)await fs.rm(directory,{recursive:true,force:true});throw error;}
+    finally{reviewPreviewBusy=false;}
+  });
   ipcMain.handle("studio:get-status", async (event) => {
     guard(event);
     const settings = await readAppSettings();
@@ -2222,6 +2272,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("before-quit", () => stopActiveProcess());
+app.on('will-quit',()=>{for(const directory of reviewPreviewDirectories)void fs.rm(directory,{recursive:true,force:true}).catch(()=>{});});
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });

@@ -111,7 +111,7 @@ test("재생성 권장과 확인 권장을 나눠 세고 더 급한 쪽 색을 �
     total: 2,
     failed: 1,
     warned: 1,
-    title: "재생성 권장 1곳 · 확인 권장 1곳",
+    title: "재생성 필요 1곳 · 확인 권장 1곳",
     tone: "failed",
   });
   assert.equal(summarizeVoiceFindings([FINDINGS[1]]).tone, "warning");

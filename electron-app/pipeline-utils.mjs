@@ -237,11 +237,37 @@ export function voiceQualityFindings(manifest = {}) {
           .map((check) => ({ term: String(check.term || ""), status: String(check.status) })),
         expectedText: String(selected.expectedText || ""),
         recognizedText: String(selected.recognizedText || ""),
+        ...(selected.contentChecks?.length ? {contentChecks: selected.contentChecks} : {}),
+        ...(selected.recovery ? {recovery: selected.recovery} : {}),
         selectedAttempt: Number(selected.attempt || 1),
         attempts: Array.isArray(chunk.candidates) ? chunk.candidates.length : 1,
       };
     })
     .sort((left, right) => left.startMs - right.startMs || left.slideNumber - right.slideNumber);
+}
+
+export function combineChapterReports(options, reports) {
+  const checks = reports.flatMap(report => report.checks || []);
+  const voiceFindings = reports.flatMap(report => (report.voiceFindings || []).map(finding => ({
+    ...finding, target: report.target, displayName: report.displayName || report.name,
+  })));
+  return {
+    schemaVersion: 1, generatedAt: new Date().toISOString(), name: options.name,
+    displayName: options.title, mode: options.mode, chapterMode: options.chapterMode,
+    durationMs: reports.reduce((sum, report) => sum + Number(report.durationMs || 0), 0),
+    videoPath: reports.length === 1 ? reports[0].videoPath : null,
+    audioPath: reports.length === 1 ? reports[0].audioPath : null,
+    target: reports[0]?.target || null,
+    voiceQuality: reports.length === 1 ? reports[0].voiceQuality : reports.every(report => report.voiceQuality) ? {
+      ok: reports.every(report => report.voiceQuality.ok),
+      clean: reports.every(report => report.voiceQuality.clean),
+    } : null,
+    voiceFindings, checks, summary: summarizeChecks(checks),
+    units: reports.map(report => ({name: report.name, displayName: report.displayName,
+      durationMs: report.durationMs, videoPath: report.videoPath || null,
+      audioPath: report.audioPath || null, target: report.target, summary: report.summary,
+      voiceQuality: report.voiceQuality, voiceFindings: report.voiceFindings || []})),
+  };
 }
 
 export function videoTimelineFileName(videoPath) {
@@ -454,6 +480,9 @@ export function pageVoicePatchesPlan({ videoDuration, patches, matchAudio = true
     if (!(targetDuration > 0) || !(generatedDuration > 0)) {
       throw new Error("교체할 페이지 음성 구간이 올바르지 않습니다.");
     }
+    if (!matchAudio && generatedDuration > targetDuration + .001) {
+      throw new Error("새 음성이 기존 페이지보다 깁니다. 끝을 자르지 않도록 ‘새 음성 길이에 화면 맞춤’을 선택하세요.");
+    }
     // Overlapping spans would make the concat order lie about where audio
     // lands, so they are refused rather than silently reordered.
     if (index > 0 && patch.targetStart < ordered[index - 1].targetEnd - PATCH_EPSILON) {
@@ -593,19 +622,20 @@ export function reviewPages(timeline) {
 }
 
 export function muteRegionFilter(start, end, duration, maxSeconds = 2) {
-  if (![start, end, duration].every(Number.isFinite) || start < 0 || end > duration || end - start < .05 || end - start > maxSeconds) {
+  if (![start, end, duration].every(Number.isFinite) || start < 0 || end > duration + .001 || Math.round((end-start)*1000) < 50 || Math.round((end-start)*1000) > maxSeconds*1000) {
     throw new Error('영상 안에서 0.05~2초의 제거 구간을 선택해 주세요.');
   }
+  end=Math.min(end,duration);
   const a = start.toFixed(6), b = end.toFixed(6), innerA = (start + .005).toFixed(6), innerB = (end - .005).toFixed(6);
   return `aeval='val(ch)*if(lt(t,${a}),1,if(lt(t,${innerA}),(${innerA}-t)/0.005,if(lt(t,${innerB}),0,if(lt(t,${b}),(t-${innerB})/0.005,1))))':c=same`;
 }
 
-export function replaceRegionPlan(start, end, videoDuration, audioDuration) {
-  if (![start, end, videoDuration, audioDuration].every(Number.isFinite) || start < 0 || end > videoDuration || end - start < .05 || end - start > 10 || audioDuration < .01) {
+export function replaceRegionPlan(start, end, videoDuration, audioDuration, maxSeconds = 10) {
+  if (![start, end, videoDuration, audioDuration].every(Number.isFinite) || start < 0 || end > videoDuration + .001 || Math.round((end-start)*1000) < 50 || Math.round((end-start)*1000) > maxSeconds*1000 || audioDuration < .01) {
     throw new Error('영상 안에서 0.05~10초의 교체 구간과 유효한 음성을 선택해 주세요.');
   }
   if (audioDuration > end - start + .001) throw new Error(`교체 음성(${audioDuration.toFixed(2)}초)이 선택 구간(${(end-start).toFixed(2)}초)보다 깁니다. 구간을 늘리거나 더 짧은 음성을 선택해 주세요.`);
-  const base = muteRegionFilter(start, end, videoDuration, 10);
+  const base = muteRegionFilter(start, end, videoDuration, maxSeconds);
   const span = (end-start).toFixed(6), fadeStart = Math.max(0,audioDuration-.005).toFixed(6);
   return `[0:a]${base}[base];[1:a]atrim=duration=${audioDuration.toFixed(6)},asetpts=PTS-STARTPTS,afade=t=in:d=0.005,afade=t=out:st=${fadeStart}:d=0.005,apad=whole_dur=${span},atrim=duration=${span},adelay=${(start*1000).toFixed(3)}:all=1[patch];[base][patch]amix=inputs=2:duration=first:normalize=0[outa]`;
 }

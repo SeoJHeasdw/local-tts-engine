@@ -3,14 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 
-import { findingExcerpt, findingKeyOf, findingSeek } from './renderer/view-utils.mjs';
+import { findingExcerpt, findingKeyOf, findingSeek, findingStatus } from './renderer/view-utils.mjs';
+import {parseRegionTime,formatRegionTime,regionIssue,regionImpact,regionWindow,timeAtFraction} from './renderer/region-utils.mjs';
 
 const source = await fs.readFile(new URL('./renderer/app.js', import.meta.url), 'utf8');
 const controller = source.slice(source.indexOf('let reviewTarget ='), source.indexOf('function formatDate('));
 function fixture() {
   const elements = new Map();
-  const element = () => ({ value:'', textContent:'', disabled:false, currentTime:0, readyState:2, dataset:{}, listeners:{},
-    classList:{add(){},remove(){},toggle(){}}, append(){},replaceChildren(){},setAttribute(){},removeAttribute(){},
+  const element = () => ({ value:'', textContent:'', disabled:false, currentTime:0, readyState:2, dataset:{}, listeners:{}, children:[], attributes:{},style:{},
+    setPointerCapture(){},getBoundingClientRect(){return {left:0,width:1000};},
+    classList:{add(){},remove(){},toggle(){}}, append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},
+    setAttribute(k,v){this.attributes[k]=v;},getAttribute(k){return this.attributes[k];},removeAttribute(k){delete this.attributes[k];},
     pause(){this.paused=true;}, async play(){this.paused=false;}, click(){},
     addEventListener(name, callback){this.listeners[name]=callback;},
   });
@@ -21,11 +24,12 @@ function fixture() {
   const context = vm.createContext({ $, $$:key=>key==='#review-mode-tabs button'?modes:[],
     document:{createElement:element}, voiceVideo:null, latestEditTarget:null,
     api:{startEdit:async payload=>calls.push(payload), setClearedFindings:async(target,keys)=>saved.push({target,keys})}, setEditBusy(){}, showToast(){},
-    findingKeyOf, findingExcerpt, findingSeek,
+    findingKeyOf, findingExcerpt, findingSeek, findingStatus,
+    parseRegionTime,formatRegionTime,regionIssue,regionImpact,regionWindow,timeAtFraction,
     updateVoicePageMeta(){}, formatDuration:ms=>`${ms}`, voiceFindingReason:()=>'', voiceFindingLabel:()=>'',
     summarizeVoiceFindings:()=>({total:0,title:'',tone:'warning'}), Date, Number, Math,
   });
-  vm.runInContext(controller+`;globalThis.testReview={setReviewVideo,selectReviewPage,currentReviewPage,selection:()=>reviewSelection,context:()=>pendingCandidateContext,queue:queueSelectedCandidate,save:savePendingFixes,pending:()=>pendingFixes,visible:visibleFindings,clear:clearFinding,restore:restoreClearedFindings,cleared:()=>clearedFindings};`,context);
+  vm.runInContext(controller+`;globalThis.testReview={setReviewVideo,selectReviewPage,currentReviewPage,renderVoiceFindingRow,selection:()=>reviewSelection,context:()=>pendingCandidateContext,queue:queueSelectedCandidate,save:savePendingFixes,pending:()=>pendingFixes,visible:visibleFindings,clear:clearFinding,restore:restoreClearedFindings,cleared:()=>clearedFindings};`,context);
   const page1={number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'};
   const page2={number:2,slideId:'b',startMs:33750,endMs:50000,text:'다음 페이지'};
   const findings=[
@@ -59,7 +63,7 @@ test('후보 생성 대상은 이후 선택 페이지와 별개로 고정된다'
 
 test('페이지 타임라인이 없으면 재생성을 막고 구간 무음을 제공한다', () => {
   const {context,$,modes}=fixture();
-  context.testReview.setReviewVideo({token:'external',name:'external.mp4',videoUrl:'file:///external.mp4',pages:[]});
+  context.testReview.setReviewVideo({token:'external',name:'external.mp4',videoUrl:'file:///external.mp4',durationMs:10000,pages:[]});
   assert.equal($('#start-review-button').disabled,true);
   modes[1].listeners.click();
   assert.equal($('#start-review-button').disabled,false);
@@ -78,7 +82,7 @@ test('짧은 소리 교체는 파일 선택 뒤에만 저장하고 구간과 파
   const {context,$,modes,calls}=fixture();
   modes[2].listeners.click();
   assert.equal($('#start-review-button').disabled,true);
-  context.api.pickAudio=async()=>[{token:'short-audio',name:'짧은 문장.wav',audioUrl:'file:///short.wav'}];
+  context.api.pickAudio=async()=>[{token:'short-audio',name:'짧은 문장.wav',audioUrl:'file:///short.wav',durationMs:800}];
   await $('#pick-region-audio').listeners.click();
   assert.equal($('#start-review-button').disabled,false);
   $('#review-mute-start').value='20.5'; $('#review-mute-end').value='21.5';
@@ -222,4 +226,90 @@ test('다른 영상을 열면 앞 영상의 표시가 따라가지 않는다', (
 
   context.testReview.setReviewVideo({token:'other',name:'other.mp4',videoUrl:'file:///other.mp4',pages:[],voiceFindings:[]});
   assert.equal(context.testReview.cleared().size,0);
+});
+
+test('실제 L04 행은 누락 구절·미해결 횟수를 보이고 해당 문장부터 재생한다', async () => {
+  const {finding,page}=JSON.parse(await fs.readFile(new URL('../tests/fixtures/ch02-l04-omission.json',import.meta.url),'utf8'));
+  const {context,$}=fixture();
+  context.testReview.setReviewVideo({token:'l04',name:'L04.mp4',videoUrl:'file:///l04.mp4',pages:[{...page,text:finding.expectedText,slideId:'defaults-org-now'}],voiceFindings:[finding]});
+  const row=context.testReview.renderVoiceFindingRow(finding);
+  const button=row.children[0];
+  assert.equal(button.children[1].textContent,'재생성 필요 · 구절 누락 의심 · 4회 생성 후 미해결');
+  assert.equal(button.children[2].children[1].textContent,'다음 요청에서는 개발자 지시와 도구를');
+  button.listeners.click();
+  assert.equal($('#review-player').currentTime,290.055);
+  assert.match($('#polish-diff-note').textContent,/구절 누락 의심 · 4회 생성 후 미해결/);
+});
+
+function longReview(context) {
+  context.testReview.setReviewVideo({token:'long',name:'lesson.mp4',videoUrl:'file:///lesson.mp4',durationMs:400000,pages:[]});
+}
+
+test('구간 탭은 0초가 아니라 현재 듣는 위치에서 시작한다',()=>{
+  const {context,$,modes}=fixture();longReview(context);$('#review-player').currentTime=295.12;
+  modes[2].listeners.click();
+  assert.equal($('#review-mute-start').value,'4:55.120');
+  assert.equal($('#review-mute-end').value,'4:57.120');
+  assert.equal($('#review-region-duration').textContent,'선택 길이 2.000초');
+});
+
+test('분:초 입력과 다른 길이의 음성이 저장 요청에 정확하게 전달된다',async()=>{
+  const {context,$,modes,calls}=fixture();longReview(context);modes[2].listeners.click();
+  context.api.pickAudio=async()=>[{token:'replacement',name:'voice.wav',audioUrl:'file:///voice.wav',durationMs:3000}];
+  await $('#pick-region-audio').listeners.click();
+  $('#review-mute-start').value='4:55.120';$('#review-mute-end').value='297.350';
+  $('#review-mute-end').listeners.input();
+  assert.equal($('#start-review-button').disabled,false);
+  assert.match($('#review-region-impact').textContent,/0.770초 늘어남/);
+  await $('#review-form').listeners.submit({preventDefault(){}});
+  assert.equal(calls.at(-1).muteStart,295.12);assert.equal(calls.at(-1).muteEnd,297.35);
+  assert.equal(calls.at(-1).durationPolicy,'match-audio');
+});
+
+test('불완전한 시각과 역전된 구간은 저장을 시작하지 않는다',async()=>{
+  const {context,$,modes,calls}=fixture();longReview(context);modes[1].listeners.click();
+  $('#review-mute-start').value='4:';$('#review-mute-start').listeners.input();
+  assert.equal($('#start-review-button').disabled,true);
+  await $('#review-form').listeners.submit({preventDefault(){}});assert.equal(calls.length,0);
+  $('#review-mute-start').value='5';$('#review-mute-end').value='4';$('#review-mute-end').listeners.input();
+  assert.match($('#review-region-error').textContent,/끝은 시작보다/);
+  await $('#review-form').listeners.submit({preventDefault(){}});assert.equal(calls.length,0);
+});
+
+test('0.01초 조정은 분 경계에서도 오차 없이 이어진다',()=>{
+  const {context,$,modes}=fixture();longReview(context);modes[2].listeners.click();
+  $('#review-mute-start').value='1:59.995';$('#review-mute-end').value='2:01.000';
+  $('#review-start-next').listeners.click();assert.equal($('#review-mute-start').value,'2:00.005');
+  $('#review-start-back').listeners.click();assert.equal($('#review-mute-start').value,'1:59.995');
+});
+
+test('파형 손잡이를 끌어 구간을 선택하고 키보드로 미세 조정한다',()=>{
+  const {context,$,modes}=fixture();longReview(context);$('#review-player').currentTime=295;modes[2].listeners.click();
+  const handle=$('#review-wave-start');handle.listeners.pointerdown({pointerId:1});
+  handle.listeners.pointermove({pointerId:1,clientX:500});handle.listeners.pointerup({});
+  assert.equal($('#review-mute-start').value,'4:56.000');
+  handle.listeners.keydown({key:'ArrowRight',preventDefault(){}});
+  assert.equal($('#review-mute-start').value,'4:56.010');
+});
+
+test('정밀 미리듣기는 실제 선택 범위를 잘라 요청하고 바뀐 선택의 옛 응답을 버린다',async()=>{
+  const {context,$,modes}=fixture();longReview(context);$('#review-player').currentTime=295;modes[1].listeners.click();
+  let finish;const requests=[];
+  context.api.reviewPreview=payload=>{requests.push(payload);return new Promise(resolve=>{finish=resolve;});};
+  const pending=$('#review-range-exact').listeners.click();
+  assert.equal(requests[0].start,295);assert.equal(requests[0].end,295.2);assert.equal(requests[0].context,0);
+  $('#review-mute-end').value='295.3';$('#review-mute-end').listeners.input();
+  finish({audioUrl:'file:///old-selection.wav'});await pending;
+  assert.notEqual($('#review-preview-player').src,'file:///old-selection.wav');
+});
+
+test('교체 전 미리듣기는 길이 정책을 넘기며 아직 편집본을 저장하지 않는다',async()=>{
+  const {context,$,modes,calls}=fixture();longReview(context);modes[2].listeners.click();
+  context.api.pickAudio=async()=>[{token:'voice',name:'voice.wav',audioUrl:'file:///voice.wav',durationMs:3000}];
+  await $('#pick-region-audio').listeners.click();
+  const requests=[];context.api.reviewPreview=async payload=>{requests.push(payload);return {audioUrl:'file:///after.wav'};};
+  await $('#review-result-play').listeners.click();
+  assert.equal(requests[0].mode,'replace');assert.equal(requests[0].durationPolicy,'match-audio');
+  assert.equal($('#review-preview-player').src,'file:///after.wav');assert.equal(calls.length,0);
+  assert.match($('#review-preview-note').textContent,/아직 저장하지 않았습니다/);
 });

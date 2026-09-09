@@ -39,6 +39,8 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
+from .transcript_coverage import COVERAGE_POLICY, omission_recovery_parts, repeated_omissions, saved_omissions
+
 import numpy as np
 import soundfile as sf
 
@@ -1171,12 +1173,54 @@ def read_independent_word_times(audio_path: Path, text: str) -> list[dict[str, A
         mx.clear_cache()
 
 
+def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: list[str] | None = None) -> dict[str, Any]:
+    """Make a normal take or join punctuation-bounded recovery pieces."""
+    texts = parts or [arguments["text"]]
+    if parts and " ".join(texts) != " ".join(arguments["text"].split()):
+        raise ValueError("누락 복구 조각이 원래 발음문과 다릅니다.")
+    pieces, cleanups, part_records = [], [], []
+    rate, generation_ms, peak, cursor = None, 0, 0.0, 0
+    for text in texts:
+        started = time.perf_counter()
+        results = list(generate(**{**arguments, "text": text}))
+        generation_ms += round((time.perf_counter() - started) * 1000)
+        if not results:
+            raise RuntimeError("음성 후보에서 오디오가 생성되지 않았습니다.")
+        rate = rate or int(results[0].sample_rate)
+        if any(int(result.sample_rate) != rate for result in results):
+            raise RuntimeError("음성 후보 조각의 샘플레이트가 일치하지 않습니다.")
+        raw = np.concatenate([np.asarray(result.audio) for result in results])
+        audio, cleanup = trim_and_fade_audio(raw, rate)
+        if pieces:
+            gap = np.zeros(round(STEP_GAP_MS * rate / 1000), dtype=audio.dtype)
+            pieces.append(gap)
+            cursor += len(gap)
+        part_records.append({"text": text, "startMs": round(cursor * 1000 / rate),
+                             "durationMs": round(len(audio) * 1000 / rate)})
+        pieces.append(audio)
+        cleanups.append(cleanup)
+        cursor += len(audio)
+        peak = max(peak, *(float(result.peak_memory_usage) for result in results))
+    cleanup = dict(cleanups[0])
+    if parts:
+        cleanup.update({
+            "trimmedTailMs": cleanups[-1]["trimmedTailMs"],
+            "shortenedSilenceCount": sum(c["shortenedSilenceCount"] for c in cleanups),
+            "shortenedSilenceMs": sum(c["shortenedSilenceMs"] for c in cleanups),
+            "recovery": {"strategy": COVERAGE_POLICY, "gapMs": STEP_GAP_MS, "parts": part_records},
+        })
+    return {"audio": np.concatenate(pieces), "sampleRate": rate, "cleanup": cleanup,
+            "generationMs": generation_ms, "peakMemoryGb": peak}
+
+
 def resolve_chunk_take(
     chunk: CourseChunk,
     *,
     attempt_limit: int,
     synthesize: Any,
     review: Any | None,
+    synthesize_recovery: Any | None = None,
+    initial_omissions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Generate takes of one chunk until one reads cleanly, and report the choice.
 
@@ -1192,11 +1236,20 @@ def resolve_chunk_take(
         raise ValueError("최소 한 번은 생성해야 합니다.")
     candidates: list[dict[str, Any]] = []
     evaluations: list[dict[str, Any]] = []
+    recovery_parts = omission_recovery_parts(chunk.tts_text, initial_omissions or []) if synthesize_recovery else []
     for attempt in range(1, attempt_limit + 1):
-        candidates.append(synthesize(chunk, attempt))
+        next_parts = omission_recovery_parts(chunk.tts_text, repeated_omissions(evaluations)) if synthesize_recovery else []
+        # Once recovering, do not return to the input that already failed just
+        # because a recovered take has a different pronunciation warning.
+        parts = next_parts or recovery_parts
+        recovery_parts = parts
+        candidate = synthesize_recovery(chunk, attempt, parts) if parts else synthesize(chunk, attempt)
+        candidates.append(candidate)
         if review is None:
             break
         evaluations.append(review(chunk, candidates[-1]))
+        if parts:
+            evaluations[-1]["recovery"] = {"strategy": COVERAGE_POLICY, "parts": parts}
         if evaluations[-1]["passed"]:
             break
 
@@ -1258,6 +1311,7 @@ def synthesize_excerpt(
     use_cache: bool = True,
     automatic_quality: bool = True,
     quality_attempts: int = MAX_AUTOMATIC_ATTEMPTS,
+    recovery_findings_path: Path | None = None,
 ) -> None:
     """강의 대본 일부를 TTS로 합성하고 정렬된 manifest.json을 생성한다.
 
@@ -1288,6 +1342,9 @@ def synthesize_excerpt(
         raise ValueError("목표 길이는 0초보다 커야 합니다.")
     if not 1 <= quality_attempts <= 5:
         raise ValueError("자동 음성 후보 수는 1~5 사이여야 합니다.")
+    recovery_findings = json.loads(recovery_findings_path.read_text(encoding="utf-8")) if recovery_findings_path else []
+    if not isinstance(recovery_findings, list) or any(not isinstance(f, dict) for f in recovery_findings):
+        raise ValueError("누락 복구 기록은 검수 항목 목록이어야 합니다.")
 
     page_count: int | None = None
     if start_page is not None:
@@ -1410,7 +1467,7 @@ def synthesize_excerpt(
     cache_hits = 0
     peak_memory_gb = 0.0
 
-    def synthesize_candidate(chunk: CourseChunk, attempt: int) -> dict[str, Any]:
+    def synthesize_candidate(chunk: CourseChunk, attempt: int, parts: list[str] | None = None) -> dict[str, Any]:
         """Generate or load one deterministic candidate for a course chunk."""
         nonlocal generation_ms, cache_hits, peak_memory_gb
         seed_basis = stable_digest(
@@ -1442,6 +1499,7 @@ def synthesize_excerpt(
                 "edgeFadeMs": EDGE_FADE_MS,
                 "maxInternalSilenceMs": MAX_INTERNAL_SILENCE_MS,
                 "targetInternalSilenceMs": TARGET_INTERNAL_SILENCE_MS,
+                **({"recovery": {"policy": COVERAGE_POLICY, "parts": parts, "gapMs": STEP_GAP_MS}} if parts else {}),
             }
         )
         clip_path = clips_dir / f"{chunk.key}--take-{attempt}--{cache_hash[:12]}.wav"
@@ -1461,7 +1519,6 @@ def synthesize_excerpt(
             cache_hits += 1
         else:
             mx.random.seed(candidate_seed)
-            started = time.perf_counter()
             generation_args = {
                 "text": chunk.tts_text,
                 "ref_audio": str(reference_path),
@@ -1471,22 +1528,15 @@ def synthesize_excerpt(
             }
             if model_key == "qwen3-tts":
                 generation_args["ref_text"] = reference_text
-            results = list(model.generate(**generation_args))
-            generation_ms += round((time.perf_counter() - started) * 1000)
-            if not results:
-                raise RuntimeError(f"{chunk.key} 후보 {attempt}에서 오디오가 생성되지 않았습니다.")
-            rate = int(results[0].sample_rate)
-            if any(int(result.sample_rate) != rate for result in results):
-                raise RuntimeError(f"{chunk.key} 후보 {attempt}의 샘플레이트가 일치하지 않습니다.")
-            raw_audio = np.concatenate([np.asarray(result.audio) for result in results])
-            audio, trim_info = trim_and_fade_audio(raw_audio, rate)
+            if parts:
+                print(f"[구절 누락 복구] {chunk.key}: 후보 {attempt}, 원문 그대로 {len(parts)}조각 합성", flush=True)
+            generated = generate_candidate_audio(model.generate, generation_args, parts)
+            generation_ms += generated["generationMs"]
+            rate, audio, trim_info = generated["sampleRate"], generated["audio"], generated["cleanup"]
             sf.write(clip_path, audio, rate, subtype="PCM_24")
             write_json(clip_meta_path, trim_info)
             frames = len(audio)
-            peak_memory_gb = max(
-                peak_memory_gb,
-                *(float(result.peak_memory_usage) for result in results),
-            )
+            peak_memory_gb = max(peak_memory_gb, generated["peakMemoryGb"])
         return {
             "attempt": attempt,
             "hash": cache_hash,
@@ -1579,6 +1629,8 @@ def synthesize_excerpt(
             attempt_limit=quality_attempts if automatic_quality else 1,
             synthesize=synthesize_candidate,
             review=evaluate if automatic_quality else None,
+            synthesize_recovery=synthesize_candidate if automatic_quality else None,
+            initial_omissions=saved_omissions(chunk.tts_text, recovery_findings, pronunciation) if automatic_quality else [],
         )
         candidates = take["candidates"]
         selected = take["selected"]
@@ -1929,6 +1981,8 @@ def synthesize_excerpt(
             "license": ASR_LICENSE if automatic_quality else None,
             "maxAttempts": quality_attempts if automatic_quality else 1,
             "secondOpinion": automatic_quality,
+            "coverageGate": {"enabled": automatic_quality, "policy": COVERAGE_POLICY,
+                             "recoveryAfterRepeatedOmissions": 2, "sharesAttemptLimit": True},
             "prosodyGate": {
                 "enabled": automatic_quality,
                 "policy": PROSODY_POLICY,
@@ -2097,6 +2151,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="독립 Whisper 받아쓰기와 재시도를 끄고 시드 하나로만 생성")
     parser.add_argument("--quality-attempts", type=int, default=MAX_AUTOMATIC_ATTEMPTS,
                         help=f"검수를 통과하지 못한 청크의 최대 시도 수 (1~5, 기본 {MAX_AUTOMATIC_ATTEMPTS})")
+    parser.add_argument("--recovery-findings", type=Path,
+                        help="기존 누락 검수 기록. 현재 발음문과 정확히 같은 청크만 첫 후보부터 나눠 합성")
     return parser
 
 
@@ -2119,6 +2175,7 @@ def main(argv: list[str] | None = None) -> int:
         use_cache=not args.no_cache,
         automatic_quality=not args.no_auto_quality,
         quality_attempts=args.quality_attempts,
+        recovery_findings_path=args.recovery_findings,
     )
     return 0
 
