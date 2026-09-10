@@ -245,3 +245,15 @@ test('챕터 완료 이벤트에서 두 번째 레슨의 누락도 완료 안내
   assert.doesNotMatch($('#complete-summary').textContent,/모든 결과 검증 통과/);
   assert.equal($('#job-state').textContent,'제작 완료 · 확인 필요');
 });
+
+test('촬영 정지 예약을 실제 정지로 표시하거나 경과 시간에서 빼지 않는다', () => {
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: 'started', options: { name: 'lecture' } });
+  ui.renderJobEvent({ type: 'voice-progress', done: 1, total: 3 });
+  const startedAt = ui.pace().startedAt;
+  ui.renderJobEvent({ type: 'paused', immediate: false });
+  assert.equal($('#job-state').textContent, '일시정지 대기');
+  assert.equal($('#pause-button').textContent, '정지 예약 취소');
+  ui.renderJobEvent({ type: 'resumed' });
+  assert.equal(ui.pace().startedAt, startedAt);
+});

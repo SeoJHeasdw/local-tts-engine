@@ -1,8 +1,20 @@
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { nextDisplayVideoFileName, renamedFileName, videoTimelineFileName } from "../shared/index.mjs";
 
-export async function findVideo(renderDir, name) {
+export async function fileSha256(file) {
+  const hash = crypto.createHash('sha256');
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+export async function findVideo(renderDir, name, expectedFileName = null) {
+  if (expectedFileName) {
+    const file = path.join(renderDir, expectedFileName);
+    return (await safeStat(file))?.isFile() ? file : null;
+  }
   const names = await fs.readdir(renderDir).catch(() => []);
   const preferred = `${name}-captioned.mp4`;
   if (names.includes(preferred)) return path.join(renderDir, preferred);
@@ -55,7 +67,7 @@ export async function publishVideo(source, studio, name, title, renderDir = null
     await fs.copyFile(
       path.join(renderDir, "timeline.json"),
       path.join(outputDir, videoTimelineFileName(target)),
-    ).catch(() => {});
+    );
   }
   if (path.resolve(source) === path.resolve(target)) return target;
   try {

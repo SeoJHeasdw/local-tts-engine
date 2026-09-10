@@ -17,6 +17,10 @@ export function createEditingService({
     const job = state.activeJob;
     const studio = runtimePaths(options.paths);
     const outputDir = path.join(studio.editOutputRoot, dateFolder(), options.name);
+    const existing = await fs.readFile(path.join(outputDir, 'validation-report.json'), 'utf8').then(JSON.parse).catch(() => null);
+    if (existing?.summary?.ok || await fs.stat(path.join(outputDir, `${options.name}.mp4`)).catch(() => null)) {
+      throw new Error('같은 이름의 편집 결과가 있습니다. 기존 영상을 보존하도록 새 결과 이름을 사용해 주세요.');
+    }
     await fs.mkdir(outputDir, { recursive: true });
     if (options.operation === "voice-candidates") {
       const candidates = await runVoiceCandidates(options, outputDir);

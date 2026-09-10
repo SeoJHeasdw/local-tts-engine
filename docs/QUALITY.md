@@ -1,5 +1,7 @@
 # 음성 검수 계약과 측정 근거
 
+영상 화질·촬영·편집 검수는 [VIDEO-QUALITY](VIDEO-QUALITY.md)를 따른다.
+
 ## 제작 기본값
 
 한국어는 Qwen3-TTS 1.7B Base BF16 + `jaeho-ko-r16-v1` 0.60과 짧은 참조 음성·

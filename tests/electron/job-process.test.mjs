@@ -111,3 +111,13 @@ test("실행 중이 아니거나 이미 끝난 작업은 멈추지 않는다", (
   assert.equal(pauseJobProcesses({ state: "running", children: new Set() }), false);
   assert.equal(resumeJobProcesses({ paused: false }), false);
 });
+
+test('촬영 중에는 SIGSTOP을 보내지 않아 녹화 시간축을 보존한다', () => {
+  let signals = 0;
+  const task = { ...job(), stage: 'capture', pauseRequested: true,
+    children: new Set([{ pid: 987654321, kill() { signals++; return true; } }]) };
+  assert.equal(pauseJobProcesses(task), false);
+  assert.equal(signals, 0);
+  assert.equal(task.paused, undefined);
+  assert.equal(task.pauseRequested, true, '편 경계에서 멈출 요청은 유지한다');
+});

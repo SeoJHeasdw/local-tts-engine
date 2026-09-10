@@ -177,3 +177,79 @@ for (const [mode, fit] of [['single', 'match-audio'], ['batch', 'match-audio'], 
     assert.deepEqual(JSON.parse(await fs.readFile(timelinePath)), timeline);
   });
 }
+
+for (const height of [1440, 2160]) {
+  test(`${height}p는 전체 복사·정확한 자르기·1080p와 합치기 후에도 해상도를 유지한다`, async t => {
+    const directory = await workspace(t);
+    const high = path.join(directory, 'high.mp4'), low = path.join(directory, 'low.mp4');
+    for (const [file, h, color] of [[high, height, 'red'], [low, 1080, 'blue']]) {
+      await ffmpeg(['-f', 'lavfi', '-i', `color=c=${color}:s=${h * 16 / 9}x${h}:r=25:d=0.8`,
+        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=0.8',
+        '-vf', 'setparams=range=limited:colorspace=bt709:color_primaries=bt709:color_trc=bt709',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', file]);
+    }
+    const app = appMethods({ high: { path: high, name: 'high.mp4' }, low: { path: low, name: 'low.mp4' } });
+    for (const [name, clips, reencoded] of [
+      ['copy', [{ videoToken: 'high' }], false],
+      ['trim', [{ videoToken: 'high', inMs: 200, outMs: 600 }], true],
+      ['mixed', [{ videoToken: 'low' }, { videoToken: 'high' }], true],
+    ]) {
+      const out = path.join(directory, name); await fs.mkdir(out);
+      const report = await app.runComposeEdit({ name, clips }, out);
+      assert.equal(report.videoReencoded, reencoded);
+      const media = await probe(report.videoPath), video = media.streams.find(s => s.codec_type === 'video');
+      assert.equal(video.height, height);
+      assert.equal(video.width, height * 16 / 9);
+      assert.equal(video.color_space, 'bt709');
+      assert.equal(video.color_primaries, 'bt709');
+      assert.equal(video.color_transfer, 'bt709');
+      if (name === 'mixed') {
+        const pixels = (await execute('ffmpeg', ['-v', 'error', '-i', report.videoPath,
+          '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], { encoding: 'buffer' })).stdout;
+        assert.ok(pixels[2] > pixels[0] + 100, '처음은 저해상도 파란 클립');
+        assert.ok(pixels.at(-3) > pixels.at(-1) + 100, '끝은 고해상도 빨간 클립');
+        assert.ok(Math.abs(Number(media.format.duration) - 1.6) < 0.1);
+      }
+    }
+  });
+}
+
+test('성공한 편집의 중간 MP4만 정리하고 원본은 그대로 남긴다', async t => {
+  const directory = await workspace(t), input = path.join(directory, 'input.mp4');
+  await ffmpeg(['-f','lavfi','-i','testsrc2=size=320x180:rate=25:duration=1',
+    '-f','lavfi','-i','sine=sample_rate=48000:duration=1','-c:v','libx264','-c:a','aac',input]);
+  const original = await fs.readFile(input), app = appMethods({video:{path:input,name:'input.mp4'}});
+  const out = path.join(directory,'out'); await fs.mkdir(out);
+  const report = await app.runComposeEdit({name:'cut',clips:[{videoToken:'video',inMs:200,outMs:800}]},out);
+  assert.ok(report.intermediateBytes > 0);
+  assert.ok(!(await fs.readdir(out)).some(name=>name.startsWith('work-')));
+  assert.deepEqual(await fs.readFile(input), original);
+  assert.ok((await fs.stat(report.videoPath)).size > 0);
+  await assert.rejects(app.runComposeEdit({name:'cut',clips:[{videoToken:'video'}]},out), /EEXIST/);
+});
+
+test('10비트 영상의 전체 MP4 복사는 무손실이고 자르기의 암묵적 8비트 변환은 거절한다', async t => {
+  const directory = await workspace(t), input = path.join(directory,'ten-bit.mp4');
+  await ffmpeg(['-f','lavfi','-i','testsrc2=size=160x90:rate=25:duration=1',
+    '-f','lavfi','-i','sine=sample_rate=48000:duration=1','-pix_fmt','yuv420p10le','-c:v','libx264','-c:a','aac',input]);
+  const app = appMethods({video:{path:input,name:'ten-bit.mp4'}});
+  const copy = path.join(directory,'copy'); await fs.mkdir(copy);
+  const report = await app.runComposeEdit({name:'copy',clips:[{videoToken:'video'}]},copy);
+  assert.deepEqual(await fs.readFile(report.videoPath),await fs.readFile(input));
+  assert.equal(report.videoReencoded,false);
+  const cut=path.join(directory,'cut');await fs.mkdir(cut);
+  await assert.rejects(app.runComposeEdit({name:'cut',clips:[{videoToken:'video',inMs:200,outMs:800}]},cut),/HDR·색심도/);
+  assert.equal(app.calls.length,0,'지원하지 않는 색 형식은 인코딩 전에 거절');
+});
+
+test('비정방형 픽셀을 편집해도 화면 비율이 늘어나지 않는다', async t => {
+  const directory = await workspace(t), input=path.join(directory,'anamorphic.mp4');
+  await ffmpeg(['-f','lavfi','-i','color=red:s=720x480:r=25:d=1','-f','lavfi','-i','sine=sample_rate=48000:duration=1',
+    '-vf','setsar=8/9','-c:v','libx264','-c:a','aac',input]);
+  const app=appMethods({video:{path:input,name:'anamorphic.mp4'}}),out=path.join(directory,'out');await fs.mkdir(out);
+  const result=await app.runComposeEdit({name:'cut',clips:[{videoToken:'video',inMs:200,outMs:800}]},out);
+  const video=(await probe(result.videoPath)).streams.find(s=>s.codec_type==='video');
+  assert.equal(video.sample_aspect_ratio,'1:1');
+  const {stdout:pixel}=await execute('ffmpeg',['-v','error','-i',result.videoPath,'-vf','format=rgb24,crop=2:2:200:540,scale=1:1','-frames:v','1','-pix_fmt','rgb24','-f','rawvideo','-'],{encoding:'buffer'});
+  assert.ok(pixel[0]<10 && pixel[1]<10 && pixel[2]<10,'4:3 콘텐츠 바깥의 검은 여백이어야 한다');
+});

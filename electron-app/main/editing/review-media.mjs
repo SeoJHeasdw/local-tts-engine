@@ -7,7 +7,9 @@ import { regionIssue } from "../../shared/regions.mjs";
 import { replaceRegionPlan, muteRegionFilter, remapPatchedTimestamp } from "../../shared/index.mjs";
 const execute=promisify(execFile);
 
-export function regionReplacementPlan(start,end,videoDuration,audioDuration,fit='keep-video') {
+export function regionReplacementPlan(start,end,videoDuration,audioDuration,fit='keep-video', fps='25') {
+  const [fpsNumerator, fpsDenominator = 1] = String(fps).split('/').map(Number);
+  if (!/^\d+(?:\/\d+|\.\d+)?$/.test(String(fps)) || !(fpsNumerator > 0) || !(fpsDenominator > 0)) throw new Error('프레임률이 올바르지 않습니다.');
   const issue=regionIssue({start,end,duration:videoDuration,audioDuration,fit});if(issue)throw new Error(issue);
   if(fit==='keep-video')return {filter:replaceRegionPlan(start,end,videoDuration,audioDuration,120),
     videoOutput:'0:v:0',audioOutput:'[outa]',videoUnchanged:true,deltaMs:0,replacementDuration:end-start};
@@ -19,7 +21,7 @@ export function regionReplacementPlan(start,end,videoDuration,audioDuration,fit=
   if(end<videoDuration)add('after',`[0:a]atrim=start=${end},asetpts=PTS-STARTPTS,${fmt}`);
   parts.push(`${labels.join('')}concat=n=${labels.length}:v=0:a=1[outa]`);
   const map=`if(lt(PTS*TB,${start}),PTS,if(lt(PTS*TB,${end}),(${start}+(PTS*TB-${start})*${factor})/TB,PTS+${delta}/TB))`;
-  parts.push(`[0:v]setpts='${map}',fps=25[outv]`);
+  parts.push(`[0:v]setpts='${map}',fps=${fps}[outv]`);
   return {filter:parts.join(';'),videoOutput:'[outv]',audioOutput:'[outa]',videoUnchanged:false,
     deltaMs:Math.round(delta*1000),replacementDuration:audioDuration};
 }

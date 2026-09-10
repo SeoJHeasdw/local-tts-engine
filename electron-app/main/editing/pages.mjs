@@ -1,3 +1,4 @@
+import { assertVideoReencodeSafe, videoFrameRateArg, videoColorFilter, videoReencodeArgs } from "./video-format.mjs";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
 import { assertPageReplaceable, mapWithConcurrency, pageVoicePatchesPlan, patchedTimeline, timeRangeForPages } from "../../shared/index.mjs";
@@ -63,12 +64,13 @@ export function createEditingPagesService({
     if (!videoDuration || !audioDuration) throw new Error("영상 또는 음성 길이를 읽지 못했습니다.");
     const output = path.join(outputDir, `${options.name}.mp4`);
     if (options.durationPolicy === "match-audio") {
+      const videoFormat = assertVideoReencodeSafe(videoProbe);
       const factor = audioDuration / videoDuration;
       await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
         "-y", "-hide_banner", "-nostats", "-i", video, "-i", audio,
         "-map", "0:v:0", "-map", "1:a:0",
-        "-vf", `setpts=${factor.toFixed(8)}*PTS,fps=25,format=yuv420p`,
-        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-vf", `setpts=${factor.toFixed(8)}*PTS,fps=${videoFrameRateArg(videoFormat)},${videoColorFilter(videoFormat)}`,
+        ...videoReencodeArgs(videoProbe),
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
         "-t", audioDuration.toFixed(3), "-movflags", "+faststart", output,
       ]);
@@ -142,6 +144,12 @@ export function createEditingPagesService({
 
     const matchAudio = options.durationPolicy === "match-audio";
     const plan = pageVoicePatchesPlan({ videoDuration, matchAudio, patches: entries });
+    const videoArgs = plan.videoUnchanged ? ["-c:v", "copy"] : videoReencodeArgs(videoProbe);
+    if (!plan.videoUnchanged) {
+      const format = assertVideoReencodeSafe(videoProbe);
+      plan.filter += `;${plan.videoOutput}fps=${videoFrameRateArg(format)},${videoColorFilter(format)}[encoded]`;
+      plan.videoOutput = '[encoded]';
+    }
 
     const output = path.join(outputDir, `${options.name}.mp4`);
     await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
@@ -150,9 +158,7 @@ export function createEditingPagesService({
       ...inputPaths.flatMap((file) => ["-i", file]),
       "-filter_complex", plan.filter,
       "-map", plan.videoOutput, "-map", plan.audioOutput,
-      ...(plan.videoUnchanged
-        ? ["-c:v", "copy"]
-        : ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"]),
+      ...videoArgs,
       "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", output,
     ]);
 

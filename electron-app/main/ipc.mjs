@@ -446,8 +446,8 @@ export function createIpcService({
       guard(event);
       if (!state.activeJob || state.activeJob.kind !== "create" || state.activeJob.state !== "running") return false;
       state.activeJob.pauseRequested = true;
-      // 지금 이 Mac 을 쓰려고 멈추는 것이므로, 다음 편을 기다리지 않고 돌고 있는
-      // 프로세스를 바로 재운다. 편 경계에서의 확정은 루프가 따로 처리한다.
+      // 촬영은 시간축을 지키기 위해 현재 편이 끝난 뒤 멈춘다.
+      // 그 밖의 작업은 프로세스를 즉시 멈추고 편 경계는 루프가 처리한다.
       const stopped = pauseJobProcesses(state.activeJob);
       emit({ type: "paused", immediate: stopped });
       const record = await readActiveJob();

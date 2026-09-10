@@ -42,3 +42,21 @@ test('앱의 실제 구간 저장 경로가 새 영상·타임라인·자막·�
     assert.equal(JSON.parse(await fs.readFile(timelinePath)).totalMs,4000,'원본 타임라인 보존');
   }finally{await fs.rm(directory,{recursive:true,force:true});}
 });
+
+test('30fps 영상의 구간 교체는 25fps로 낮추지 않는다', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tts-region-rate-'));
+  const run = args => execFileSync('ffmpeg', ['-v', 'error', ...args], { maxBuffer: 2_000_000 });
+  const probe = file => JSON.parse(execFileSync('ffprobe', ['-v','error','-show_format','-show_streams','-of','json',file],{encoding:'utf8'}));
+  try {
+    const input=path.join(directory,'original.mp4'),voice=path.join(directory,'voice.wav');
+    run(['-f','lavfi','-i','testsrc2=size=160x90:rate=30:duration=2','-f','lavfi','-i','sine=sample_rate=48000:duration=2','-c:v','libx264','-c:a','aac',input]);
+    run(['-f','lavfi','-i','sine=frequency=880:sample_rate=48000:duration=0.7',voice]);
+    const records={video:{path:input,name:'original.mp4'},audio:{path:voice,name:'voice.wav'}};
+    const service=createEditingRegionsService({ chosenRecord:token=>records[token], inspectMedia:async file=>probe(file), requireRuntimeTool:()=> 'ffmpeg',
+      runProcess:async(stage,command,args)=>execFileSync(command,['-v','error',...args],{maxBuffer:2_000_000}),
+      validateEditVideo:async(file)=>({videoPath:file,durationMs:Math.round(Number(probe(file).format.duration)*1000),checks:[],summary:{ok:true}}) });
+    const out=path.join(directory,'out');await fs.mkdir(out);
+    const report=await service.runRegionReplaceEdit({videoToken:'video',audioToken:'audio',name:'patched',muteStart:.5,muteEnd:1,durationPolicy:'match-audio'},out);
+    assert.equal(probe(report.videoPath).streams.find(s=>s.codec_type==='video').avg_frame_rate,'30/1');
+  } finally {await fs.rm(directory,{recursive:true,force:true});}
+});

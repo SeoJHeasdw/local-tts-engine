@@ -2,6 +2,7 @@ import { createOutputsController } from "./controllers/outputs.mjs";
 import { createEditorController } from "./controllers/editor.mjs";
 import { createReviewController } from "./controllers/review.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
+import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
 import { buildChapterRanges, chapterEtaLabel, createViewHistory, completionFindings, completionSummary, etaLabel, summarizePageRange, summarizeVoiceFindings, unitLabel, voiceFindingReason } from "./view-utils.mjs";
 
@@ -194,6 +195,14 @@ function updateProductionBrief() {
     audio: ["음성만", "영상은 만들지 않음"],
   };
   $("#advanced-output-summary").textContent = `${labels[deliverable][0]}${deliverable === "video" && $("#burn-captions")?.checked ? " · 자막 포함" : ""}`;
+  $("#video-quality-field").classList.toggle("hidden", deliverable !== "video");
+  $("#video-quality").disabled = deliverable !== "video";
+  const quality = videoQuality($("#video-quality").value || DEFAULT_VIDEO_QUALITY);
+  $("#video-quality-hint").textContent = quality.id === "ultra"
+    ? "4K로 글자와 도형의 세부를 살립니다. 제작 시간과 파일 크기가 가장 큽니다."
+    : quality.id === "high"
+      ? "1080p보다 약 1.8배 많은 픽셀로 글자와 도형을 선명하게 만듭니다."
+      : "기존과 같은 화면 크기입니다. 중간 녹화 압축을 제거해 선명도는 개선했습니다.";
 }
 
 function textBreathLines(value) {
@@ -418,7 +427,7 @@ async function refreshResumable() {
 }
 
 $("#pause-button").addEventListener("click", async () => {
-  const paused = $("#pause-button").textContent === "이어하기";
+  const paused = ["이어하기", "정지 예약 취소"].includes($("#pause-button").textContent);
   try { await (paused ? api.resume() : api.pause()); }
   catch (error) { showToast(error.message, "error"); }
 });
@@ -452,6 +461,7 @@ function optionPayload() {
     chapterMode: productionMode === "chapter" ? chapterMode : "single",
     deliverable: $("#deliverable").value,
     burnCaptions: $("#burn-captions").checked,
+    videoQuality: $("#video-quality").value || DEFAULT_VIDEO_QUALITY,
   };
 }
 
@@ -842,12 +852,13 @@ function renderJobEvent(event) {
   } else if (event.type === "log") {
     appendLog(event.text);
   } else if (event.type === "paused") {
-    setJobState("일시정지", "paused");
-    $("#pause-button").textContent = "이어하기";
-    $("#current-stage").textContent = event.immediate ? "일시정지됨" : "이번 편을 마치고 멈춥니다";
+    const pending = event.immediate === false;
+    setJobState(pending ? "일시정지 대기" : "일시정지", pending ? "running" : "paused");
+    $("#pause-button").textContent = pending ? "정지 예약 취소" : "이어하기";
+    $("#current-stage").textContent = pending ? "이번 편을 마치고 멈춥니다" : "일시정지됨";
     // 멈춰 있는 동안은 시간을 세지 않는다. 그러지 않으면 남은 시간이 멈춘
     // 만큼 부풀어 다시 켰을 때 엉뚱한 값을 말한다.
-    jobPausedAt = Date.now();
+    if (!pending && !jobPausedAt) jobPausedAt = Date.now();
   } else if (event.type === "resumed") {
     setJobState("실행 중", "running");
     $("#pause-button").textContent = "일시정지";
@@ -1098,6 +1109,14 @@ $("#deliverable").addEventListener("change", (event) => {
   updateProductionBrief();
 });
 $("#burn-captions").addEventListener("change", updateProductionBrief);
+try {
+  const savedQuality = localStorage.getItem("tts-video-quality");
+  $("#video-quality").value = Object.hasOwn(VIDEO_QUALITIES, savedQuality) ? savedQuality : DEFAULT_VIDEO_QUALITY;
+} catch { $("#video-quality").value = DEFAULT_VIDEO_QUALITY; }
+$("#video-quality").addEventListener("change", () => {
+  try { localStorage.setItem("tts-video-quality", $("#video-quality").value); } catch {}
+  updateProductionBrief();
+});
 $("#job-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if ($("#start-button").disabled) return;

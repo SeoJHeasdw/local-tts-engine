@@ -18,7 +18,7 @@ export function createMediaService({
   async function ffprobe(file) {
     const output = await runProcess("verify", requireRuntimeTool("ffprobe", "FFprobe"), [
       "-v", "error",
-      "-show_entries", "format=duration:stream=codec_type,codec_name,width,height",
+      "-show_entries", "format=duration:stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate,r_frame_rate,color_space,color_range,color_transfer,color_primaries",
       "-of", "json",
       file,
     ], { capture: true });
@@ -28,7 +28,8 @@ export function createMediaService({
   async function inspectMedia(file) {
     const raw = await runUtility(requireRuntimeTool("ffprobe", "FFprobe"), [
       "-v", "error",
-      "-show_entries", "format=duration:stream=codec_type,codec_name,width,height,pix_fmt,r_frame_rate,sample_rate,channels",
+      "-show_entries", "format=duration:stream=codec_type,codec_name,profile,level,width,height,pix_fmt,avg_frame_rate,r_frame_rate,time_base,sample_aspect_ratio,sample_rate,channels,channel_layout,color_space,color_range,color_transfer,color_primaries,extradata_hash",
+      "-show_data_hash", "sha256",
       "-of", "json",
       file,
     ]);

@@ -1,3 +1,4 @@
+import { assertVideoReencodeSafe, videoFrameRateArg, videoColorFilter, videoReencodeArgs } from "./video-format.mjs";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
 import { captionText, editedReviewContext, regionReplacementPlan, retimeCaptions } from "./review-media.mjs";
@@ -47,12 +48,17 @@ export function createEditingRegionsService({
     const [videoProbe, audioProbe] = await Promise.all([inspectMedia(video.path), inspectMedia(audio.path)]);
     if (!videoProbe.streams?.some(s => s.codec_type === "audio") || !audioProbe.streams?.some(s => s.codec_type === "audio")) throw new Error("영상과 교체 파일에 음성 트랙이 필요합니다.");
     const start = Number(options.muteStart), end = Number(options.muteEnd);
-    const plan = regionReplacementPlan(start, end, Number(videoProbe.format?.duration), Number(audioProbe.format?.duration), options.durationPolicy);
+    const plan = regionReplacementPlan(start, end, Number(videoProbe.format?.duration), Number(audioProbe.format?.duration), options.durationPolicy, videoFrameRateArg(videoProbe.streams.find(s => s.codec_type === "video")));
+    const videoArgs = plan.videoUnchanged ? ["-c:v", "copy"] : videoReencodeArgs(videoProbe);
+    if (!plan.videoUnchanged) {
+      plan.filter += `;${plan.videoOutput}${videoColorFilter(assertVideoReencodeSafe(videoProbe))}[encoded]`;
+      plan.videoOutput = '[encoded]';
+    }
     const output = path.join(outputDir, `${options.name}.mp4`);
     await runProcess("edit", requireRuntimeTool("ffmpeg", "FFmpeg"), [
       "-n", "-hide_banner", "-nostats", "-i", video.path, "-i", audio.path,
       "-filter_complex", plan.filter, "-map", plan.videoOutput, "-map", plan.audioOutput,
-      ...(plan.videoUnchanged ? ["-c:v", "copy"] : ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"]),
+      ...videoArgs,
       "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", output,
     ]);
     if (video.timelinePath) {

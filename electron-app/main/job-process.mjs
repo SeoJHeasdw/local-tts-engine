@@ -26,6 +26,10 @@ export function stopJobProcesses(job, signal = "SIGTERM") {
 export function pauseJobProcesses(job) {
   if (!job || job.state !== "running" || job.cancelled) return false;
   if (job.paused) return true;
+  // Recording uses a wall-clock timeline. SIGSTOP would make the elapsed pause
+  // appear as frozen frames and rush the remaining slide transitions on resume.
+  // The existing pauseRequested loop stops safely at the lesson boundary instead.
+  if (job.stage === "capture") return false;
   // 멈춘 뒤에 되살릴 수 없으면 멈추지 않느니만 못하다. 하나라도 신호가 닿아야
   // 일시정지로 친다.
   if (!stopJobProcesses(job, "SIGSTOP")) return false;

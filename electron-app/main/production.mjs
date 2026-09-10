@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
+import { captureVideoFileName, videoFrameRate, videoQuality } from "../shared/video-quality.mjs";
 import { ACTIVE_JOB_PATH, ADAPTER, ROOT, dateFolder, runtimePaths } from "./paths.mjs";
-import { combineChapterReports, pendingUnits, presetFromManifest, providerForOptions, summarizeChecks, voiceQualityFindings } from "../shared/index.mjs";
-import { findVideo, publishVideo, safeStat } from "./files.mjs";
+import { combineChapterReports, pendingUnits, mapWithConcurrency, presetFromManifest, providerForOptions, summarizeChecks, voiceQualityFindings } from "../shared/index.mjs";
+import { fileSha256, findVideo, publishVideo, safeStat, writeReport } from "./files.mjs";
 
 export function createProductionService({
   emit,
@@ -30,14 +31,18 @@ export function createProductionService({
 
   // 끝난 편의 표식은 그 편이 스스로 남긴 검증 결과다. 별도 장부를 두면 장부와
   // 실제 결과가 어긋날 수 있어, 결과 자체를 근거로 삼는다.
-  async function finishedUnitNames(units, studio) {
-    const checked = await Promise.all(units.map(async (unit) => {
+  async function finishedUnitNames(units, studio, expectedFingerprint = null) {
+    const checked = await mapWithConcurrency(units, 4, async (unit) => {
       const report = await fs
         .readFile(path.join(studio.captionOutputRoot, unit.name, "validation-report.json"), "utf8")
         .then(JSON.parse)
         .catch(() => null);
-      return report?.summary?.ok && report?.videoPath ? unit.name : null;
-    }));
+      if (!report?.summary?.ok || !report?.videoPath || !(await safeStat(report.videoPath))?.isFile()) return null;
+      if ((report.videoQuality?.id ?? 'standard') !== (unit.videoQuality ?? 'standard')) return null;
+      if (expectedFingerprint && report.sourceContract?.fingerprint !== expectedFingerprint) return null;
+      if (report.capture?.fileSha256 && await fileSha256(report.videoPath) !== report.capture.fileSha256) return null;
+      return unit.name;
+    });
     return checked.filter(Boolean);
   }
 
@@ -90,6 +95,8 @@ export function createProductionService({
       { label: "타임라인", ok: Array.isArray(manifest.entries) && manifest.entries.length > 0 },
     ];
     let videoPath = null;
+    let capture = null;
+    let lessonReview = null;
 
     if (options.deliverable !== "audio") {
       const timeline = JSON.parse(await fs.readFile(path.join(renderDir, "timeline.json"), "utf8"));
@@ -102,17 +109,37 @@ export function createProductionService({
     }
 
     if (options.deliverable === "video") {
-      videoPath = await findVideo(renderDir, options.name);
+      const quality = videoQuality(options.videoQuality ?? "standard");
+      videoPath = await findVideo(renderDir, options.name, captureVideoFileName(options.name, options));
       if (!videoPath) throw new Error("촬영은 끝났지만 MP4 파일을 찾지 못했습니다.");
+      // Load required metadata before moving a validated result to the published folder.
+      lessonReview = await fs.readFile(path.join(renderDir, 'lesson-review.json'), 'utf8').then(JSON.parse);
+      const captureFile = (await safeStat(`${videoPath}.capture.json`))
+        ? `${videoPath}.capture.json` : path.join(renderDir, 'capture-report.json');
+      capture = await fs.readFile(captureFile, 'utf8').then(JSON.parse).catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
       const videoProbe = await ffprobe(videoPath);
       const videoDurationMs = Math.round(Number(videoProbe.format?.duration || 0) * 1000);
       const videoStream = videoProbe.streams?.find((stream) => stream.codec_type === "video");
       checks.push(
         { label: "영상 파일", ok: Boolean(videoStream) },
-        { label: "영상 크기", ok: Number(videoStream?.width) === 1920 && Number(videoStream?.height) === 1080 },
+        { label: `영상 크기 · ${quality.width}×${quality.height}`, ok: Number(videoStream?.width) === quality.width && Number(videoStream?.height) === quality.height },
+        { label: "영상 코덱", ok: videoStream?.codec_name === "h264" && videoStream?.pix_fmt === "yuv420p" },
+        { label: "영상 프레임률", ok: Math.abs(videoFrameRate(videoStream) - quality.fps) < 0.01 },
         { label: "영상 음성", ok: videoProbe.streams?.some((stream) => stream.codec_type === "audio") },
         { label: "영상 길이", ok: Math.abs(videoDurationMs - Number(manifest.durationMs)) <= 200 },
       );
+      if (options.videoQuality !== undefined) {
+        checks.push(
+          { label: '촬영 설정 일치', ok: capture?.profile?.id === quality.id
+            && path.basename(capture?.file || '') === path.basename(videoPath) },
+          { label: '촬영 파일 무결성', ok: Boolean(capture?.fileSha256) && capture.fileSha256 === await fileSha256(videoPath) },
+          { label: '촬영 판본 일치', ok: !manifest.sourceContract
+            || capture?.sourceContract?.fingerprint === manifest.sourceContract.fingerprint },
+        );
+      }
     }
 
     const summary = summarizeChecks(checks);
@@ -125,9 +152,7 @@ export function createProductionService({
       name: options.name,
       displayName: options.title,
       sourceContract: manifest.sourceContract || null,
-      lessonReview: options.deliverable === "video"
-        ? await fs.readFile(path.join(renderDir, "lesson-review.json"), "utf8").then(JSON.parse)
-        : null,
+      lessonReview,
       sourceDir,
       renderDir: options.deliverable === "audio" ? null : renderDir,
       audioPath: manifest.audioPath,
@@ -135,6 +160,8 @@ export function createProductionService({
       durationMs: Number(manifest.durationMs),
       naturalness: manifest.naturalness || null,
       voiceRouting: manifest.voiceRouting || null,
+      videoQuality: options.deliverable === "video" ? videoQuality(options.videoQuality ?? "standard") : null,
+      capture,
       voiceQuality,
       voiceFindings,
       needsReview: voiceQuality?.needsReview || [],
@@ -146,7 +173,7 @@ export function createProductionService({
       summary,
     };
     const reportDir = options.deliverable === "audio" ? sourceDir : renderDir;
-    await fs.writeFile(path.join(reportDir, "validation-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    await writeReport(path.join(reportDir, "validation-report.json"), report, 'validate');
     if (!summary.ok) throw new Error(`자동 검증 실패: ${summary.failed.join(", ")}`);
     return report;
   }
@@ -199,6 +226,7 @@ export function createProductionService({
           "--preset", options.name,
           "--provider", providerName,
           "--no-cache",
+          "--quality", options.videoQuality ?? "standard",
         ];
         if (captureSiteDir) captureArgs.push("--site-dir", captureSiteDir);
         if (options.burnCaptions) captureArgs.push("--burn-captions");
@@ -273,6 +301,20 @@ export function createProductionService({
     ]);
     const input = { project, deck: path.join(project, "deck"),
       site: options.deliverable === "video" ? path.join(project, "site") : null };
+    const inputMetadata = await fs.readFile(path.join(project, 'production-input.json'), 'utf8').then(JSON.parse);
+    const fingerprint = inputMetadata.sourceContract?.fingerprint;
+    if (resuming && options.inputFingerprint && fingerprint !== options.inputFingerprint) {
+      throw new Error('지난 제작과 강의 입력 판본이 달라 이어할 수 없습니다. 새 작업 이름으로 제작해 주세요.');
+    }
+    if (resuming && !options.inputFingerprint && options.resumeFrom?.length) {
+      const previousName = String(options.resumeFrom[0]);
+      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(previousName)) throw new Error('이전 제작 기록의 이름이 올바르지 않습니다.');
+      const previous = await fs.readFile(path.join(originalStudio.captionOutputRoot, previousName, 'validation-report.json'), 'utf8').then(JSON.parse).catch(() => null);
+      if (!fingerprint || previous?.sourceContract?.fingerprint !== fingerprint) {
+        throw new Error('이전 제작의 입력 판본을 확인할 수 없습니다. 기존 결과를 보존하고 새 작업 이름으로 제작해 주세요.');
+      }
+    }
+    options = { ...options, inputFingerprint: fingerprint };
     const studio = { ...originalStudio, sourceProjectRoot: input.project, deckRoot: input.deck,
       configPath: path.join(input.deck, "narration.config.json") };
     emit({ type: "log", stream: "stdout",
@@ -293,7 +335,7 @@ export function createProductionService({
         })),
       });
     }
-    const finished = units.length > 1 ? await finishedUnitNames(units, studio) : [];
+    const finished = resuming && units.length > 1 ? await finishedUnitNames(units, studio, fingerprint) : [];
     const remaining = pendingUnits(units, finished);
     if (finished.length) {
       emit({ type: "log", stream: "stdout",

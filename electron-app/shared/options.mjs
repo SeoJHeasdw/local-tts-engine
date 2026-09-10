@@ -1,5 +1,6 @@
 import path from "node:path";
 import { makeJobName, SLUG_PATTERN } from "./names.mjs";
+import { videoQuality } from "./video-quality.mjs";
 
 export function normalizeOptions(raw = {}) {
   const mode = raw.mode === "bundle" || raw.mode === "page"
@@ -47,6 +48,7 @@ export function normalizeOptions(raw = {}) {
     adapterScale,
     voiceMode,
     deliverable,
+    videoQuality: videoQuality(raw.videoQuality).id,
     burnCaptions: raw.burnCaptions !== false,
   };
 }

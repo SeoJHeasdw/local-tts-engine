@@ -42,8 +42,8 @@ export function createEditorController({ $, formatDuration, review, setIconStatu
     $("#editor-quality").textContent = editorClips.length === 0
       ? "클립을 담으면 다시 구울지 그대로 쓸지 알려드립니다."
       : trimmed === 0
-        ? "구간을 자른 클립이 없어 다시 굽지 않고 그대로 이어 붙입니다. 금방 끝납니다."
-        : `${trimmed}개 클립만 다시 굽습니다. 나머지는 원본을 그대로 씁니다.`;
+        ? "규격이 같은 전체 클립은 그대로 이어 붙입니다. 규격이 다르면 가장 큰 입력 해상도에 맞춥니다."
+        : `자른 구간을 정확히 반영해 다시 만듭니다. 가장 큰 입력 해상도를 유지합니다.`;
     $("#start-edit-label").textContent = editorClips.length > 1 ? "이어서 만들기" : "이대로 만들기";
   }
 
