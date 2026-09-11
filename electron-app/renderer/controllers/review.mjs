@@ -806,6 +806,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     updateVoicePageMeta(); updateReviewAction();
   }
   function updateReviewAction() {
+    // 작업이 도는 동안에는 승인·편 이동도 함께 잠근다.
+    renderApproval();
+    renderSiblingNavigation();
     const r=readReviewRegion(),problem=reviewMode==='regenerate'?'':regionIssue(r);
     $('#review-region-error').textContent=problem;
     $('#review-region-duration').textContent=Number.isFinite(r.end-r.start)&&r.end>r.start?`선택 길이 ${(r.end-r.start).toFixed(3)}초`:'';
