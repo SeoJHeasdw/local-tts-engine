@@ -533,7 +533,12 @@ button:disabled { cursor: not-allowed; }
 .voice-quality-panel[data-tone="failed"] > div strong { color: var(--danger); }
 .voice-quality-panel > div small { color: var(--text-3); font-size: var(--fs-xs); }
 .voice-quality-panel[data-repairable="no"] .repair-hint { display: none; }
-.voice-quality-panel ul { display: grid; gap: var(--s2); margin: var(--s3) 0 0; padding: 0; list-style: none; }
+/* 열한 편을 한 번에 만들면 확인할 곳이 스무 줄을 넘는다. 완료 화면은 무엇이
+   남았는지 알리는 자리이지 다 읽는 자리가 아니므로 높이를 묶어 둔다. */
+.voice-quality-panel ul {
+  display: grid; gap: var(--s2); margin: var(--s3) 0 0; padding: 0; list-style: none;
+  max-height: 260px; overflow: auto;
+}
 
 
 .log-panel { margin-top: auto; border-top: 1px solid var(--line); padding-top: var(--s4); }
