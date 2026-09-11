@@ -190,6 +190,29 @@ test('확인 항목은 하나씩 확인 완료로 목록에서 내릴 수 있다
   assert.equal($('#review-finding-count').textContent,'1');
 });
 
+test('한 페이지의 여러 지적은 한 번의 확인으로 함께 내려간다', () => {
+  // 같은 페이지의 지적 둘을 따로 넘어갈 수는 없다. 고치는 단위가 페이지다.
+  const {context,$,saved}=fixture();
+  const twice=[
+    {slideNumber:1,startMs:1300,endMs:9000,severity:'failed',reasons:['단어 일부 누락']},
+    {slideNumber:1,startMs:9000,endMs:33000,severity:'warning',reasons:['발음 확인 필요']},
+  ];
+  context.testReview.setReviewVideo({token:'two',name:'two.mp4',videoUrl:'file:///two.mp4',
+    pages:[{number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'}],voiceFindings:twice,
+    reviewTarget:{root:'render',name:'two'}});
+  assert.equal($('#review-finding-count').textContent,'2');
+  const before=saved.length;
+
+  const row=context.testReview.renderFindingGroup({number:1,findings:twice});
+  const [done]=row.children[0].children[1].children.at(-1).children;
+  assert.equal(done.textContent,'이 페이지 확인');
+  done.listeners.click();
+
+  assert.equal(context.testReview.visible().length,0);
+  assert.equal($('#review-finding-count').textContent,'0');
+  assert.equal(saved.length,before+1,'표시 저장은 한 번만 보낸다');
+});
+
 test('교체를 담으면 그 페이지의 확인 항목도 함께 내려간다', async () => {
   const {context,$}=fixture();
   context.testReview.selectReviewPage(context.testReview.selection()||undefined);

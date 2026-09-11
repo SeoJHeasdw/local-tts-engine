@@ -376,7 +376,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     done.textContent = group.findings.length > 1 ? '이 페이지 확인' : '확인';
     done.title = '확인 완료로 표시';
     done.setAttribute('aria-label', `${group.number}페이지 확인 완료로 표시`);
-    done.addEventListener('click', () => group.findings.forEach(clearFinding));
+    done.addEventListener('click', () => clearFindings(group.findings));
     // 확인 항목의 대부분은 결국 그 페이지를 다시 읽히는 것으로 끝난다. 화면을
     // 옮겨 페이지를 다시 고르는 두 걸음을 지우고 그 자리에 버튼을 둔다.
     const again = document.createElement('button');
@@ -427,7 +427,11 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   }
 
   function clearFinding(finding) {
-    clearedFindings.add(findingKey(finding));
+    clearFindings([finding]);
+  }
+
+  function clearFindings(findings) {
+    for (const finding of findings) clearedFindings.add(findingKey(finding));
     renderFindings();
     persistClearedFindings();
   }
@@ -564,7 +568,6 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     reviewFindings = video.voiceFindings || [];
     clearedFindings.clear();
     for (const key of video.clearedFindings || []) clearedFindings.add(String(key));
-    renderFindings();
     $('#review-pages').replaceChildren(...(video.pages || []).map(page => {
       const button = document.createElement('button'); button.type = 'button';
       button.textContent = `${page.number}p`; button.dataset.page = page.number;
@@ -575,6 +578,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-selection-title').textContent = '수정할 부분을 선택하세요';
     $('#review-selection-reason').textContent = '영상을 멈추고 ‘이 페이지 수정’을 누르세요.';
     $('#review-player-status').textContent = video.pages?.length ? '재생 중에도 페이지를 선택해 수정할 수 있습니다.' : '페이지 정보가 없어 재생성은 사용할 수 없습니다. 구간 무음 처리는 가능합니다.';
+    // 한 곳만 남은 목록은 펼친 채로 그 페이지를 골라 둔다. 기본 문구를 세운
+    // 뒤에 그려야 고른 페이지가 다시 '선택하세요'로 덮이지 않는다.
+    renderFindings();
     updateReviewPosition(); updateReviewAction();
   }
 
