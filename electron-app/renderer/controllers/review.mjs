@@ -580,6 +580,32 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     });
   }
 
+  // 다듬기는 같은 손짓을 하루에 수백 번 되풀이한다. 5초 앞으로 가려고 매번
+  // 버튼을 겨누지 않도록 손이 자판을 떠나지 않는 길을 함께 둔다. 글자를 치는
+  // 중이거나 대화상자가 열려 있으면 자판은 그쪽 것이다.
+  const SHORTCUT_SKIP_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'SUMMARY', 'A']);
+
+  function reviewShortcut(event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if ($('#view-review')?.classList?.contains('hidden')) return;
+    if (document.querySelector?.('dialog[open]')) return;
+    const target = event.target;
+    if (target?.isContentEditable || SHORTCUT_SKIP_TAGS.has(target?.tagName)) return;
+    const step = (seconds) => seekReview(Math.max(0, reviewPlayer.currentTime + seconds));
+    if (event.key === ' ') {
+      event.preventDefault();
+      if (reviewPlayer.paused) reviewPlayer.play().catch(() => {});
+      else reviewPlayer.pause();
+    } else if (event.key === 'ArrowLeft') { event.preventDefault(); step(-5); }
+    else if (event.key === 'ArrowRight') { event.preventDefault(); step(5); }
+    else if (event.key === ',') { event.preventDefault(); step(-0.01); }
+    else if (event.key === '.') { event.preventDefault(); step(0.01); }
+    else if (event.key === '[') { event.preventDefault(); movePage(-1); }
+    else if (event.key === ']') { event.preventDefault(); movePage(1); }
+  }
+
+  document.addEventListener?.('keydown', reviewShortcut);
+
   // 검수 중인 파일도 이름은 그 자리에서 고친다. 결과 목록을 거치지 않고 고른
   // 영상이어도 이름은 그 파일에 붙은 것이므로 같은 방법으로 바꿀 수 있다.
   function paintReviewFileName(name) {
@@ -623,7 +649,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     renderPageRail(video);
     $('#review-selection-title').textContent = '고칠 페이지를 고르세요';
     $('#review-selection-reason').textContent = '확인할 부분에서 고르거나, 영상 아래 페이지 막대에서 누르세요.';
-    $('#review-player-status').textContent = video.pages?.length ? '재생 중에도 페이지를 선택해 수정할 수 있습니다.' : '페이지 정보가 없어 재생성은 사용할 수 없습니다. 구간 무음 처리는 가능합니다.';
+    $('#review-player-status').textContent = video.pages?.length
+      ? '재생 중에도 페이지를 선택해 수정할 수 있습니다. 스페이스 재생·멈춤, ← → 5초, , . 0.01초, [ ] 페이지 이동.'
+      : '페이지 정보가 없어 재생성은 사용할 수 없습니다. 구간 무음 처리는 가능합니다.';
     // 한 곳만 남은 목록은 펼친 채로 그 페이지를 골라 둔다. 기본 문구를 세운
     // 뒤에 그려야 고른 페이지가 다시 '선택하세요'로 덮이지 않는다.
     renderFindings();
@@ -945,6 +973,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     queueSelectedCandidate,
     selectReviewPage,
     currentReviewPage,
+    reviewShortcut,
     renderSiblingNavigation,
     renderVoiceFindingRow,
     renderFindingGroup,

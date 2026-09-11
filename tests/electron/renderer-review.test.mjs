@@ -521,3 +521,24 @@ test('같은 낱말이 여러 페이지에서 걸리면 한 번에 알린다', (
   assert.match($('#review-findings-note').textContent,/‘A2091’이\(가\) 2페이지에서 걸렸습니다/);
   assert.match($('#review-findings-note').textContent,/사전 등록을 검토/);
 });
+
+test('다듬기 자판 길은 글자를 치는 중에는 끼어들지 않는다', () => {
+  const {context,$,page2}=fixture();
+  const key=(value,target={tagName:'DIV'})=>({key:value,target,preventDefault(){}});
+  $('#review-player').currentTime=20;
+
+  context.testReview.reviewShortcut(key('ArrowRight'));
+  assert.equal($('#review-player').currentTime,25);
+  context.testReview.reviewShortcut(key('ArrowLeft'));
+  assert.equal($('#review-player').currentTime,20);
+  context.testReview.reviewShortcut(key('.'));
+  assert.equal($('#review-player').currentTime,20.01);
+
+  context.testReview.reviewShortcut(key(']'));
+  assert.equal(context.testReview.selection().number,page2.number,'[ ]는 페이지를 옮긴다');
+
+  // 읽을 말을 적는 중에는 자판이 그쪽 것이다.
+  $('#review-player').currentTime=20;
+  context.testReview.reviewShortcut(key('ArrowRight',{tagName:'TEXTAREA'}));
+  assert.equal($('#review-player').currentTime,20);
+});
