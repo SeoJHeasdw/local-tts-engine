@@ -200,6 +200,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       label: name || '고른 목소리',
     });
     pendingCandidateContext = null;
+    autoOpened = false;
     setOverrideText('');
     $('#voice-script-override').open = false;
     $('#review-candidates-host').classList.add('hidden');
@@ -278,6 +279,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   // 여러 지적은 결국 그 페이지를 한 번 다시 읽히는 한 가지 일이므로, 페이지로
   // 묶어 접어 두고 펼친 자리에서만 버튼을 제대로 세운다.
   let expandAll = false;
+  // 한 곳만 남았을 때는 펼쳐 둔다. 다만 목록을 다시 그릴 때마다 페이지를 새로
+  // 고르면 적어 둔 읽을 말이 지워지므로, 영상을 연 뒤 한 번만 한다.
+  let autoOpened = false;
 
   function findingGroups(findings) {
     const groups = new Map();
@@ -295,7 +299,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     const cleared = reviewFindings.length - remaining.length;
     const groups = findingGroups(remaining);
     $('#review-finding-count').textContent = String(remaining.length);
-    const rows = groups.map((group, index) => renderFindingGroup(group, index === 0 && groups.length === 1));
+    const openFirst = !autoOpened && groups.length === 1;
+    if (openFirst) autoOpened = true;
+    const rows = groups.map((group, index) => renderFindingGroup(group, openFirst && index === 0));
     if (cleared > 0) {
       const note = document.createElement('li');
       note.className = 'findings-cleared';
@@ -544,6 +550,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#region-audio-preview').classList.add('hidden');
     $('#region-audio-name').textContent = 'WAV·M4A·MP3 파일을 선택하세요.';
     pendingCandidateContext = null;
+    autoOpened = false;
     setOverrideText('');
     $('#voice-script-override').open = false;
     $('#review-candidates-host').classList.add('hidden');
