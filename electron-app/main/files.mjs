@@ -39,7 +39,7 @@ export async function reportDescribesVideo(reportVideoPath, videoPath) {
   return !await safeStat(recorded);
 }
 
-export async function publishedVideoNames(root) {
+async function publishedVideoNames(root) {
   const names = [];
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {

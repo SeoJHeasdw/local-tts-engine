@@ -300,7 +300,7 @@ export function outputGroupTitle(group = {}) {
 
 // 확인 항목이 알려 줘야 하는 것은 대본 전체가 아니라 어느 낱말을 귀 기울여
 // 들어야 하는지다. 걸린 낱말만 뽑고, 그 낱말이 놓인 자리를 짧게 보여 준다.
-export function findingTerms(finding = {}) {
+function findingTerms(finding = {}) {
   return (finding.terms || []).map((item) => String(item?.term || "")).filter(Boolean);
 }
 
