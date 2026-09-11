@@ -321,11 +321,10 @@
             </aside>
           </div>
           <section class="polish-pending hidden" id="polish-pending" aria-live="polite">
-            <div class="polish-pending-copy">
-              <strong id="polish-pending-count">교체 대기 없음</strong>
-              <small>저장하기 전까지 원본 영상은 그대로입니다.</small>
-            </div>
-            <ul id="polish-pending-list"></ul>
+            <details class="polish-pending-copy" id="polish-pending-details">
+              <summary><strong id="polish-pending-count">교체 대기 없음</strong><small>저장하기 전까지 원본 영상은 그대로입니다. 눌러서 목록 보기</small></summary>
+              <ul id="polish-pending-list"></ul>
+            </details>
             <div class="polish-pending-actions">
               <button type="button" class="secondary-small" id="polish-discard">모두 취소</button>
               <button type="button" class="primary-small" id="polish-save">한 번에 저장</button>
