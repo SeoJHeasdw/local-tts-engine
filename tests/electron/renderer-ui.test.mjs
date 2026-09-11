@@ -117,17 +117,30 @@ test("완성 영상은 자기 타임라인을 데리고 발행된다", async () 
 });
 
 
-test("확인할 부분은 고칠 자리 아래에 접혀 있고, 읽는 말을 적을 칸을 갖는다", async () => {
+test("확인할 부분은 영상 바로 아래에 있고, 고칠 자리와 페이지 이동은 옆 기둥이다", async () => {
   const [html, css] = await Promise.all([
     fs.readFile(path.join(renderer, "index.html"), "utf8"),
     fs.readFile(path.join(renderer, "styles.css"), "utf8"),
   ]);
-  // 고칠 자리가 먼저고 확인 목록이 그 아래다. 목록이 길어져도 고치는 칸을
-  // 찾으러 스크롤하지 않는다. 동작은 renderer-review 검사가 맡는다.
-  assert.ok(html.indexOf('id="review-form"') < html.indexOf('id="review-findings"'));
+  // 하루에 수백 번 누르는 것은 확인이다. 듣는 자리와 확인하는 자리가 한 기둥에
+  // 있어야 그 한 걸음이 화면을 가로지르지 않는다. 고치는 폼과 페이지 막대는
+  // 그보다 훨씬 덜 만지므로 옆으로 뺀다. 동작은 renderer-review 검사가 맡는다.
+  const player = html.indexOf('id="review-player"');
+  const findings = html.indexOf('id="review-findings"');
+  const form = html.indexOf('id="review-form"');
+  const rail = html.indexOf('class="card page-rail-card"');
+  assert.ok(player < findings && findings < form, "영상 → 확인할 부분 → 고칠 자리 순서");
+  assert.ok(form < rail, "페이지 막대는 오른쪽 기둥의 고칠 자리 아래");
+  assert.ok(html.indexOf('id="review-findings"') < html.indexOf('id="polish-diff"'));
+  // 확인 단추는 영상 바로 아래 줄에도 선다. 자판 길도 단추 위에 적어 둔다.
+  assert.match(html, /class="transport-confirm" id="review-confirm"[^>]*>✓ 확인<kbd>Enter<\/kbd>/);
   assert.match(html, /id="voice-override-text"/);
   assert.match(css, /\.finding-group \{/);
   assert.match(css, /\.script-override \{/);
+  assert.match(css, /\.transport-confirm \{/);
+  // 왼쪽 기둥이 길어졌으므로 붙박이는 짧아진 오른쪽으로 옮겼다.
+  assert.match(css, /\.review-sidebar \{[^}]*position: sticky/);
+  assert.doesNotMatch(css, /\.review-stage \{[^}]*position: sticky/);
 });
 
 
@@ -195,11 +208,35 @@ test("창 막대의 단추는 아이콘과 툴팁을 함께 갖고, 사이드바
   assert.match(html, /id="window-forward"[^>]+data-tooltip="앞으로가기"/);
   assert.match(html, /class="panel-toggle-chevron"/);
   assert.match(script, /toggle\.dataset\.tooltip = label/);
-  assert.match(script, /applySidebarCollapsed\(collapsed, \{ animate: true \}\)/);
+  assert.match(script, /applySidebarCollapsed\(!document\.body\.classList\.contains\('sidebar-collapsed'\), \{ animate: true \}\)/);
   assert.match(css, /\.sidebar-motion \.sidebar \{/);
   assert.match(css, /\.sidebar-motion \.shell \{ transition: grid-template-columns/);
   // 창 왼쪽 끝 단추의 툴팁은 오른쪽 정렬이면 화면 밖으로 나간다.
   assert.match(css, /\.nav-tip::after \{ left: 0; right: auto; \}/);
+});
+
+
+// 접기는 두 폭 사이만 오간다. 어느 폭이 맞는지는 창 크기와 편 제목 길이에 따라
+// 다르므로 경계선을 직접 잡아 정하고, 그 폭은 다음에 열 때도 남아 있어야 한다.
+test("사이드바 경계선을 끌어 폭을 정하고 최소·최대 안에 가둔다", async () => {
+  const [html, css, script] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+    readRendererSource(),
+  ]);
+  assert.match(html, /id="sidebar-resizer"[^>]+role="separator"/);
+  assert.match(html, /id="sidebar-resizer"[^>]+tabindex="0"/);
+  assert.match(css, /\.sidebar-resizer \{[^}]*left: var\(--sidebar-w\)/);
+  assert.match(css, /\.sidebar-resizer \{[^}]*cursor: col-resize/);
+  // 끄는 동안 미끄러지면 사이드바가 손보다 늦게 온다.
+  assert.match(css, /\.sidebar-sizing \.sidebar,\n\.sidebar-sizing \.shell,\n\.sidebar-sizing \.sidebar-resizer \{ transition: none; \}/);
+  assert.match(script, /SIDEBAR_WIDTH = \{ default: 226, min: 180, max: 420 \}/);
+  assert.match(script, /setProperty\('--sidebar-w'/);
+  assert.match(script, /pointermove/);
+  // 좁은 창에서는 최대 폭도 함께 줄어야 본문이 남는다.
+  assert.match(script, /viewport - SIDEBAR_CONTENT_FLOOR/);
+  // 폭과 접힘은 같은 자리에서 함께 적힌다.
+  assert.match(script, /localStorage\.setItem\(SIDEBAR_WIDTH_KEY/);
 });
 
 

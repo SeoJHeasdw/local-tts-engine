@@ -289,6 +289,15 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   // 고르면 적어 둔 읽을 말이 지워지므로, 영상을 연 뒤 한 번만 한다.
   let autoOpened = false;
 
+  // 이 화면에서 가장 많이 누르는 단추는 확인이다. 예전에는 확인을 누르고 →
+  // 목록에서 다음 줄을 눈으로 찾아 펼치고 → 다시 듣기까지 세 걸음이었다.
+  // 지금 듣고 있는 항목을 기억해 두면 확인 한 번으로 다음 항목이 열리고 그
+  // 자리가 재생된다. 손은 Enter 위에 머문다.
+  let currentFindingPage = null;
+  // 목록을 다시 그리는 일은 교체를 담거나 취소할 때도 일어난다. 확인으로
+  // 넘어온 때에만 그 자리를 다시 듣는다. 그러지 않으면 듣던 자리가 튄다.
+  let advanceSeek = false;
+
   function findingGroups(findings) {
     const groups = new Map();
     for (const finding of findings) {
@@ -305,9 +314,21 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     const cleared = reviewFindings.length - remaining.length;
     const groups = findingGroups(remaining);
     $('#review-finding-count').textContent = String(remaining.length);
-    const openFirst = !autoOpened && groups.length === 1;
-    if (openFirst) autoOpened = true;
-    const rows = groups.map((group, index) => renderFindingGroup(group, openFirst && index === 0));
+    // 확인한 페이지는 목록에서 사라진다. 사라진 페이지를 계속 가리키지 않는다.
+    if (!groups.some(group => group.number === currentFindingPage)) currentFindingPage = null;
+    if (currentFindingPage === null && !autoOpened && groups.length === 1) {
+      autoOpened = true;
+      currentFindingPage = groups[0].number;
+    }
+    // 목록에는 스크롤이 있다. 스스로 열린 항목이 화면 밖에 있으면 확인한 것과
+    // 다음 것이 이어지는 느낌이 끊긴다. 붙여 넣은 뒤에 끌어 올린다.
+    let advanced = null;
+    const rows = groups.map(group => {
+      const row = renderFindingGroup(group, group.number === currentFindingPage);
+      if (advanceSeek && group.number === currentFindingPage) advanced = row;
+      return row;
+    });
+    advanceSeek = false;
     if (cleared > 0) {
       const note = document.createElement('li');
       note.className = 'findings-cleared';
@@ -323,6 +344,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       rows.push(note);
     }
     $('#review-findings-list').replaceChildren(...rows);
+    advanced?.scrollIntoView?.({ block: 'nearest' });
     $('#review-findings-expand').classList.toggle('hidden', groups.length < 2);
     $('#review-findings-expand').textContent = expandAll ? '모두 접기' : '모두 펼치기';
     $('#review-findings-expand').setAttribute('aria-expanded', String(expandAll));
@@ -332,8 +354,60 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       ? '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
       : remaining.length === 0
         ? '확인할 항목을 모두 정리했습니다. 담아 둔 교체가 있으면 저장하세요.'
-        : `자동 검수 권장 ${remaining.length}곳 · ${groups.length}페이지입니다. 페이지를 펼쳐 듣고 확인하세요.${repeatedTermNote(remaining)}`;
+        : `자동 검수 권장 ${remaining.length}곳 · ${groups.length}페이지입니다. Enter로 확인하면 다음 항목이 열리고 그 자리가 재생됩니다.${repeatedTermNote(remaining)}`;
+    renderConfirmAction(groups);
   }
+
+  // 영상 바로 아래, 눈이 이미 있는 자리에 세우는 확인 단추. 무엇을 확인하는
+  // 것인지 페이지 번호로 적어 둔다 — 목록을 내려다보지 않고 누르는 단추다.
+  function renderConfirmAction(groups = findingGroups(visibleFindings())) {
+    const button = $('#review-confirm');
+    const index = groups.findIndex(group => group.number === currentFindingPage);
+    const group = groups[index] || groups[0] || null;
+    button.disabled = !group || reviewBusy;
+    const label = document.createElement('span');
+    label.textContent = group ? `✓ ${group.number}페이지 확인` : '✓ 확인할 부분 없음';
+    const key = document.createElement('kbd');
+    key.textContent = 'Enter';
+    button.replaceChildren(...(group ? [label, key] : [label]));
+    button.setAttribute('aria-label', group
+      ? `${group.number}페이지 확인 완료로 표시하고 다음 항목으로`
+      : '확인할 부분 없음');
+    button.title = group
+      ? `${group.number}페이지를 확인 완료로 표시하고 다음 항목을 열어 재생합니다.`
+      : '자동 검수가 짚은 곳을 모두 정리했습니다.';
+  }
+
+  // 확인 한 번이 곧 다음 항목이다. 마지막 항목이면 옮겨 갈 곳이 없으므로
+  // 재생을 시작하지 않고 목록을 비운 채 둔다.
+  function confirmCurrentFindings() {
+    if (reviewBusy) return false;
+    const groups = findingGroups(visibleFindings());
+    if (!groups.length) return false;
+    const index = Math.max(0, groups.findIndex(group => group.number === currentFindingPage));
+    const next = groups[index + 1] || groups[index - 1] || null;
+    currentFindingPage = next ? next.number : null;
+    advanceSeek = Boolean(next);
+    clearFindings(groups[index].findings);
+    return true;
+  }
+
+  // 확인하지 않고 듣기만 하며 앞뒤 항목을 오가는 길. 판단이 서지 않은 항목을
+  // 건너뛰었다가 되돌아올 수 있어야 확인이 성급해지지 않는다.
+  function stepFinding(step) {
+    const groups = findingGroups(visibleFindings());
+    if (!groups.length || reviewBusy) return;
+    // 아직 아무것도 열지 않았다면 n은 첫 항목, p는 마지막 항목을 연다.
+    const index = groups.findIndex(group => group.number === currentFindingPage);
+    const from = index < 0 ? (step > 0 ? -1 : groups.length) : index;
+    const next = groups[Math.max(0, Math.min(groups.length - 1, from + step))];
+    if (!next || next.number === currentFindingPage) return;
+    currentFindingPage = next.number;
+    advanceSeek = true;
+    renderFindings();
+  }
+
+  $('#review-confirm').addEventListener('click', confirmCurrentFindings);
 
   $('#review-findings-expand').addEventListener('click', () => {
     expandAll = !expandAll;
@@ -432,6 +506,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     details.append(summary, body);
     details.addEventListener('toggle', () => {
       if (!details.open) return;
+      currentFindingPage = group.number;
       if (!expandAll) {
         for (const other of $$('#review-findings-list details')) {
           if (other !== details) other.open = false;
@@ -442,19 +517,22 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     row.append(details);
     // 모두 펼치기는 보기만 넓히는 일이다. 펼친 마지막 페이지가 고칠 자리를
     // 빼앗으면, 방금 고르던 페이지가 조용히 바뀐다.
-    if (open) openFinding(group.findings[0], page, at, { seek: false });
+    if (open) openFinding(group.findings[0], page, at, { seek: advanceSeek, play: advanceSeek });
     return row;
   }
 
   // 펼치는 것과 그 자리를 듣는 것은 한 동작이다. 펼쳐 놓고 다시 눌러야
   // 들린다면 목록은 그냥 목차일 뿐이다.
-  function openFinding(finding, page, at, { seek = true } = {}) {
+  function openFinding(finding, page, at, { seek = true, play = false } = {}) {
     selectReviewPage(page, voiceFindingReason(finding));
     showFindingDiff(finding);
+    currentFindingPage = Number(finding.slideNumber);
+    renderConfirmAction();
     if (!seek) return;
     // 항목의 구간은 청크 전체다. 그대로 옮기면 문단 첫머리에 떨어져 문제가 된
     // 낱말을 다시 찾아야 한다. 낱말 시각이 있으면 그 자리로 간다.
-    seekReview(at.startMs / 1000, at.endMs / 1000);
+    if (play) playReviewRange(at.startMs / 1000, at.endMs / 1000);
+    else seekReview(at.startMs / 1000, at.endMs / 1000);
     setReviewRegion(at.startMs / 1000, at.endMs / 1000);
     if (reviewMode !== 'regenerate') showReviewWave((at.startMs + at.endMs) / 2000, (at.endMs - at.startMs) / 1000 + 2);
   }
@@ -553,6 +631,10 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       setReviewVideo(video, target);
       $("[data-view='review']").click();
       if (finding) {
+        // 최근 결과에서 한 곳을 짚어 들어온 길이다. 그 항목을 목록에서도 열어
+        // 두어야 영상 아래 확인 단추가 같은 페이지를 가리킨다.
+        currentFindingPage = Number(finding.slideNumber);
+        renderFindings();
         selectReviewPage(video.pages?.find(p => p.number === Number(finding.slideNumber)), voiceFindingReason(finding));
         seekReview(Number(finding.startMs) / 1000, Number(finding.endMs) / 1000);
       }
@@ -628,6 +710,11 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     else if (event.key === '.') { event.preventDefault(); step(0.01); }
     else if (event.key === '[') { event.preventDefault(); movePage(-1); }
     else if (event.key === ']') { event.preventDefault(); movePage(1); }
+    // 확인은 이 화면에서 가장 많이 하는 일이다. 자판을 떠나지 않고 확인하고
+    // 다음 자리를 듣는다. n·p는 확인하지 않고 항목만 오간다.
+    else if (event.key === 'Enter') { event.preventDefault(); confirmCurrentFindings(); }
+    else if (event.key === 'n' || event.key === 'N') { event.preventDefault(); stepFinding(1); }
+    else if (event.key === 'p' || event.key === 'P') { event.preventDefault(); stepFinding(-1); }
   }
 
   document.addEventListener?.('keydown', reviewShortcut);
@@ -660,6 +747,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#region-audio-name').textContent = 'WAV·M4A·MP3 파일을 선택하세요.';
     pendingCandidateContext = null;
     autoOpened = false;
+    currentFindingPage = null; advanceSeek = false;
     setOverrideText('');
     $('#voice-script-override').open = false;
     $('#review-candidates-host').classList.add('hidden');
@@ -674,9 +762,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     for (const key of video.clearedFindings || []) clearedFindings.add(String(key));
     renderPageRail(video);
     $('#review-selection-title').textContent = '고칠 페이지를 고르세요';
-    $('#review-selection-reason').textContent = '확인할 부분에서 고르거나, 영상 아래 페이지 막대에서 누르세요.';
+    $('#review-selection-reason').textContent = '영상 아래 확인할 부분에서 고르거나, 오른쪽 페이지 이동에서 누르세요.';
     $('#review-player-status').textContent = video.pages?.length
-      ? '재생 중에도 페이지를 선택해 수정할 수 있습니다. 스페이스 재생·멈춤, ← → 5초, , . 0.01초, [ ] 페이지 이동.'
+      ? 'Enter 확인하고 다음 항목 듣기 · n p 확인 항목 이동 · 스페이스 재생·멈춤 · ← → 5초 · , . 0.01초 · [ ] 페이지 이동.'
       : '페이지 정보가 없어 재생성은 사용할 수 없습니다. 구간 무음 처리는 가능합니다.';
     // 한 곳만 남은 목록은 펼친 채로 그 페이지를 골라 둔다. 기본 문구를 세운
     // 뒤에 그려야 고른 페이지가 다시 '선택하세요'로 덮이지 않는다.
@@ -821,6 +909,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-result-play').textContent=reviewMode==='mute'?'무음 처리 후 듣기':'교체 후 앞뒤 듣기';
     $('#review-range-page').disabled=!mediaState.voiceVideo?.pages?.length||reviewBusy;
     $('#review-original').disabled = !reviewSelection || reviewBusy;
+    renderConfirmAction();
     $('#start-review-label').textContent = reviewMode === 'mute' ? '선택 구간을 무음 처리한 새 버전 저장'
       : reviewMode === 'replace' ? '선택 구간의 음성을 교체한 새 버전 저장'
         : readOverrideText() ? '입력한 말로 후보 만들기' : '새 목소리 후보 만들기';
@@ -1015,5 +1104,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     visibleFindings,
     clearFinding,
     restoreClearedFindings,
+    confirmCurrentFindings,
+    stepFinding,
+    get currentFindingPage() { return currentFindingPage; },
   };
 }

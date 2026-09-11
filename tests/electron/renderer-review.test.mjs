@@ -37,7 +37,7 @@ function fixture() {
     ...review, selection:()=>review.reviewSelection, context:()=>review.pendingCandidateContext,
     queue:review.queueSelectedCandidate, save:review.savePendingFixes, pending:()=>review.pendingFixes,
     visible:review.visibleFindings, clear:review.clearFinding, restore:review.restoreClearedFindings,
-    cleared:()=>review.clearedFindings,
+    cleared:()=>review.clearedFindings, findingPage:()=>review.currentFindingPage,
   };
   const page1={number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'};
   const page2={number:2,slideId:'b',startMs:33750,endMs:50000,text:'다음 페이지'};
@@ -48,6 +48,66 @@ function fixture() {
   context.testReview.setReviewVideo({token:'original',name:'original.mp4',videoUrl:'file:///original.mp4',pages:[page1,page2],voiceFindings:findings,reviewTarget:{root:'render',name:'original'}});
   return {context,$,modes,calls,saved,page1,page2,findings};
 }
+
+// 다듬기에서 가장 많이 누르는 것은 확인이다. 예전에는 확인 → 목록에서 다음 줄
+// 찾기 → 펼치기 → 듣기가 네 걸음이었다. 확인 한 번으로 다음 자리가 재생되면
+// 남는 것은 듣고 다시 Enter를 누르는 일뿐이다.
+test('확인 한 번으로 다음 확인 항목이 열리고 그 자리가 재생된다', async () => {
+  const { context, $, saved } = fixture();
+  const review = context.testReview;
+  const player = $('#review-player');
+  assert.equal(review.visible().length, 2);
+
+  // 아무것도 고르지 않은 채 확인하면 첫 항목부터 정리한다.
+  assert.equal(review.confirmCurrentFindings(), true);
+  assert.equal(review.visible().length, 1);
+  assert.equal(review.findingPage(), 2, '다음 항목이 스스로 열린다');
+  assert.equal(player.currentTime, 33.75, '열린 항목의 자리로 옮긴다');
+  assert.equal(player.paused, false, '옮긴 자리를 바로 들려준다');
+  assert.equal($('#review-confirm').disabled, false);
+  assert.match($('#review-confirm').children[0].textContent, /2페이지 확인/);
+
+  // 마지막 항목이면 옮겨 갈 곳이 없다. 재생을 새로 시작하지 않는다.
+  player.paused = true;
+  assert.equal(review.confirmCurrentFindings(), true);
+  assert.equal(review.visible().length, 0);
+  assert.equal(review.findingPage(), null);
+  assert.equal(player.paused, true);
+  assert.equal($('#review-confirm').disabled, true);
+  assert.equal(review.confirmCurrentFindings(), false, '비운 목록에서는 아무 일도 하지 않는다');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(saved.at(-1).keys, ['1:1300', '2:33750']);
+});
+
+test('Enter는 확인, n·p는 확인하지 않고 항목만 오간다', () => {
+  const { context, $ } = fixture();
+  const review = context.testReview;
+  const key = name => review.reviewShortcut({ key: name, target: { tagName: 'BODY' }, preventDefault() {} });
+
+  key('n');
+  assert.equal(review.findingPage(), 1, 'n은 첫 항목부터 연다');
+  key('n');
+  assert.equal(review.findingPage(), 2);
+  key('p');
+  assert.equal(review.findingPage(), 1);
+  assert.equal(review.visible().length, 2, '오가는 동안에는 아무것도 확인되지 않는다');
+
+  key('Enter');
+  assert.equal(review.visible().length, 1);
+  assert.equal(review.findingPage(), 2);
+  assert.equal($('#review-player').currentTime, 33.75);
+});
+
+// 글자를 치는 중에는 자판이 그쪽 것이다. 읽을 말을 적다가 Enter를 누르면
+// 확인이 되어 버리면, 되돌리기를 찾아 헤매게 된다.
+test('입력 중에는 Enter가 확인으로 새지 않는다', () => {
+  const { context } = fixture();
+  const review = context.testReview;
+  for (const tagName of ['INPUT', 'TEXTAREA', 'BUTTON', 'SUMMARY']) {
+    review.reviewShortcut({ key: 'Enter', target: { tagName }, preventDefault() {} });
+  }
+  assert.equal(review.visible().length, 2);
+});
 
 test('자동 권장이 없어도 재생 위치의 페이지를 직접 선택한다', () => {
   const {context,$}=fixture();

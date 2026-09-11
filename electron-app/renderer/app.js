@@ -391,10 +391,34 @@ function formatDate(value) {
   return new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
-// 사이드바 접기. 폭은 CSS 토큰 하나로 정해지므로 클래스만 토글하면 된다.
-// 선택은 이 기기에만 남기면 되는 취향이라 localStorage에 둔다. 사생활 보호
-// 창이나 저장이 막힌 환경에서는 접근 자체가 던지므로 감싸 둔다.
+// 사이드바 접기와 너비. 폭은 CSS 토큰 하나로 정해지므로 접기는 클래스만
+// 토글하면 되고, 너비는 그 토큰을 바꿔 준다. 접힘 폭은 body의 규칙이 이기므로
+// 루트에 적어 둔 너비와 부딪히지 않는다. 선택은 이 기기에만 남기면 되는
+// 취향이라 localStorage에 둔다. 사생활 보호 창이나 저장이 막힌 환경에서는
+// 접근 자체가 던지므로 감싸 둔다.
 const SIDEBAR_KEY = 'voiceStudio.sidebarCollapsed';
+const SIDEBAR_WIDTH_KEY = 'voiceStudio.sidebarWidth';
+const SIDEBAR_WIDTH = { default: 226, min: 180, max: 420 };
+// 최소보다도 좁게 끌었다는 것은 줄이겠다는 뜻이 아니라 치우겠다는 뜻이다.
+const SIDEBAR_COLLAPSE_AT = 148;
+// 본문이 살아 있어야 폭을 넓힌 보람이 있다. 창이 좁으면 최대값도 함께 줄인다.
+const SIDEBAR_CONTENT_FLOOR = 560;
+
+let sidebarWidth = SIDEBAR_WIDTH.default;
+
+function sidebarMaxWidth() {
+  const viewport = Number(window.innerWidth) || 1440;
+  return Math.max(SIDEBAR_WIDTH.min, Math.min(SIDEBAR_WIDTH.max, viewport - SIDEBAR_CONTENT_FLOOR));
+}
+
+function applySidebarWidth(width) {
+  const wanted = Number(width) || SIDEBAR_WIDTH.default;
+  sidebarWidth = Math.round(Math.min(sidebarMaxWidth(), Math.max(SIDEBAR_WIDTH.min, wanted)));
+  document.documentElement.style.setProperty('--sidebar-w', `${sidebarWidth}px`);
+  const resizer = $('#sidebar-resizer');
+  resizer.setAttribute('aria-valuenow', String(sidebarWidth));
+  resizer.setAttribute('aria-valuemax', String(sidebarMaxWidth()));
+}
 
 function applySidebarCollapsed(collapsed, { animate = false } = {}) {
   // 첫 그림은 미끄러지지 않는다. 창을 여는 순간 사이드바가 제 자리를 찾아
@@ -408,14 +432,83 @@ function applySidebarCollapsed(collapsed, { animate = false } = {}) {
   toggle.dataset.tooltip = label;
 }
 
+function rememberSidebar() {
+  try {
+    localStorage.setItem(SIDEBAR_KEY, document.body.classList.contains('sidebar-collapsed') ? '1' : '0');
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+  } catch {}
+}
+
 $('#sidebar-toggle').addEventListener('click', () => {
-  const collapsed = !document.body.classList.contains('sidebar-collapsed');
-  applySidebarCollapsed(collapsed, { animate: true });
-  try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch {}
+  applySidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'), { animate: true });
+  rememberSidebar();
 });
 
-try { applySidebarCollapsed(localStorage.getItem(SIDEBAR_KEY) === '1'); }
-catch { applySidebarCollapsed(false); }
+// 경계선 끌기. 손을 놓을 때까지 포인터를 붙잡아 두어야 커서가 손잡이를
+// 앞질러도 끊기지 않는다.
+const sidebarResizer = $('#sidebar-resizer');
+let sidebarPointer = null;
+
+sidebarResizer.addEventListener('pointerdown', event => {
+  if (event.button) return;
+  event.preventDefault();
+  sidebarPointer = event.pointerId;
+  sidebarResizer.setPointerCapture?.(event.pointerId);
+  document.body.classList.add('sidebar-sizing');
+});
+
+sidebarResizer.addEventListener('pointermove', event => {
+  if (sidebarPointer !== event.pointerId) return;
+  const collapsed = event.clientX < SIDEBAR_COLLAPSE_AT;
+  applySidebarCollapsed(collapsed);
+  if (!collapsed) applySidebarWidth(event.clientX);
+});
+
+function endSidebarSizing(event) {
+  if (sidebarPointer !== event.pointerId) return;
+  sidebarPointer = null;
+  sidebarResizer.releasePointerCapture?.(event.pointerId);
+  document.body.classList.remove('sidebar-sizing');
+  rememberSidebar();
+}
+
+sidebarResizer.addEventListener('pointerup', endSidebarSizing);
+sidebarResizer.addEventListener('pointercancel', endSidebarSizing);
+
+// 끌어 맞춘 폭이 마음에 들지 않을 때 되돌릴 자리가 없으면 다시 눈대중으로
+// 맞춰야 한다. 두 번 누르면 처음 폭이다.
+sidebarResizer.addEventListener('dblclick', () => {
+  applySidebarCollapsed(false, { animate: true });
+  applySidebarWidth(SIDEBAR_WIDTH.default);
+  rememberSidebar();
+});
+
+// 마우스로만 잡히는 손잡이는 자판을 쓰는 사람에게는 없는 것과 같다.
+sidebarResizer.addEventListener('keydown', event => {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  const step = (event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 32 : 8);
+  if (document.body.classList.contains('sidebar-collapsed')) {
+    if (step < 0) return;
+    applySidebarCollapsed(false, { animate: true });
+  } else if (step < 0 && sidebarWidth <= SIDEBAR_WIDTH.min) {
+    applySidebarCollapsed(true, { animate: true });
+  } else {
+    applySidebarWidth(sidebarWidth + step);
+  }
+  rememberSidebar();
+});
+
+// 창을 줄이면 넓혀 둔 사이드바가 본문을 먹는다. 최대값이 줄어든 만큼 함께 준다.
+window.addEventListener?.('resize', () => applySidebarWidth(sidebarWidth));
+
+try {
+  applySidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  applySidebarCollapsed(localStorage.getItem(SIDEBAR_KEY) === '1');
+} catch {
+  applySidebarWidth(SIDEBAR_WIDTH.default);
+  applySidebarCollapsed(false);
+}
 
 // 앱이 꺼져도 두 시간을 잃지 않는다는 약속은, 켰을 때 이어할 것이 있다고
 // 먼저 말해 주어야 지켜진다.

@@ -598,12 +598,13 @@ button:disabled { cursor: not-allowed; }
 .review-head-meta { display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap; }
 .review-head-meta > span { color: var(--text-3); font-size: var(--fs-xs); }
 
-/* 남는 폭은 전부 영상으로 보낸다. 확인 목록은 읽을 만큼만 있으면 되고,
-   더 넓어져 봐야 한 줄에 담기는 글자만 늘 뿐이다. */
-.review-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: var(--s5); align-items: start; }
+/* 듣는 자리와 확인하는 자리는 한 기둥에 있다. 영상 → 확인할 부분 → 근거가
+   위에서 아래로 이어지고, 고치는 폼과 페이지 이동만 옆으로 뺀다. 가장 잦은
+   한 걸음이 화면을 가로지르지 않는 것이 이 배치의 전부다. */
+.review-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: var(--s5); align-items: start; }
 /* 붙박이 저장 막대가 마지막 줄을 덮지 않도록 그만큼 자리를 비워 둔다. */
 #view-review:has(#polish-pending:not(.hidden)) .review-layout { padding-bottom: 108px; }
-.review-stage { padding: var(--s4); position: sticky; top: var(--s5); min-width: 0; }
+.review-stage { padding: var(--s4); min-width: 0; }
 #review-player { display: block; width: 100%; aspect-ratio: 16 / 9; background: var(--nav); border-radius: var(--r-md); }
 
 /* 옮기고·고르는 손잡이는 한 줄이면 된다. 두 줄로 나뉘어 있으면 0.01초를
@@ -618,6 +619,22 @@ button:disabled { cursor: not-allowed; }
 }
 .transport-speed { display: flex; align-items: center; gap: var(--s2); color: var(--text-3); font-size: var(--fs-xs); }
 .transport-speed select { width: auto; height: var(--h-sm); padding: 0 var(--s2); font-size: var(--fs-sm); }
+
+/* 듣고 나서 누르는 단추는 들은 자리에 있어야 한다. 이 화면에서 가장 잦은 한
+   걸음이므로 영상 바로 아래 줄에서 제 크기로 선다. 자판에도 같은 길이 있다는
+   사실을 단추 위에 적어 둔다 — 알면 다시는 마우스로 누르지 않는다. */
+.transport-confirm {
+  display: inline-flex; align-items: center; gap: var(--s2);
+  height: var(--h-md); padding: 0 var(--s4); border: 0; border-radius: var(--r-md);
+  background: var(--lime); color: var(--ink); cursor: pointer;
+  font-size: var(--fs-sm); font-weight: var(--fw-semi); white-space: nowrap;
+}
+.transport-confirm:hover:not(:disabled) { background: var(--lime-hi); }
+.transport-confirm:disabled { background: var(--float); color: var(--text-4); cursor: default; }
+.transport-confirm kbd {
+  padding: 1px var(--s2); border-radius: var(--r-sm);
+  background: rgba(0, 0, 0, .2); font: var(--fs-micro) var(--mono);
+}
 
 /* 페이지 막대 — 한 칸이 한 페이지
    ----------------------------------------------------------------------------
@@ -649,18 +666,24 @@ button:disabled { cursor: not-allowed; }
 }
 .page-rail-jump button { min-width: 34px; }
 .page-rail-legend { margin-left: auto; color: var(--text-4); }
+.page-rail-card .page-rail { padding: 0; border-top: 0; }
+.page-rail-card .review-pages.dense { flex-wrap: wrap; overflow-x: visible; gap: 3px; }
+.page-rail-card .review-pages.dense button { flex: 0 0 11px; height: 18px; }
 
 .review-transcript { border-top: 1px solid var(--line); padding-top: var(--s3); }
 .review-transcript h3 { font-size: var(--fs-sm); color: var(--text-2); margin: 0 0 var(--s2); font-weight: var(--fw-semi); }
 .review-transcript p { font-size: var(--fs-md); line-height: 1.9; max-height: 180px; overflow: auto; margin: 0; }
 
-.review-sidebar { display: grid; gap: var(--s4); }
+.review-sidebar { display: grid; gap: var(--s4); position: sticky; top: var(--s5); }
 .review-sidebar .card { padding: var(--s5); }
 .review-sidebar h2 { font-size: var(--fs-lg); margin: 0 0 var(--s3); font-weight: var(--fw-semi); }
 .review-sidebar p, #review-player-status { color: var(--text-3); font-size: var(--fs-sm); line-height: var(--lh-body); }
-/* 항목이 문장까지 안고 있어 한 줄이 높다. 두세 개는 스크롤 없이 보이게 둔다. */
-/* 접힌 줄은 낮다. 펼친 한 페이지와 나머지 목록이 함께 보이도록 둔다. */
-#review-findings-list { padding: 0; margin: 0; list-style: none; max-height: 62vh; overflow: auto; display: grid; gap: var(--s2); }
+/* 영상 바로 아래 구역이다. 목록만 제 몫을 스크롤하고 영상은 자리를 지킨다.
+   접힌 줄은 낮으므로 40vh면 펼친 한 페이지와 나머지 몇 줄이 함께 보인다. */
+.review-findings { margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
+.review-findings h2 { font-size: var(--fs-md); margin: 0; font-weight: var(--fw-semi); }
+#review-findings-note { margin: 0 0 var(--s3); color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-body); }
+#review-findings-list { padding: 0; margin: 0; list-style: none; max-height: 40vh; overflow: auto; display: grid; gap: var(--s2); }
 #review-finding-count { color: var(--lime); }
 #review-form .segmented { margin: var(--s4) 0; }
 #review-mode-tabs { display: flex; flex-wrap: wrap; gap: var(--s0); }
@@ -1014,7 +1037,7 @@ button:disabled { cursor: not-allowed; }
 }
 :is(.nav-item, .segmented button, .result-filters button, .icon-button, .primary-small,
     .secondary-small, .primary-button, .path-field button, .candidate-card, .review-pages button,
-    .page-stepper, .item-actions button, input, select, textarea) {
+    .page-stepper, .item-actions button, .transport-confirm, input, select, textarea) {
   transition: background-color var(--motion-fast), border-color var(--motion-fast),
               color var(--motion-fast), box-shadow var(--motion-fast);
 }
@@ -1063,8 +1086,8 @@ button:disabled { cursor: not-allowed; }
    ========================================================================== */
 @media (max-width: 1150px) {
   .review-layout { grid-template-columns: 1fr; }
-  .review-stage { position: static; }
-  .review-sidebar { grid-template-columns: 1fr 1fr; }
+  .review-sidebar { position: static; grid-template-columns: 1fr 1fr; }
+  #review-findings-list { max-height: 34vh; }
 }
 
 @media (max-width: 1080px) {
@@ -1188,6 +1211,34 @@ button:disabled { cursor: not-allowed; }
 .sidebar-collapsed .local-card { grid-template-columns: 1fr; justify-items: center; padding: var(--s2); }
 .sidebar-collapsed .local-card-copy, .sidebar-collapsed .local-runtime { display: none; }
 
+/* ----------------------------------------------------------------------------
+   너비 끌어 정하기
+   접기는 두 폭 사이를 오갈 뿐이다. 어느 폭이 맞는지는 창 크기와 편 제목 길이에
+   따라 달라지므로 경계선을 직접 잡게 둔다. 손잡이는 경계선 위에 얇게 걸쳐
+   본문을 침범하지 않고, 잡았을 때만 선으로 드러난다. 창을 끄는 위쪽 38px은
+   비켜 둔다 — 그 자리는 창 이동이 먼저다. */
+.sidebar-resizer {
+  position: fixed; top: 38px; bottom: 0; left: var(--sidebar-w); z-index: 6;
+  width: 9px; margin-left: -5px; padding: 0; border: 0;
+  background: transparent; cursor: col-resize; touch-action: none;
+}
+.sidebar-resizer::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px;
+  background: transparent; transition: background var(--motion-fast);
+}
+.sidebar-resizer:hover::before,
+.sidebar-resizer:focus-visible::before,
+.sidebar-sizing .sidebar-resizer::before { background: var(--lime); }
+.sidebar-resizer:focus-visible { outline: none; }
+.sidebar-motion .sidebar-resizer { transition: left var(--motion-normal) var(--motion-ease); }
+
+/* 끄는 동안 미끄러지는 애니메이션은 손을 따라오지 못하고 한 박자 늦게 온다.
+   잡고 있는 동안에는 전부 끄고, 지나는 글자가 잡히지 않게 선택도 막는다. */
+.sidebar-sizing { cursor: col-resize; user-select: none; }
+.sidebar-sizing .sidebar,
+.sidebar-sizing .shell,
+.sidebar-sizing .sidebar-resizer { transition: none; }
+
 /* ============================================================================
    확인 항목 하나씩 지우기
    ----------------------------------------------------------------------------
@@ -1286,9 +1337,9 @@ button:disabled { cursor: not-allowed; }
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-xs);
 }
-.finding-done:hover { color: var(--lime); border-color: var(--lime-edge); }
-.finding-regenerate { border-color: var(--lime-edge); color: var(--lime); }
-.finding-regenerate:hover:not(:disabled) { background: var(--lime-soft); }
+.finding-done { border-color: var(--lime-edge); background: var(--lime-soft); color: var(--lime); }
+.finding-done:hover { background: var(--lime); border-color: var(--lime); color: var(--ink); }
+.finding-regenerate:hover:not(:disabled) { color: var(--text); border-color: var(--line-2); }
 .finding-rewrite:hover:not(:disabled) { color: var(--text); border-color: var(--line-2); }
 .finding-regenerate:disabled, .finding-rewrite:disabled {
   opacity: .4; cursor: default; border-color: var(--line); color: var(--text-4);

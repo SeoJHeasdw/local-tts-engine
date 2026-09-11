@@ -38,6 +38,7 @@
           <span class="local-runtime" id="runtime-status"><i class="status-dot" id="runtime-dot"></i><span class="sr-only" id="runtime-label">환경 확인 중</span></span>
         </button>
       </aside>
+      <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="사이드바 너비 조절" aria-valuemin="180" aria-valuemax="420" aria-valuenow="226" title="끌어서 너비 조절 · 두 번 눌러 기본 너비"></div>
 
       <main>
         <section class="page-view" id="view-new">
@@ -257,7 +258,7 @@
                 </div>
                 <strong id="review-current-page">페이지 확인 전</strong>
                 <label class="transport-speed">속도 <select id="review-speed" aria-label="검수 재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="0.75">0.75배</option><option value="1" selected>1배</option><option value="1.25">1.25배</option><option value="1.5">1.5배</option><option value="1.75">1.75배</option><option value="2">2배</option><option value="3">3배</option></select></label>
-                <button type="button" class="secondary-small" id="review-select-page" disabled>이 페이지 고르기</button>
+                <button type="button" class="secondary-small" id="review-select-page" disabled>이 페이지 고르기</button><button type="button" class="transport-confirm" id="review-confirm" disabled>✓ 확인<kbd>Enter</kbd></button>
               </div>
               <section id="review-region-wave" class="region-wave hidden" aria-label="음성 구간 선택">
                 <div class="wave-tools"><span id="review-wave-window"></span><button type="button" id="review-wave-in">확대</button><button type="button" id="review-wave-out">축소</button><button type="button" id="review-wave-selection">선택 구간 맞춤</button><button type="button" id="review-wave-current">재생 위치로</button></div>
@@ -268,16 +269,10 @@
                 </div>
                 <p id="review-wave-note">파형의 시작·끝 손잡이를 끌거나 시간을 입력하세요.</p>
               </section>
-              <div class="page-rail" aria-label="영상 페이지 탐색">
-                <div id="review-pages" class="review-pages"></div>
-                <div class="page-rail-jump">
-                  <button type="button" class="secondary-small" id="review-page-prev" aria-label="앞 페이지로">◀</button>
-                  <label>페이지 <input id="review-page-jump" type="number" min="1" inputmode="numeric" aria-label="이동할 페이지 번호"></label>
-                  <span id="review-page-total"></span>
-                  <button type="button" class="secondary-small" id="review-page-next" aria-label="다음 페이지로">▶</button>
-                  <span class="page-rail-legend" id="page-rail-legend"></span>
-                </div>
-              </div>
+              <section class="review-findings" id="review-findings">
+                <div class="findings-head"><h2>확인할 부분 <span id="review-finding-count">0</span></h2><button type="button" class="secondary-small" id="review-findings-expand" aria-expanded="false">모두 펼치기</button></div>
+                <p id="review-findings-note">자동 검수 결과는 참고용입니다. 아래 목록에 없어도 직접 수정할 수 있습니다.</p><ul id="review-findings-list"></ul>
+              </section>
               <section class="polish-diff hidden" id="polish-diff" aria-label="원문과 받아쓰기 대조">
                 <div class="diff-row"><span>대본 원문</span><p id="polish-expected"></p></div>
                 <div class="diff-row"><span>받아쓰기</span><p id="polish-recognized"></p></div>
@@ -324,9 +319,18 @@
                 <button class="primary-button full" id="start-review-button" type="submit" disabled><span id="start-review-label">새 목소리 후보 만들기</span><span>→</span></button>
                 <p class="review-save-note">후보를 듣고 선택한 뒤 새 버전으로 저장합니다. 원본은 보관됩니다.</p>
               </form>
-              <section class="card review-findings" id="review-findings">
-                <div class="findings-head"><h2>확인할 부분 <span id="review-finding-count">0</span></h2><button type="button" class="secondary-small" id="review-findings-expand" aria-expanded="false">모두 펼치기</button></div>
-                <p id="review-findings-note">자동 검수 결과는 참고용입니다. 아래 목록에 없어도 직접 수정할 수 있습니다.</p><ul id="review-findings-list"></ul>
+              <section class="card page-rail-card">
+                <h2>페이지 이동</h2>
+                <div class="page-rail" aria-label="영상 페이지 탐색">
+                  <div id="review-pages" class="review-pages"></div>
+                  <div class="page-rail-jump">
+                    <button type="button" class="secondary-small" id="review-page-prev" aria-label="앞 페이지로">◀</button>
+                    <label>페이지 <input id="review-page-jump" type="number" min="1" inputmode="numeric" aria-label="이동할 페이지 번호"></label>
+                    <span id="review-page-total"></span>
+                    <button type="button" class="secondary-small" id="review-page-next" aria-label="다음 페이지로">▶</button>
+                    <span class="page-rail-legend" id="page-rail-legend"></span>
+                  </div>
+                </div>
               </section>
             </aside>
           </div>
