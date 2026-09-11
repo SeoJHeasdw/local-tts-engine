@@ -4,7 +4,8 @@ import { createReviewController } from "./controllers/review.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
-import { buildChapterRanges, chapterEtaLabel, createViewHistory, completionFindings, completionSummary, etaLabel, summarizePageRange, summarizeVoiceFindings, unitLabel, voiceFindingReason } from "./view-utils.mjs";
+import { buildChapterRanges, createViewHistory, completionFindings, completionSummary, etaLabel, summarizePageRange, summarizeVoiceFindings, unitLabel, voiceFindingReason } from "./view-utils.mjs";
+import { createJobPace } from "./job-pace.mjs";
 
 const api = window.ttsStudio;
 const $ = (selector) => document.querySelector(selector);
@@ -835,36 +836,35 @@ function renderJobEvent(event) {
     updateStages("starting");
   } else if (event.type === "plan") {
     if (creationState !== "running") return;
-    jobPlan = { units: event.units || [], completedPages: 0, completedMs: 0, unitStartedAt: null };
+    pace.plan(event.units || []);
     renderJobPace();
   } else if (event.type === "unit") {
     if (creationState !== "running") return;
-    advanceChapterPlan(event.index);
-    jobUnit = { index: event.index, total: event.total };
-    // 편이 바뀌면 속도 관측을 다시 시작한다. 레슨마다 길이가 달라 앞 편의
-    // 속도로 다음 편을 재면 남은 시간이 크게 어긋난다.
-    jobPace = null;
+    // 편이 바뀌면 앞 편의 실제 소요가 속도가 되고, 이 편의 관측은 처음부터
+    // 다시 잰다. 레슨마다 분량이 달라 앞 편의 속도를 그대로 물려줄 수 없다.
+    pace.startUnit({ index: event.index, total: event.total });
+    renderJobPace();
+  } else if (event.type === "unit-duration") {
+    if (creationState !== "running") return;
+    pace.unitDuration(event.durationMs);
     renderJobPace();
   } else if (event.type === "voice-progress") {
     if (creationState !== "running") return;
-    if (!jobPace || jobPace.total !== event.total) {
-      jobPace = { baseline: event.done, total: event.total, startedAt: Date.now(), done: event.done };
-    } else {
-      jobPace.done = event.done;
-    }
+    pace.voiceProgress(event);
+    renderJobPace();
+  } else if (event.type === "slept") {
+    pace.slept(event.ms);
     renderJobPace();
   } else if (event.type === "unit-failed") {
     if (creationState !== "running") return;
-    jobPace = null;
-    if (jobUnit) jobUnit.failed = true;
-    if (jobPlan) jobPlan.unitStartedAt = null;
+    pace.unitFailed();
     $("#job-failure-note").textContent = `${event.failedCount}개 레슨 실패 · 나머지 레슨 제작을 계속합니다`;
     $("#job-failure-note").classList.remove("hidden");
     $("#current-stage").textContent = `${event.title} 제작 실패 · 다음 레슨 준비 중`;
     renderJobPace();
   } else if (event.type === "stage") {
     if (creationState !== "running") return;
-    if (event.state === "running" && event.stage !== "voice") jobPace = null;
+    pace.stage(event.stage, event.state);
     updateStages(event.stage, event.state === "done" && event.stage === "verify");
     renderJobPace();
   } else if (event.type === "log") {
@@ -875,20 +875,15 @@ function renderJobEvent(event) {
     setJobState(pending ? "일시정지 대기" : "일시정지", pending ? "running" : "paused");
     $("#pause-button").textContent = pending ? "정지 예약 취소" : "이어하기";
     $("#current-stage").textContent = pending ? "이번 편을 마치고 멈춥니다" : "일시정지됨";
-    // 멈춰 있는 동안은 시간을 세지 않는다. 그러지 않으면 남은 시간이 멈춘
-    // 만큼 부풀어 다시 켰을 때 엉뚱한 값을 말한다.
-    if (!pending && !jobPausedAt) jobPausedAt = Date.now();
+    // 촬영 중의 정지 예약은 아직 멈춘 것이 아니다. 실제로 멈춘 때에만 시계를
+    // 세운다.
+    if (!pending) pace.pause();
     renderJobPace();
   } else if (event.type === "resumed") {
     if (creationState !== "running") return;
     setJobState("실행 중", "running");
     $("#pause-button").textContent = "일시정지";
-    if (jobPausedAt) {
-      const away = Date.now() - jobPausedAt;
-      if (jobPace) jobPace.startedAt += away;
-      if (jobPlan?.unitStartedAt) jobPlan.unitStartedAt += away;
-      jobPausedAt = null;
-    }
+    pace.resume();
     renderJobPace();
   } else if (event.type === "cancelling") {
     creationState = "cancelling";
@@ -939,18 +934,11 @@ function renderJobEvent(event) {
   }
 }
 
-// 제작은 길다. 무엇을 하는 중인지만 알려주고 언제 끝나는지는 말해 주지 않으면
-// 자리를 뜰 수도, 기다릴 수도 없다.
-//
 // 시계가 둘 필요한 경우는 하나뿐이다. 레슨 하나, 페이지 직접 선택, 챕터를 한
 // 영상으로 만들기는 모두 한 편짜리라 '이 작업이 언제 끝나는지'가 곧 전부다.
 // 챕터를 레슨 단위로 나눌 때만 '이 편'과 '전체'가 서로 다른 답이 되고, 그때만
-// main 이 plan 을 보낸다.
-let jobPace = null;
-let jobUnit = null;
-let jobPlan = null;
-let jobPausedAt = null;
-let jobHasTotal = false;
+// main 이 plan 을 보낸다. 남은 시간 계산 자체는 job-pace 가 맡는다.
+const pace = createJobPace();
 
 // 목소리 후보도 하나에 수십 초씩 걸린다. 몇 개 남았는지만 알려주는 것과
 // 얼마나 더 기다려야 하는지 알려주는 것은 다르다.
@@ -974,24 +962,12 @@ function resetBatchProgress() {
 }
 
 function renderJobPace() {
-  const unit = jobUnit ? unitLabel(jobUnit) : "";
+  const unit = pace.currentUnit ? unitLabel(pace.currentUnit) : "";
   $("#job-unit").textContent = unit;
   $("#job-unit").classList.toggle("hidden", !unit);
-  const running = creationState === "running";
-  const split = jobHasTotal || Boolean(jobPlan) || Number(jobUnit?.total) > 1;
-  const label = running && jobPace
-    ? etaLabel({
-        done: jobPace.done,
-        total: jobPace.total,
-        elapsedMs: Date.now() - jobPace.startedAt,
-        baseline: jobPace.baseline,
-        scope: split ? "unit" : "job",
-      })
-    : "";
-  const whole = running && jobPlan ? chapterProgressLabel() : "";
-  const paused = Boolean(jobPausedAt);
-  renderEta($("#job-eta"), !running ? "" : paused ? "일시정지" : label || `${split ? "이 편 " : ""}남은 시간 계산 중`, running && !paused && !label);
-  renderEta($("#job-total-eta"), !running || !split ? "" : paused ? "전체 일시정지" : whole || "전체 남은 시간 계산 중", running && split && !paused && !whole);
+  const clocks = pace.labels({ running: creationState === "running" });
+  renderEta($("#job-eta"), clocks.unit, clocks.unitBusy);
+  renderEta($("#job-total-eta"), clocks.total, clocks.totalBusy);
 }
 
 function renderEta(element, label, calculating) {
@@ -1001,37 +977,8 @@ function renderEta(element, label, calculating) {
   element.setAttribute("aria-busy", String(calculating));
 }
 
-function chapterProgressLabel() {
-  const units = jobPlan.units || [];
-  const index = Math.max(1, Number(jobUnit?.index || 1));
-  const current = units[index - 1];
-  if (!current) return "";
-  return chapterEtaLabel({
-    completedPages: jobPlan.completedPages,
-    completedMs: jobPlan.completedMs,
-    currentPages: jobUnit?.failed ? 0 : current.pages,
-    currentElapsedMs: jobPlan.unitStartedAt ? Date.now() - jobPlan.unitStartedAt : 0,
-    pendingPages: units.slice(index).filter(unit => !unit.completed).reduce((total, unit) => total + Number(unit.pages || 0), 0),
-  });
-}
-
-// 편이 끝날 때마다 그 편의 실제 소요와 분량을 더해 속도를 갱신한다.
-function advanceChapterPlan(index) {
-  if (!jobPlan) return;
-  const previous = (jobPlan.units || [])[Number(jobUnit?.index) - 1];
-  if (previous && jobPlan.unitStartedAt) {
-    jobPlan.completedMs += Date.now() - jobPlan.unitStartedAt;
-    jobPlan.completedPages += Number(previous.pages || 0);
-  }
-  jobPlan.unitStartedAt = Date.now();
-}
-
 function resetJobPace(options = {}) {
-  jobPace = null;
-  jobUnit = null;
-  jobPlan = null;
-  jobPausedAt = null;
-  jobHasTotal = options.mode === "chapter" && options.chapterMode === "lesson";
+  pace.start(options);
   $("#job-failure-note").textContent = "";
   $("#job-failure-note").classList.add("hidden");
   $("#pause-button").textContent = "일시정지";
@@ -1040,7 +987,7 @@ function resetJobPace(options = {}) {
 
 // 실행 중에만 추정값을 갱신한다. 실패·중지 후 옛 남은 시간을 되살리지 않는다.
 if (typeof setInterval === "function") {
-  setInterval(() => { if (creationState === "running" && !jobPausedAt) renderJobPace(); }, 5_000);
+  setInterval(() => { if (creationState === "running") renderJobPace(); }, 5_000);
 }
 
 async function initialize() {

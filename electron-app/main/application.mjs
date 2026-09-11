@@ -16,7 +16,7 @@ import { resolveRuntimeTools } from "./runtime-config.mjs";
 import { resumeJobProcesses, stopJobProcesses } from "./job-process.mjs";
 
 // Electron objects enter here; services can also run in Node-based integration tests.
-export function createStudio({ app, BrowserWindow, ipcMain, dialog, shell }) {
+export function createStudio({ app, BrowserWindow, ipcMain, dialog, shell, powerMonitor = null }) {
   const state = { activeJob: null, mainWindow: null, catalogCache: null, catalogCacheRoot: null, runtimeTools: {} };
   const { readAppSettings, saveAppSettings, applyVoiceSettings } = createSettingsService({
     state,
@@ -74,9 +74,24 @@ export function createStudio({ app, BrowserWindow, ipcMain, dialog, shell }) {
     BrowserWindow, app, state,
   });
 
+  // 맥이 잠든 동안에는 제작도 함께 멈춰 있다. 그 시간을 경과로 세면 남은 시간이
+  // 자고 일어난 만큼 부풀고, 그 속도로 남은 편들의 몫까지 함께 늘어난다.
+  // 화면 보호기·화면 꺼짐은 제작을 멈추지 않으므로 여기서 다루지 않는다.
+  function watchSystemSleep() {
+    if (!powerMonitor?.on) return;
+    let sleptAt = null;
+    powerMonitor.on("suspend", () => { sleptAt = Date.now(); });
+    powerMonitor.on("resume", () => {
+      const away = sleptAt ? Date.now() - sleptAt : 0;
+      sleptAt = null;
+      if (away > 1000 && state.activeJob?.state === "running") emit({ type: "slept", ms: away });
+    });
+  }
+
   async function start() {
     state.runtimeTools = await resolveRuntimeTools(ROOT);
     registerIpc();
+    watchSystemSleep();
     createWindow();
   }
 

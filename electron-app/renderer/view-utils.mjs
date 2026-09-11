@@ -186,26 +186,6 @@ export function unitLabel({ index, total } = {}) {
   return `레슨 ${Number(index)}/${Number(total)}`;
 }
 
-// 챕터를 레슨으로 나눠 만들 때만 필요한 두 번째 시계. 편 개수로 나누면
-// 남은 편들이 가벼운지 무거운지를 반영하지 못한다. CH02 실측에서 편 평균으로는
-// 90분, 페이지 가중으로는 54분이 나왔고 실제는 뒤쪽이었다. 그래서 페이지를
-// 단위로 잡는다.
-export function chapterEtaLabel({
-  completedPages,
-  completedMs,
-  currentPages = 0,
-  currentElapsedMs = 0,
-  pendingPages = 0,
-} = {}) {
-  if (!(Number(completedPages) > 0) || !(Number(completedMs) > 0)) return "";
-  const perPage = Number(completedMs) / Number(completedPages);
-  // 진행 중인 편은 예상치에서 이미 지난 만큼을 뺀다. 예상보다 오래 걸리는
-  // 중이면 0으로 바닥을 치고, 남은 편들의 몫만 남는다.
-  const currentRemaining = Math.max(0, perPage * Number(currentPages) - Number(currentElapsedMs));
-  const label = formatRemaining(currentRemaining + perPage * Number(pendingPages));
-  return label ? `전체 약 ${label} 남음` : "";
-}
-
 // 확인 완료로 내린 항목은 다듬기에서만이 아니라 최근 결과에서도 사라져야 한다.
 // 한 화면에서는 처리했는데 다른 화면에는 그대로 남으면, 그 버튼이 무엇을 한
 // 것인지 알 수 없다.

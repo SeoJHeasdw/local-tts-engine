@@ -77,11 +77,20 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   Date.now = () => now;
   t.after(() => { Date.now = originalNow; });
   jobListener({ type: 'plan', units: Array.from({ length: 11 }, () => ({ pages: 10 })) });
-  jobListener({ type: 'unit', index: 1, total: 11 });
-  now += 10 * 60_000;
-  jobListener({ type: 'unit', index: 2, total: 11 });
-  now += 10 * 60_000;
+  // 실제 제작과 같은 순서로 두 편을 지나 보낸다. 편마다 목소리 → 촬영이고,
+  // 촬영 길이는 합성이 끝난 뒤 오는 음성 길이로 잰다.
+  for (const index of [1, 2]) {
+    jobListener({ type: 'unit', index, total: 11 });
+    jobListener({ type: 'stage', stage: 'voice', state: 'running' });
+    now += 4 * 60_000;
+    jobListener({ type: 'stage', stage: 'voice', state: 'done' });
+    jobListener({ type: 'unit-duration', durationMs: 5 * 60_000 });
+    jobListener({ type: 'stage', stage: 'capture', state: 'running' });
+    now += 6 * 60_000;
+    jobListener({ type: 'stage', stage: 'capture', state: 'done' });
+  }
   jobListener({ type: 'unit', index: 3, total: 11 });
+  jobListener({ type: 'stage', stage: 'voice', state: 'running' });
   jobListener({ type: 'voice-progress', done: 0, total: 20 });
   now += 60_000;
   jobListener({ type: 'voice-progress', done: 2, total: 20 });
@@ -99,8 +108,15 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   jobListener({ type: 'resumed' });
   assert.equal(query('#job-eta').textContent, beforePause, '정지한 30분을 생성 시간으로 세지 않는다');
 
+  // 촬영으로 넘어가도 시계가 꺼지지 않는다. 음성 길이만큼 실시간으로 도는
+  // 단계라, 남은 촬영 시간이 곧 이 편의 남은 시간이다.
+  jobListener({ type: 'stage', stage: 'voice', state: 'done' });
+  jobListener({ type: 'unit-duration', durationMs: 5 * 60_000 });
   jobListener({ type: 'stage', stage: 'capture', state: 'running' });
-  assert.equal(query('#job-eta').textContent, '이 편 남은 시간 계산 중', '음성 추정치를 촬영 완료 시각으로 표시하지 않는다');
+  now += 60_000;
+  timers.forEach(tick => tick());
+  assert.match(query('#job-eta').textContent, /이 편 약 \d+분/, '촬영 중에도 남은 시간을 말한다');
+  assert.equal(query('#job-eta').classList.contains('eta-calculating'), false);
   jobListener({ type: 'failed', message: '335페이지 B-3102: 읽기를 지정하세요.' });
   now += 60_000;
   timers.forEach(tick => tick());

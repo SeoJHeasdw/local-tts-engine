@@ -13,7 +13,6 @@ import {
   outputGroupKey,
   outputState,
   outputUnitLabel,
-  chapterEtaLabel,
   etaLabel,
   formatRemaining,
   unitLabel,
@@ -171,35 +170,6 @@ test("레슨 단위 진행은 여러 편일 때만 표시한다", () => {
   assert.equal(unitLabel({ index: 3, total: 9 }), "레슨 3/9");
   assert.equal(unitLabel({ index: 1, total: 1 }), "");
   assert.equal(unitLabel({}), "");
-});
-
-test("챕터 남은 시간은 편 개수가 아니라 페이지로 잰다", () => {
-  // 실측 CH02: 103페이지를 91분에 처리했고 남은 분량은 66페이지였다.
-  // 편 개수로 나누면(8편 91분 → 11.4분/편 × 8편) 90분이 나와 크게 빗나간다.
-  const label = chapterEtaLabel({
-    completedPages: 103,
-    completedMs: 91 * 60_000,
-    currentPages: 11,
-    currentElapsedMs: 4 * 60_000,
-    pendingPages: 55,
-  });
-  assert.equal(label, "전체 약 54분 남음");
-});
-
-test("진행 중인 편이 예상보다 길어져도 남은 시간이 음수로 돌지 않는다", () => {
-  const label = chapterEtaLabel({
-    completedPages: 100,
-    completedMs: 100 * 60_000,
-    currentPages: 5,
-    currentElapsedMs: 60 * 60_000,
-    pendingPages: 10,
-  });
-  assert.equal(label, "전체 약 10분 남음");
-});
-
-test("아직 한 편도 못 끝냈으면 챕터 남은 시간을 지어내지 않는다", () => {
-  assert.equal(chapterEtaLabel({ completedPages: 0, completedMs: 0, currentPages: 8, pendingPages: 60 }), "");
-  assert.equal(chapterEtaLabel({}), "");
 });
 
 test("전체 시계가 함께 설 때는 편 시계를 '이 편'으로 읽는다", () => {
