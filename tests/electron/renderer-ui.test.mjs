@@ -159,7 +159,7 @@ test("결과는 파일 이름 그대로 적히고, 지우기는 되돌릴 수 �
     readMainSource(),
     fs.readFile(path.join(APP_DIR, "preload.cjs"), "utf8"),
   ]);
-  assert.match(script, /outputRowTitle\(item, \{ compact \}\)/);
+  assert.match(script, /outputRowTitle\(item\)/);
   assert.match(main, /fileName: videoPath \? path\.basename\(videoPath\) : null/);
   assert.match(script, /class="delete-button"/);
   assert.match(script, /api\.deleteOutput\(target\)/);

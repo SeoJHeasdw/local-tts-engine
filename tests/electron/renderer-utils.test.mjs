@@ -5,12 +5,12 @@ import {
   buildChapterRanges,
   findingExcerpt,
   findingSeek,
-  compactOutputLabel,
   outputRowTitle,
   outputGroupTitle,
   splitOutputTitle,
   groupOutputs,
   outputGroupKey,
+  outputVersionLinks,
   outputState,
   outputUnitLabel,
   etaLabel,
@@ -225,11 +225,21 @@ test("레슨 편 이름을 짧은 표로 읽는다", () => {
   assert.equal(outputGroupKey({ name: "studio-1-ch02-lessons-ch02-l07" }), "studio-1-ch02-lessons");
 });
 
-test("묶음 안의 행은 챕터를 되풀이하지 않고 편만 적는다", () => {
-  // displayName 이 이미 "CH02 L04 · 제목"이라, 편 표시를 앞에 덧붙이면
-  // "L04 CH02 L04 · 제목"이 된다.
-  const item = { name: "studio-1-ch02-lessons-ch02-l04", displayName: "CH02 L04 · 그래서 어떻게 만들라는 건가" };
-  assert.equal(compactOutputLabel(item), "L04 · 그래서 어떻게 만들라는 건가");
+test("사이에 끼워 넣은 편도 같은 챕터 묶음에 든다", () => {
+  // 덱에서 L01.5 로 부르는 편은 폴더 이름에 `ch03-l01-5` 로 적힌다. 정수만
+  // 받으면 그 편만 묶음에서 떨어져 나와 홀로 선다.
+  const half = { name: "studio-20260911-161338-ch03-lessons-ch03-l01-5" };
+  assert.equal(outputGroupKey(half), "studio-20260911-161338-ch03-lessons");
+  assert.equal(outputUnitLabel(half), "L01.5");
+
+  const rows = groupOutputs([
+    { name: "studio-20260911-161338-ch03-lessons-ch03-l02", ok: true },
+    { name: "studio-20260911-161338-ch03-lessons-ch03-l01-5", ok: true },
+    { name: "studio-20260911-161338-ch03-lessons-ch03-l01", ok: true },
+  ], () => []);
+
+  assert.equal(rows.length, 1, "열두 편이 한 묶음으로 선다");
+  assert.deepEqual(rows[0].items.map((item) => outputUnitLabel(item)), ["L01", "L01.5", "L02"]);
 });
 
 test("묶음 제목은 챕터까지만 적는다", () => {
@@ -240,25 +250,20 @@ test("묶음 제목은 챕터까지만 적는다", () => {
   assert.equal(outputGroupTitle(group), "CH02");
 });
 
-test("최근 결과는 Finder에서 보게 될 파일 이름을 그대로 적는다", () => {
+test("최근 결과는 묶음 안에서도 Finder 파일 이름을 그대로 적는다", () => {
+  // 제목에서 되짚어 만든 이름은 실제 파일과 어긋난다. 같은 이름이 이미 있으면
+  // 발행이 "(2)"를 붙이므로, 목록이 부르는 이름과 Finder 이름이 달라진다.
   const item = {
-    name: "studio-1-ch02-lessons-ch02-l04",
-    displayName: "CH02 L04 · 그래서 어떻게 만들라는 건가",
-    fileName: "CH02 L04 · 그래서 어떻게 만들라는 건가 - 영어 보정 (최종).mp4",
+    name: "studio-1-ch03-lessons-ch03-l02",
+    displayName: "CH03 L02 · OpenAI",
+    fileName: "CH03 L02 · OpenAI (2).mp4",
   };
-  assert.equal(outputRowTitle(item), "CH02 L04 · 그래서 어떻게 만들라는 건가 - 영어 보정 (최종).mp4");
-  // 묶음 안에서는 머리글이 이미 챕터를 말한다. 확장자는 그래도 남는다 —
-  // 그 자리에서 고쳐 쓸 이름이 무엇인지가 확장자까지여야 하기 때문이다.
-  assert.equal(
-    outputRowTitle(item, { compact: true }),
-    "L04 · 그래서 어떻게 만들라는 건가 - 영어 보정 (최종).mp4",
-  );
+  assert.equal(outputRowTitle(item), "CH03 L02 · OpenAI (2).mp4");
 });
 
 test("파일을 찾지 못한 결과도 이름 없이 남지 않는다", () => {
   const item = { name: "studio-2-ch01-full", displayName: "CH01 전체" };
   assert.equal(outputRowTitle(item), "CH01 전체");
-  assert.equal(outputRowTitle(item, { compact: true }), "CH01 전체");
 });
 
 test("파일 이름으로도 결과를 찾는다", () => {
@@ -269,10 +274,11 @@ test("파일 이름으로도 결과를 찾는다", () => {
 
 test("편에 속하지 않는 결과는 이름을 그대로 쓴다", () => {
   const single = { name: "studio-2-ch01-full", displayName: "CH01 전체" };
-  assert.equal(compactOutputLabel(single), "CH01 전체");
+  assert.equal(outputRowTitle(single), "CH01 전체");
   assert.deepEqual(splitOutputTitle("CH01 전체", ""), { scope: "", unit: "", title: "CH01 전체" });
-  // 제목 없이 편 표시만 있는 경우도 깨지지 않는다.
-  assert.equal(compactOutputLabel({ name: "j-ch02-lessons-ch02-l07", displayName: "CH02 L07" }), "L07");
+  // 제목 없이 편 표시만 있어도 묶음 머리글은 챕터까지만 적는다.
+  assert.equal(outputGroupTitle({ key: "j-ch02-lessons",
+    items: [{ name: "j-ch02-lessons-ch02-l07", displayName: "CH02 L07" }] }), "CH02");
 });
 
 // 실제 CH00 슬라이드 10. 대본 121자 중 걸린 낱말은 하나다.
@@ -337,4 +343,34 @@ test("낱말 앞 여유는 페이지 시작을 넘어가지 않는다", () => {
     CH00_PAGE,
   );
   assert.equal(at.startMs, 272_385, "페이지보다 앞으로 되감지 않는다");
+});
+
+test("한 편만 남은 묶음은 묶음으로 세우지 않는다", () => {
+  // 머리글과 상태 배지를 두 줄 더 쓰면서 말하는 것이 그 한 줄과 같다.
+  const rows = groupOutputs([
+    { name: "studio-1-ch03-lessons-ch03-l01", ok: true },
+    { name: "studio-2-ch02-lessons-ch02-l01", ok: true },
+    { name: "studio-2-ch02-lessons-ch02-l02", ok: true },
+  ], () => []);
+
+  assert.deepEqual(rows.map((row) => row.type), ["single", "group"]);
+  assert.equal(rows[1].items.length, 2);
+});
+
+test("수정본이 나온 원본은 그 사실을 함께 적는다", () => {
+  // 한 레슨의 결과가 원본 하나로 끝나지 않는다. 어느 파일이 지금 쓸 것인지
+  // 이름만 봐서는 알 수 없어, 사람이 따로 최신 목록을 적어 두게 된다.
+  const original = { key: "render:l04", path: "/videos/CH02 L04.mp4", updatedAt: "2026-09-09T05:00:00Z" };
+  const repair = { key: "edit:repair", path: "/edits/CH02 L04 - 수정.mp4", fileName: "CH02 L04 - 수정.mp4",
+    updatedAt: "2026-09-09T06:00:00Z", sources: ["/videos/CH02 L04.mp4"] };
+  const latest = { key: "edit:v2", path: "/edits/CH02 L04 - 수정 v2.mp4", fileName: "CH02 L04 - 수정 v2.mp4",
+    updatedAt: "2026-09-10T06:00:00Z", sources: ["/videos/CH02 L04.mp4"] };
+  const other = { key: "render:l05", path: "/videos/CH02 L05.mp4", updatedAt: "2026-09-09T05:00:00Z" };
+
+  const links = outputVersionLinks([original, repair, latest, other]);
+
+  assert.equal(links.get("render:l04").length, 2);
+  assert.equal(links.get("render:l04")[0].key, "edit:v2", "가장 최근 수정본이 앞에 선다");
+  assert.equal(links.has("render:l05"), false);
+  assert.equal(links.has("edit:v2"), false, "수정본 자신은 원본이 아니다");
 });
