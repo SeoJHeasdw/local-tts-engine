@@ -719,18 +719,11 @@ button:disabled { cursor: not-allowed; }
    영상 편집
    ========================================================================== */
 
-.drop-zone {
-  display: flex; flex-direction: column; align-items: center; padding: var(--s5) var(--s4);
-  border: 1px dashed var(--line-3); border-radius: var(--r-md); background: var(--well); text-align: center;
-}
-.drop-zone.drag-over { border-color: var(--lime); background: var(--lime-wash); }
 .drop-target.drag-over { outline: 2px solid var(--lime); outline-offset: 2px; background: var(--lime-wash); }
 .drop-icon {
   display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: var(--s3);
   border-radius: var(--r-md); background: var(--float); color: var(--lime); font-size: var(--fs-xl);
 }
-.drop-zone strong { font-size: var(--fs-md); font-weight: var(--fw-semi); }
-.drop-zone p { margin: var(--s2) 0 var(--s3); color: var(--text-3); font-size: var(--fs-sm); }
 
 
 .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
@@ -1438,7 +1431,77 @@ button:disabled { cursor: not-allowed; }
    ========================================================================== */
 .editor { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: var(--s5); align-items: start; }
 .editor-stage { padding: var(--s4); display: grid; gap: var(--s3); min-width: 0; }
+
+/* 담을 것이 없을 때만 나오는 큰 자리. 놓을 곳은 화면 전체이므로 이 상자는
+   과녁이 아니라 안내다. 하나라도 담기면 사라지고, 그 자리는 영상이 갖는다. */
+.editor-invite {
+  display: grid; justify-items: center; gap: var(--s2);
+  padding: var(--s6) var(--s5); text-align: center; cursor: pointer;
+  border-style: dashed; border-color: var(--line-3);
+}
+.editor-invite:hover { border-color: var(--lime-edge); }
+.editor-invite strong { font-size: var(--fs-lg); font-weight: var(--fw-semi); }
+.editor-invite p { margin: 0 0 var(--s2); color: var(--text-3); font-size: var(--fs-sm); }
+
+/* 놓을 자리를 겨누지 않아도 되게 화면 전체가 받는다. 그러면 어디에 놓이는지가
+   보이지 않으므로, 받는 동안에는 화면 가장자리가 그 사실을 말한다. */
+#view-edit.drag-over { position: relative; }
+#view-edit.drag-over::after {
+  content: "여기에 놓으면 담습니다"; position: fixed; inset: 38px 0 0 var(--sidebar-w);
+  display: grid; place-items: center; z-index: 20; pointer-events: none;
+  border: 2px dashed var(--lime); background: color-mix(in srgb, var(--lime) 8%, transparent);
+  color: var(--lime); font-size: var(--fs-lg); font-weight: var(--fw-semi);
+}
+
+.editor-screen { position: relative; }
 #editor-player { display: block; width: 100%; aspect-ratio: 16 / 9; background: var(--nav); border-radius: var(--r-md); }
+/* 담은 영상을 무르는 자리. 화면을 차지하는 상자 대신 모서리의 단추 하나면
+   된다. 무엇을 하는 단추인지는 머물면 말해 준다. */
+.editor-close {
+  position: absolute; top: var(--s2); right: var(--s2); width: 28px; height: 28px;
+  display: grid; place-items: center; border: 0; border-radius: var(--r-full);
+  background: rgba(0, 0, 0, .55); color: #fff; cursor: pointer; font-size: var(--fs-lg); line-height: 1;
+}
+.editor-close:hover:not(:disabled) { background: var(--danger); }
+.editor-close:disabled { opacity: 0; pointer-events: none; }
+
+/* 쓸 구간을 숫자로만 정하면 어디를 자르는지는 머릿속에 있다. 클립 전체를 자
+   하나로 두고 남길 구간을 띠로 칠하면 그 그림이 화면에 있다. */
+.trim-bar { display: grid; gap: var(--s2); }
+.trim-track {
+  position: relative; height: 40px; margin: 0 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--nav); cursor: pointer; touch-action: none;
+}
+.trim-band {
+  position: absolute; top: 0; bottom: 0; pointer-events: none;
+  background: color-mix(in srgb, var(--lime) 20%, transparent);
+  border-top: 2px solid var(--lime); border-bottom: 2px solid var(--lime);
+}
+.trim-cursor { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); pointer-events: none; }
+.trim-handle {
+  position: absolute; top: 0; height: 100%; width: 18px; padding: 0;
+  transform: translateX(-50%); border: 0; border-radius: 0;
+  border-left: 2px solid var(--lime); background: color-mix(in srgb, var(--lime) 30%, transparent);
+  color: transparent; overflow: hidden; cursor: ew-resize; touch-action: none;
+}
+.trim-handle::after {
+  content: ""; position: absolute; top: 50%; left: 50%; width: 2px; height: 14px;
+  transform: translate(-50%, -50%); border-radius: 1px; background: var(--lime);
+}
+.trim-handle:disabled { opacity: .3; cursor: default; }
+.trim-handle:focus-visible { outline: 2px solid var(--text); }
+.trim-note { margin: 0; color: var(--text-3); font-size: var(--fs-xs); }
+
+.editor-marks kbd, .editor-keys kbd {
+  margin-left: var(--s2); padding: 1px var(--s2); border-radius: var(--r-sm);
+  background: var(--float); color: var(--text-3); font: var(--fs-micro) var(--mono);
+}
+/* 자판 길은 한 번 알면 다시 단추를 겨누지 않는다. 알기 전까지만 필요한
+   안내이므로 옆에 조용히 둔다. */
+.editor-keys ul { display: grid; gap: var(--s1); margin: 0; padding: 0; list-style: none; }
+.editor-keys li { display: flex; align-items: center; gap: var(--s1); font-size: var(--fs-xs); color: var(--text-3); }
+.editor-keys li span { margin-left: auto; }
+.editor-keys kbd { margin-left: 0; }
 .editor-playhead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
 .editor-playhead strong { font-size: var(--fs-md); font-weight: var(--fw-semi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-playhead span { color: var(--text-3); font: var(--fs-xs) var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1459,16 +1522,24 @@ button:disabled { cursor: not-allowed; }
 .track-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-semi); }
 .track-head h2 span { color: var(--lime); }
 .track-head p { margin: 0; color: var(--text-3); font-size: var(--fs-xs); }
+.track-head button { margin-left: auto; }
 .track-list {
   display: flex; gap: var(--s2); margin: 0; padding: var(--s3); list-style: none;
   overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well);
 }
 .track-list:empty { display: none; }
 .track-clip {
-  flex: 0 0 220px; display: grid; grid-template-columns: 24px minmax(0, 1fr) 24px;
+  flex: 0 0 250px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto;
   align-items: center; gap: var(--s2); padding: var(--s3);
   border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); cursor: grab;
 }
+.track-tools { display: flex; align-items: center; gap: 1px; }
+.track-move {
+  width: 20px; height: 24px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-4); cursor: pointer; font-size: var(--fs-xs);
+}
+.track-move:hover:not(:disabled) { color: var(--text); background: var(--float); }
+.track-move:disabled { opacity: .25; cursor: default; }
 .track-clip.active { border-color: var(--lime); background: var(--lime-wash); }
 .track-clip.dragging { opacity: .4; }
 /* 자른 클립은 다시 굽는다. 비용이 달라지는 지점이라 눈에 띄어야 한다. */
@@ -1479,10 +1550,6 @@ button:disabled { cursor: not-allowed; }
 .track-clip small { display: block; margin-top: var(--s1); color: var(--text-3); font: var(--fs-micro) var(--mono); }
 .track-remove { width: 24px; height: 24px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-md); }
 .track-remove:hover { color: var(--danger); background: var(--dngr-wash); }
-.track-empty {
-  margin: 0; padding: var(--s6); text-align: center;
-  border: 1px dashed var(--line); border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm);
-}
 
 /* 일시정지와 이어하기. 두 시간짜리 작업이 앱과 함께 사라지지 않는다는 것을
    화면이 먼저 말해 준다. */

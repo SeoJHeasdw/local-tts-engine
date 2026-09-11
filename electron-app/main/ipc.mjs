@@ -8,6 +8,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isInside, normalizeEditName, normalizeOptions, normalizeVoiceText, pendingUnits } from "../shared/index.mjs";
 import { renameMediaFile, repointReportFile, safeStat } from "./files.mjs";
 
+// ffmpeg 가 읽는 흔한 컨테이너는 모두 받는다. 코덱·색 형식이 편집에 맞지 않으면
+// 렌더 직전의 검사가 그 이유를 따로 말해 주므로, 담는 문턱에서 미리 막지 않는다.
+const DROPPABLE = {
+  video: {
+    label: "영상",
+    extensions: new Set([".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".wmv",
+      ".flv", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".ogv", ".3gp"]),
+  },
+  audio: {
+    label: "음성",
+    extensions: new Set([".wav", ".m4a", ".mp3", ".flac", ".aac", ".ogg", ".opus", ".aiff", ".aif"]),
+  },
+};
+
 export function createIpcService({
   applyVoiceSettings,
   assertRuntime,
@@ -233,27 +247,36 @@ export function createIpcService({
       const result = await dialog.showOpenDialog(state.mainWindow, {
         title: multiple ? "편집할 영상 선택" : "원본 영상 선택",
         properties: multiple ? ["openFile", "multiSelections"] : ["openFile"],
-        filters: [{ name: "영상", extensions: ["mp4", "mov", "mkv", "webm", "m4v"] }],
+        filters: [{ name: "영상", extensions: [...DROPPABLE.video.extensions].map((extension) => extension.slice(1)) }],
       });
       return result.canceled ? [] : registerSelected(result.filePaths, "video");
     });
 
+    // 놓은 것을 되돌려보낼 때 '지원하는 영상 파일을 놓아 주세요'만 말하면, 무엇이
+    // 걸렸는지 알 길이 없다. 폴더인지, 확장자가 다른지, 경로 자체를 못 읽었는지는
+    // 서로 다른 문제이고 사용자가 할 일도 다르다. 무엇이 걸렸는지 이름으로 말한다.
     ipcMain.handle("studio:register-dropped-files", async (event, paths = [], kind) => {
       guard(event);
-      const allowed = {
-        video: new Set([".mp4", ".mov", ".mkv", ".webm", ".m4v"]),
-        audio: new Set([".wav", ".m4a", ".mp3", ".flac", ".aac"]),
-      };
-      if (!allowed[kind]) throw new Error("지원하지 않는 파일 종류입니다.");
+      const spec = DROPPABLE[kind];
+      if (!spec) throw new Error("지원하지 않는 파일 종류입니다.");
       const accepted = [];
+      const rejected = [];
       for (const candidate of paths.slice(0, 100)) {
         const resolved = path.resolve(String(candidate));
-        if (!allowed[kind].has(path.extname(resolved).toLowerCase())) continue;
-        if (!(await safeStat(resolved))?.isFile()) continue;
+        const name = path.basename(resolved);
+        const stat = await safeStat(resolved);
+        if (stat?.isDirectory()) { rejected.push(`${name}(폴더)`); continue; }
+        if (!stat?.isFile()) { rejected.push(`${name}(파일 아님)`); continue; }
+        if (!spec.extensions.has(path.extname(resolved).toLowerCase())) { rejected.push(name); continue; }
         accepted.push(resolved);
       }
-      if (!accepted.length) throw new Error(kind === "video" ? "지원하는 영상 파일을 놓아 주세요." : "지원하는 음성 파일을 놓아 주세요.");
-      return registerSelected(accepted, kind);
+      if (accepted.length) return registerSelected(accepted, kind);
+      if (!rejected.length) {
+        throw new Error(`놓은 것에서 파일 경로를 읽지 못했습니다. Finder에서 ${spec.label} 파일을 끌어다 놓아 주세요.`);
+      }
+      const shown = rejected.slice(0, 3).join(", ") + (rejected.length > 3 ? ` 외 ${rejected.length - 3}개` : "");
+      const kinds = [...spec.extensions].map((extension) => extension.slice(1)).join(" · ");
+      throw new Error(`${spec.label} 파일이 아닙니다: ${shown}. 받는 형식은 ${kinds} 입니다.`);
     });
 
     ipcMain.handle("studio:pick-audio", async (event) => {
@@ -261,7 +284,7 @@ export function createIpcService({
       const result = await dialog.showOpenDialog(state.mainWindow, {
         title: "교체할 음성 선택",
         properties: ["openFile"],
-        filters: [{ name: "음성", extensions: ["wav", "m4a", "mp3", "flac", "aac"] }],
+        filters: [{ name: "음성", extensions: [...DROPPABLE.audio.extensions].map((extension) => extension.slice(1)) }],
       });
       return result.canceled ? [] : registerSelected(result.filePaths, "audio");
     });

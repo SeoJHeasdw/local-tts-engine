@@ -32,6 +32,23 @@ function runUnit(pace, clock, { index, total, voiceMs, durationMs, captureMs, ta
   clock.advance(tailMs);
 }
 
+// 편 목록은 1초마다 다시 그려진다. 그 자리에서 남은 시간 추정까지 통째로 다시
+// 돌리면, 화면에 쓰지도 않는 계산을 초마다 한 번씩 더 하는 셈이다.
+test("편 목록만 읽는 자리는 남은 시간 계산을 거치지 않는다", () => {
+  const clock = fakeClock();
+  const pace = createJobPace({ now: clock.now });
+  pace.start(CHAPTER);
+  pace.plan([{ title: "L01", pages: 20 }, { title: "L02", pages: 20, completed: true }]);
+  pace.startUnit({ index: 1, total: 2 });
+
+  const states = pace.unitStates();
+  assert.deepEqual(states.map((item) => [item.title, item.state]), [["L01", "running"], ["L02", "skipped"]]);
+  // 베낀 것이라 화면에서 만져도 계산의 바탕이 흔들리지 않는다.
+  states[0].state = "done";
+  assert.equal(pace.unitStates()[0].state, "running");
+  assert.equal(pace.snapshot().units[0].state, "running");
+});
+
 test("촬영 중에도 이 편의 남은 시간을 말한다", () => {
   // 예전에는 목소리 단계에만 진행 숫자가 있어, 촬영으로 넘어가는 순간 시계가
   // 꺼지고 '계산 중'만 남았다. 촬영이 제일 긴 단계인데 거기서 답이 없었다.
@@ -50,7 +67,7 @@ test("촬영 중에도 이 편의 남은 시간을 말한다", () => {
   const { unit, unitBusy } = pace.labels({ running: true });
 
   assert.equal(unitBusy, false, "촬영 길이는 음성 길이로 알 수 있다");
-  assert.equal(unit, "이 편 약 15분");
+  assert.equal(unit, "이 편 15:00 남음");
 });
 
 test("남은 시간은 남은 단계를 모두 더한다", () => {
@@ -85,7 +102,7 @@ test("앞 편이 끝나면 남은 편들의 몫을 페이지로 잰다", () => {
 
   const { total } = pace.labels({ running: true });
 
-  assert.match(total, /^전체 약 6시간/, total);
+  assert.match(total, /^전체 6:\d\d:\d\d 남음$/, total);
 });
 
 test("전체 남은 시간은 같은 속도에서 줄기만 한다", () => {
@@ -187,7 +204,7 @@ test("한 편짜리 작업에는 두 번째 시계를 띄우지 않는다", () =
 
   assert.equal(total, "", "전체 시계가 설 자리가 없다");
   // 촬영 몫을 아직 모르는 동안에는 무엇을 기다리는지라도 말한다.
-  assert.equal(unit, "목소리 생성 약 2분");
+  assert.equal(unit, "목소리 생성 2:00 남음");
 });
 
 test("한 편짜리도 촬영에 들어가면 작업 전체의 남은 시간을 말한다", () => {
@@ -201,7 +218,7 @@ test("한 편짜리도 촬영에 들어가면 작업 전체의 남은 시간을 
   pace.stage("capture", "running");
   clock.advance(minutes(2));
 
-  assert.equal(pace.labels({ running: true }).unit, "약 10분 남음");
+  assert.equal(pace.labels({ running: true }).unit, "10:00 남음");
 });
 
 test("작업이 끝나면 시계를 지운다", () => {

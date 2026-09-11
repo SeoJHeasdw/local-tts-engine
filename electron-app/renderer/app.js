@@ -583,7 +583,7 @@ function updateVoicePageMeta() {
 // 영상 편집은 클립 목록 하나다. 구간을 준 클립 하나가 자르기, 구간 없는 클립
 // 여럿이 합치기, 섞으면 예전 두 탭으로는 만들 수 없던 편집이 된다. 화면이 하는
 // 일은 그 목록을 보여 주고 고치게 하는 것뿐이고, 렌더는 compose 하나로 간다.
-const editor = createEditorController({ $, formatDuration, review, setIconStatus, api, showToast, setEditBusy, openJobDialog });
+const editor = createEditorController({ $, review, setIconStatus, api, showToast, setEditBusy, openJobDialog });
 
 function setEditBusy(busy) {
   review.reviewBusy = busy;
@@ -1069,7 +1069,7 @@ const UNIT_STATE_LABELS = { done: "완료", running: "제작 중", failed: "실�
 let jobUnitsSignature = "";
 
 function renderJobUnits() {
-  const units = pace.snapshot().units;
+  const units = pace.unitStates();
   $("#job-units").classList.toggle("hidden", units.length < 2);
   const signature = units.map((unit) => unit.state).join("");
   if (!units.length || signature === jobUnitsSignature) return;
@@ -1099,7 +1099,8 @@ function renderJobUnits() {
 function renderJobPace() {
   renderJobUnits();
   const unit = pace.currentUnit ? unitLabel(pace.currentUnit) : "";
-  $("#job-unit").textContent = unit;
+  // 1초마다 도는 자리다. 같은 글자를 다시 써 넣어 노드를 더럽히지 않는다.
+  if ($("#job-unit").textContent !== unit) $("#job-unit").textContent = unit;
   $("#job-unit").classList.toggle("hidden", !unit);
   const clocks = pace.labels({ running: creationState === "running" });
   renderEta($("#job-eta"), clocks.unit, clocks.unitBusy);
@@ -1107,10 +1108,12 @@ function renderJobPace() {
 }
 
 function renderEta(element, label, calculating) {
-  element.textContent = label;
+  if (element.textContent !== label) element.textContent = label;
   element.classList.toggle("hidden", !label);
   element.classList.toggle("eta-calculating", calculating);
-  element.setAttribute("aria-busy", String(calculating));
+  // aria-busy 를 매초 다시 적으면 바뀌지도 않은 상태가 계속 새 사실처럼 오른다.
+  const busy = String(calculating);
+  if (element.getAttribute("aria-busy") !== busy) element.setAttribute("aria-busy", busy);
 }
 
 function resetJobPace(options = {}) {
@@ -1125,8 +1128,10 @@ function resetJobPace(options = {}) {
 }
 
 // 실행 중에만 추정값을 갱신한다. 실패·중지 후 옛 남은 시간을 되살리지 않는다.
+// 1초마다 다시 그린다. 남은 시간 계산은 경과 시간에서 바로 나오므로 매초 한
+// 자리씩 줄어들고, 편 목록은 상태가 실제로 바뀐 때에만 다시 그려진다.
 if (typeof setInterval === "function") {
-  setInterval(() => { if (creationState === "running") renderJobPace(); }, 5_000);
+  setInterval(() => { if (creationState === "running") renderJobPace(); }, 1_000);
 }
 
 async function initialize() {
@@ -1445,17 +1450,48 @@ $("#start-finetune").addEventListener("click", async () => {
   }
 });
 
+// 자식 위로 지나갈 때마다 dragleave 가 터져 테두리가 깜빡인다. 들어오고 나간
+// 횟수를 세면 한 덩어리로 다룰 수 있다. 창 전체를 받는 자리에서는 이 차이가
+// 깜빡임과 멀쩡함을 가른다.
 function attachNativeDrop(element, kind, onFiles) {
-  element.addEventListener("dragover", (event) => { event.preventDefault(); element.classList.add("drag-over"); });
-  element.addEventListener("dragleave", () => element.classList.remove("drag-over"));
-  element.addEventListener("drop", async (event) => {
+  let depth = 0;
+  const paint = (over) => element.classList.toggle("drag-over", over);
+  element.addEventListener("dragenter", (event) => {
+    if (!event.dataTransfer?.types?.includes("Files")) return;
+    depth += 1;
+    paint(true);
+  });
+  element.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer?.types?.includes("Files")) return;
     event.preventDefault();
-    element.classList.remove("drag-over");
-    try { onFiles(await api.registerDroppedFiles(event.dataTransfer.files, kind)); }
-    catch (error) { appendEditLog(`[파일 오류] ${error.message}\n`); }
+    event.dataTransfer.dropEffect = "copy";
+  });
+  element.addEventListener("dragleave", () => { depth = Math.max(0, depth - 1); if (!depth) paint(false); });
+  element.addEventListener("drop", async (event) => {
+    if (!event.dataTransfer?.types?.includes("Files")) return;
+    event.preventDefault();
+    depth = 0;
+    paint(false);
+    // FileList 그대로는 preload 까지 건너가지 못한다. File 배열로 펼쳐서 넘긴다.
+    const chosen = [...(event.dataTransfer.files || [])];
+    const dropped = chosen.length;
+    try {
+      const files = await api.registerDroppedFiles(chosen, kind);
+      onFiles(files);
+      // 셋을 놓았는데 둘만 담겼다면 그것도 알려야 한다. 조용히 빠지면 왜
+      // 하나가 없는지 찾다가 결과를 다 만든 뒤에야 안다.
+      if (dropped > files.length) {
+        showToast(`${dropped}개 중 ${files.length}개만 담았습니다. 나머지는 지원하지 않는 형식입니다.`, "error");
+      }
+    } catch (error) {
+      showToast(error.message, "error");
+      appendEditLog(`[파일 오류] ${error.message}\n`);
+    }
   });
 }
-attachNativeDrop($("#editor-drop"), "video", (files) => editor.addEditorClips(files));
+// 왼쪽에 영상 자리가 있는데 오른쪽 작은 상자에만 놓을 수 있으면, 놓을 자리를
+// 먼저 겨눠야 한다. 편집 화면 전체가 받는다.
+attachNativeDrop($("#view-edit"), "video", (files) => editor.addEditorClips(files));
 attachNativeDrop($("#pick-voice-video"), "video", (files) => { if (files[0]) review.setReviewVideo(files[0]); });
 let currentView = "new";
 let renderedView = "new";

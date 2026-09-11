@@ -1,4 +1,4 @@
-import { formatRemaining } from "./view-utils.mjs";
+import { formatCountdown } from "./view-utils.mjs";
 
 // 제작은 길다. 무엇을 하는 중인지만 알려 주고 언제 끝나는지 말해 주지 않으면
 // 자리를 뜰 수도, 기다릴 수도 없다.
@@ -31,7 +31,9 @@ export const STAGE_NOUNS = {
 const MAJOR_STAGES = new Set(["voice", "capture"]);
 
 // 30초 아래는 분으로 말하면 오히려 틀린 값처럼 보인다.
-const ALMOST_DONE_MS = 45_000;
+// 초 단위로 세는 시계에서 45초는 너무 이르다. 0:45에서 '곧 완료'로 굳어
+// 버리면 마지막 45초 동안 시계가 멈춘 것처럼 보인다.
+const ALMOST_DONE_MS = 10_000;
 
 function stagePlan(deliverable) {
   return STAGE_PLANS[deliverable] || STAGE_PLANS.video;
@@ -277,9 +279,9 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
 
   function remainingText(ms, scope) {
     if (ms < ALMOST_DONE_MS) return scope === "unit" ? "이 편 곧 완료" : "곧 완료";
-    const label = formatRemaining(ms);
+    const label = formatCountdown(ms);
     if (!label) return "";
-    return scope === "unit" ? `이 편 약 ${label}` : `약 ${label} 남음`;
+    return scope === "unit" ? `이 편 ${label} 남음` : `${label} 남음`;
   }
 
   function split() {
@@ -303,7 +305,7 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
       const stageRest = currentStageRemainingMs();
       const noun = stage ? STAGE_NOUNS[stage.name] : null;
       if (noun && stageRest != null && stageRest >= ALMOST_DONE_MS) {
-        unitText = `${noun} 약 ${formatRemaining(stageRest)}`;
+        unitText = `${noun} ${formatCountdown(stageRest)} 남음`;
       }
     }
     const whole = twoClocks ? chapterRemainingMs() : null;
@@ -319,6 +321,9 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
   return {
     labels,
     get currentUnit() { return unit; },
+    // 편 목록만 필요한 자리가 있다. 1초마다 불리는 자리라, 거기서 남은 시간
+    // 추정까지 통째로 다시 돌릴 까닭이 없다. snapshot 은 검사용으로 남긴다.
+    unitStates() { return units.map((item) => ({ ...item })); },
     // 검사와 화면 상태 확인용. 계산에 쓰는 값은 여기서만 읽는다.
     snapshot() {
       return {

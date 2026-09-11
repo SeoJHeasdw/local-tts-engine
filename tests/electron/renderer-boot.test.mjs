@@ -16,7 +16,11 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
         contains: name => classes.has(name),
         toggle(name, force = !classes.has(name)) { force ? classes.add(name) : classes.delete(name); },
       },
-      addEventListener() {}, setAttribute() {}, removeAttribute() {},
+      addEventListener() {},
+      attributes: {},
+      setAttribute(key, value) { this.attributes[key] = value; },
+      getAttribute(key) { return this.attributes[key] ?? null; },
+      removeAttribute(key) { delete this.attributes[key]; },
       append(...items) { this.children.push(...items); },
       replaceChildren(...items) { this.children = items; },
       querySelector: () => element(), querySelectorAll: () => [], closest() { return this; },
@@ -106,8 +110,8 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   jobListener({ type: 'voice-progress', done: 0, total: 20 });
   now += 60_000;
   jobListener({ type: 'voice-progress', done: 2, total: 20 });
-  assert.match(query('#job-eta').textContent, /이 편 약/);
-  assert.match(query('#job-total-eta').textContent, /전체 약/);
+  assert.match(query('#job-eta').textContent, /이 편 \d+:\d\d 남음/);
+  assert.match(query('#job-total-eta').textContent, /전체 \d+:\d\d:\d\d 남음/);
   assert.equal(query('#job-eta').classList.contains('eta-calculating'), false);
 
   const beforePause = query('#job-eta').textContent;
@@ -127,7 +131,7 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   jobListener({ type: 'stage', stage: 'capture', state: 'running' });
   now += 60_000;
   timers.forEach(tick => tick());
-  assert.match(query('#job-eta').textContent, /이 편 약 \d+분/, '촬영 중에도 남은 시간을 말한다');
+  assert.match(query('#job-eta').textContent, /이 편 \d+:\d\d 남음/, '촬영 중에도 남은 시간을 말한다');
   assert.equal(query('#job-eta').classList.contains('eta-calculating'), false);
   jobListener({ type: 'failed', message: '335페이지 B-3102: 읽기를 지정하세요.' });
   now += 60_000;
@@ -156,7 +160,7 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   assert.equal(query('#start-button').disabled, true, '한 레슨 실패 후에도 제작은 실행 중이다');
   assert.match(query('#job-failure-note').textContent, /1개 레슨 실패/);
   jobListener({ type: 'unit', index: 3, total: 3 });
-  assert.equal(query('#job-total-eta').textContent, '전체 약 10분 남음', '실패한 10페이지를 1분 만에 완료한 것으로 세지 않는다');
+  assert.equal(query('#job-total-eta').textContent, '전체 10:00 남음', '실패한 10페이지를 1분 만에 완료한 것으로 세지 않는다');
   const partial = { totalUnits: 3, durationMs: 2000, target: { root: 'render', name: 'first' },
     summary: { ok: false }, failedUnits: [{ name: 'l02', title: 'L02', message: '음성 생성 실패' }],
     units: [{ name: 'l01', target: { root: 'render', name: 'first' } }, { name: 'l03' }] };

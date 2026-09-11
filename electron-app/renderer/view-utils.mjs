@@ -156,6 +156,21 @@ export function createViewHistory(initial = 'new') {
 // 남은 시간은 지금까지의 속도로만 낸다. 청크마다 재시도 횟수가 달라 실제
 // 소요가 들쭉날쭉하므로, 앞으로를 예측하지 않고 여태 걸린 만큼이 이어진다고
 // 본다. 그래서 '약'이라고 적고 분 단위로만 말한다.
+// 5초마다 '약 12분'이 '약 11분'으로 바뀌는 시계는 멈춰 있는 것처럼 보인다.
+// 1초마다 한 자리씩 줄어드는 시계라야 얼마나 남았는지가 눈으로 읽히고, 자리를
+// 떠도 되는지 판단이 선다. 값 자체는 여전히 추정이라 초를 올림하지 않고
+// 내림해 둔다 — 12:00에서 11:59로 내려가야 줄어드는 것으로 보인다.
+export function formatCountdown(ms) {
+  const seconds = Math.max(0, Math.floor(Number(ms) / 1000));
+  if (!Number.isFinite(seconds)) return "";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
+    : `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
 export function formatRemaining(ms) {
   const seconds = Math.round(Number(ms) / 1000);
   if (!(seconds > 0)) return "";

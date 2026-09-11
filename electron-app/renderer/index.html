@@ -356,17 +356,40 @@
             <div class="top-status" id="edit-top-status" tabindex="0" data-tooltip="편집할 영상을 담으세요" aria-label="편집할 영상을 담으세요"><span class="pulse"></span><span class="sr-only">대기</span></div>
           </header>
 
+          <section class="card editor-invite" id="editor-drop">
+            <div class="drop-icon" aria-hidden="true">＋</div>
+            <strong>영상을 이 화면 아무 데나 끌어다 놓으세요</strong>
+            <p>앱이 만든 강의 영상도, 다른 영상도 됩니다. 여러 개를 한 번에 놓아도 됩니다.</p>
+            <button type="button" class="secondary-small" id="editor-pick">영상 고르기</button>
+          </section>
+
           <section class="editor">
             <div class="editor-stage card">
-              <video id="editor-player" controls preload="metadata" aria-label="편집 미리보기"></video>
+              <div class="editor-screen">
+                <video id="editor-player" controls preload="metadata" aria-label="편집 미리보기"></video>
+                <button type="button" class="editor-close" id="editor-close" title="영상 닫기" aria-label="이 클립을 목록에서 빼기">×</button>
+              </div>
               <div class="editor-playhead">
                 <strong id="editor-clip-name">담은 영상이 없습니다</strong>
                 <span id="editor-clip-time">—</span>
               </div>
+
+              <div class="trim-bar" id="editor-trim" aria-label="쓸 구간 정하기">
+                <div class="trim-track" id="editor-trim-track">
+                  <div class="trim-band" id="editor-trim-band"></div>
+                  <div class="trim-cursor" id="editor-trim-cursor"></div>
+                  <button type="button" class="trim-handle start" id="editor-trim-in" aria-label="구간 시작, 좌우 방향키로 0.1초 이동">시작</button>
+                  <button type="button" class="trim-handle end" id="editor-trim-out" aria-label="구간 끝, 좌우 방향키로 0.1초 이동">끝</button>
+                </div>
+                <p class="trim-note" id="editor-trim-note">막대를 눌러 옮기고, 시작·끝 손잡이를 끌어 쓸 구간만 남기세요.</p>
+              </div>
+
               <div class="editor-marks">
-                <button type="button" class="secondary-small" id="editor-mark-in">여기를 시작으로</button>
-                <button type="button" class="secondary-small" id="editor-mark-out">여기를 끝으로</button>
+                <button type="button" class="secondary-small" id="editor-mark-in">시작 지정<kbd>I</kbd></button>
+                <button type="button" class="secondary-small" id="editor-mark-out">끝 지정<kbd>O</kbd></button>
+                <button type="button" class="secondary-small" id="editor-split">여기서 나누기<kbd>S</kbd></button>
                 <button type="button" class="secondary-small" id="editor-play-clip">이 구간 재생</button>
+                <button type="button" class="secondary-small" id="editor-duplicate">클립 복제</button>
                 <button type="button" class="secondary-small" id="editor-reset-clip">구간 해제</button>
               </div>
               <div class="editor-fields">
@@ -376,22 +399,26 @@
             </div>
 
             <aside class="editor-side">
-              <section class="card editor-sources">
-                <h2>영상 담기</h2>
-                <div class="drop-zone drop-target" id="editor-drop">
-                  <div class="drop-icon" aria-hidden="true">＋</div>
-                  <strong>여기에 영상을 끌어다 놓으세요</strong>
-                  <p>앱이 만든 강의 영상도, 다른 영상도 됩니다.</p>
-                  <button type="button" class="secondary-small" id="editor-pick">영상 고르기</button>
-                </div>
-              </section>
-
               <section class="card editor-output">
                 <h2>결과</h2>
                 <div class="editor-total"><span>완성 길이</span><strong id="editor-total">0:00</strong></div>
                 <p class="editor-note" id="editor-quality">클립을 담으면 다시 구울지 그대로 쓸지 알려드립니다.</p>
+                <button type="button" class="secondary-small full" id="editor-preview-all">처음부터 이어서 미리보기</button>
                 <details class="advanced-options full compact-options"><summary><span>결과 이름</span><small>자동 생성</small></summary><div><label class="field full"><input id="edit-name" autocomplete="off" spellcheck="false" required aria-label="편집 결과 이름"></label></div></details>
                 <button class="primary-button full" id="start-edit-button" type="button"><span id="start-edit-label">이대로 만들기</span><span aria-hidden="true">→</span></button>
+              </section>
+
+              <section class="card editor-keys">
+                <h2>자판</h2>
+                <ul>
+                  <li><kbd>Space</kbd><span>재생·멈춤</span></li>
+                  <li><kbd>←</kbd><kbd>→</kbd><span>5초 이동</span></li>
+                  <li><kbd>,</kbd><kbd>.</kbd><span>0.1초 이동</span></li>
+                  <li><kbd>I</kbd><kbd>O</kbd><span>시작·끝 지정</span></li>
+                  <li><kbd>S</kbd><span>재생 위치에서 나누기</span></li>
+                  <li><kbd>[</kbd><kbd>]</kbd><span>앞뒤 클립</span></li>
+                  <li><kbd>Delete</kbd><span>이 클립 빼기</span></li>
+                </ul>
               </section>
             </aside>
           </section>
@@ -399,10 +426,10 @@
           <section class="editor-track" aria-label="클립 순서">
             <div class="track-head">
               <h2>클립 <span id="editor-count">0</span></h2>
-              <p>왼쪽부터 순서대로 이어집니다. 끌어서 순서를 바꾸고, 클립을 눌러 구간을 정하세요.</p>
+              <p>왼쪽부터 순서대로 이어집니다. 끌거나 화살표로 순서를 바꾸고, 클립을 눌러 구간을 정하세요.</p>
+              <button type="button" class="secondary-small" id="editor-add">＋ 영상 담기</button>
             </div>
             <ol class="track-list" id="editor-clips"></ol>
-            <p class="track-empty" id="editor-empty">담은 클립이 없습니다.</p>
           </section>
         </section>
 

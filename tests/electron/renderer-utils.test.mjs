@@ -14,6 +14,7 @@ import {
   outputState,
   outputUnitLabel,
   etaLabel,
+  formatCountdown,
   formatRemaining,
   unitLabel,
   filterOutputItems,
@@ -164,6 +165,17 @@ test("한 시간을 넘으면 시간과 분으로 끊어 읽는다", () => {
   assert.equal(formatRemaining(90 * 60_000), "1시간 30분");
   assert.equal(formatRemaining(120 * 60_000), "2시간");
   assert.equal(formatRemaining(0), "");
+});
+
+// 1초마다 한 자리씩 줄어드는 시계라야 줄어드는 것으로 보인다. 초를 올림하면
+// 첫 1초 동안 값이 그대로여서 멈춘 것처럼 읽힌다.
+test("남은 시간 시계는 초를 내림해 세고 한 시간을 넘으면 자리를 늘린다", () => {
+  assert.equal(formatCountdown(15 * 60_000), "15:00");
+  assert.equal(formatCountdown(15 * 60_000 - 1), "14:59");
+  assert.equal(formatCountdown(90 * 60_000 + 30_000), "1:30:30");
+  assert.equal(formatCountdown(9_500), "0:09");
+  assert.equal(formatCountdown(0), "0:00");
+  assert.equal(formatCountdown(-5_000), "0:00");
 });
 
 test("레슨 단위 진행은 여러 편일 때만 표시한다", () => {

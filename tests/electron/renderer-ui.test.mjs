@@ -117,6 +117,84 @@ test("완성 영상은 자기 타임라인을 데리고 발행된다", async () 
 });
 
 
+// 두 시계는 '이 편'과 '전체'다. 5초마다 '약 12분'이 '약 11분'으로 바뀌면 멈춰
+// 있는 것처럼 보인다. 매초 다시 그려 한 자리씩 줄어드는 것을 보여 준다.
+test("남은 시간 두 시계는 1초마다 줄어든다", async () => {
+  const [html, script, pace] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    readRendererSource(),
+    fs.readFile(path.join(renderer, "job-pace.mjs"), "utf8"),
+  ]);
+  assert.match(html, /id="job-eta"/);
+  assert.match(html, /id="job-total-eta"/);
+  assert.match(script, /creationState === "running"\) renderJobPace\(\); \}, 1_000\)/);
+  // 1초마다 도는 자리다. 편 목록만 필요한 곳에서 남은 시간 추정을 다시 돌리지
+  // 않고, 바뀌지 않은 글자와 aria-busy 를 매초 다시 적지 않는다.
+  assert.match(script, /const units = pace\.unitStates\(\);/);
+  assert.doesNotMatch(script, /pace\.snapshot\(\)\.units/);
+  assert.match(script, /if \(element\.textContent !== label\) element\.textContent = label;/);
+  assert.match(script, /element\.getAttribute\("aria-busy"\) !== busy/);
+  assert.match(pace, /formatCountdown/);
+  // 추정이 아직 없을 때 시계를 지어내지 않는다.
+  assert.match(pace, /남은 시간 계산 중/);
+});
+
+// 왼쪽에 영상 자리가 있는데 오른쪽 작은 상자에만 놓을 수 있으면, 놓을 곳을 먼저
+// 겨눠야 한다. 편집 화면 전체가 받고, 되돌려보낼 때는 무엇이 걸렸는지 말한다.
+test("편집 화면 전체가 영상을 받고, 못 받은 파일은 이유를 말한다", async () => {
+  const [script, main, css] = await Promise.all([
+    readRendererSource(),
+    readMainSource(),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+  ]);
+  assert.match(script, /attachNativeDrop\(\$\("#view-edit"\), "video"/);
+  // FileList 는 contextBridge 를 건너오지 못한다. 건너편에서는 length 도 없는 빈
+  // 객체가 되어 Array.from 이 0개를 내고, 놓은 파일이 통째로 사라졌다. Electron
+  // 44 에서 실제 파일을 떨어뜨려 확인한 결과이며, File 배열은 그대로 건너온다.
+  assert.match(script, /\[\.\.\.\(event\.dataTransfer\.files \|\| \[\]\)\]/);
+  assert.match(script, /registerDroppedFiles\(chosen, kind\)/);
+  assert.doesNotMatch(script, /registerDroppedFiles\(event\.dataTransfer\.files/);
+  const preload = await fs.readFile(path.join(APP_DIR, "preload.cjs"), "utf8");
+  // 약속이 깨지면 빈 목록을 조용히 보내지 않고 그 자리에서 말한다.
+  assert.match(preload, /if \(!Array\.isArray\(files\)\) \{/);
+  assert.doesNotMatch(preload, /Array\.from\(files \|\| \[\]\)/);
+  assert.match(css, /#view-edit\.drag-over::after/);
+  // 놓은 것이 무엇이었는지 말하지 않으면 왜 안 되는지 알 길이 없다.
+  assert.match(main, /rejected\.push\(`\$\{name\}\(폴더\)`\)/);
+  assert.match(main, /파일 경로를 읽지 못했습니다/);
+  assert.match(main, /받는 형식은 \$\{kinds\} 입니다/);
+  // ffmpeg 가 읽는 컨테이너는 고르기와 놓기가 같은 목록을 쓴다.
+  assert.match(main, /const DROPPABLE = \{/);
+  assert.match(main, /"\.avi"/);
+  assert.doesNotMatch(main, /extensions: \["mp4", "mov", "mkv", "webm", "m4v"\]/);
+  // 오류가 작업 기록에만 남으면 편집 화면에서는 보이지 않는다.
+  assert.match(script, /showToast\(error\.message, "error"\);\n\s+appendEditLog/);
+});
+
+// 자르기·나누기·순서까지가 굽기 전에 정해지는 전부다. 구간을 숫자로만 정하게
+// 두면 어디를 자르는지는 머릿속에 있고, 확인은 다 구운 뒤에야 된다.
+test("편집기는 구간 막대와 나누기·복제·이어보기, 자판 길을 갖는다", async () => {
+  const [html, css, script] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+    readRendererSource(),
+  ]);
+  for (const id of ["editor-trim-track", "editor-trim-band", "editor-trim-cursor",
+    "editor-trim-in", "editor-trim-out", "editor-split", "editor-duplicate",
+    "editor-preview-all", "editor-close", "editor-add"]) {
+    assert.match(html, new RegExp(`id="${id}"`), id);
+  }
+  assert.match(css, /\.trim-handle \{/);
+  assert.match(css, /\.trim-band \{/);
+  // 담은 뒤에는 담기 상자가 아니라 모서리의 닫기 단추 하나면 된다.
+  assert.match(html, /id="editor-close"[^>]*title="영상 닫기"/);
+  assert.match(script, /function renderEditorShell\(\)/);
+  // 자판 길은 화면에도 적어 둔다. 알기 전까지만 필요한 안내다.
+  assert.match(html, /<kbd>I<\/kbd>/);
+  assert.match(html, /<kbd>S<\/kbd>/);
+  assert.match(script, /else if \(key === "s"\) \{ event\.preventDefault\(\); splitClip\(\); \}/);
+});
+
 test("확인할 부분은 영상 바로 아래에 있고, 고칠 자리와 페이지 이동은 옆 기둥이다", async () => {
   const [html, css] = await Promise.all([
     fs.readFile(path.join(renderer, "index.html"), "utf8"),

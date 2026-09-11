@@ -16,7 +16,11 @@ function fixture(cancel = async () => false) {
         toggle: (v, enabled) => enabled ? classes.add(v) : classes.delete(v) },
       append(...items) { this.children.push(...items); },
       replaceChildren(...items) { this.children = items; },
-      setAttribute() {}, removeAttribute() {}, querySelectorAll: () => [], closest() { return this; } };
+      attributes: {},
+      setAttribute(key, value) { this.attributes[key] = value; },
+      getAttribute(key) { return this.attributes[key] ?? null; },
+      removeAttribute(key) { delete this.attributes[key]; },
+      querySelectorAll: () => [], closest() { return this; } };
   };
   const $ = selector => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); };
   let calls = 0;
