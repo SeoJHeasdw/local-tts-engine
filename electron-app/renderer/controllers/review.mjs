@@ -17,6 +17,26 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   let reviewRangeEdited=false, reviewWaveWindow={start:0,end:10}, reviewWaveRequest=0;
   let regionPreviewRequest=0, regionPreviewBusy=false;
 
+  // 다시 읽히기만으로 풀리지 않는 자리를 위해 사람이 적어 주는 발음문이다.
+  // 자막·대본은 그대로 두고 읽는 말만 바꾼다.
+  function readOverrideText() {
+    return String($('#voice-override-text').value || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+  }
+
+  function setOverrideText(value, { open = false } = {}) {
+    $('#voice-override-text').value = value || '';
+    if (open) $('#voice-script-override').open = true;
+    updateOverrideState();
+  }
+
+  function updateOverrideState() {
+    const text = readOverrideText();
+    $('#voice-override-badge').classList.toggle('hidden', !text);
+    $('#voice-override-note').textContent = text
+      ? '이 말로 후보를 만듭니다. 자동 판독의 대조 원문이 없으므로 직접 듣고 고르세요.'
+      : '비워 두면 강의 대본 그대로 다시 읽습니다. 입력하면 자막·대본은 그대로 두고 읽는 말만 바꿉니다. 한국어와 영어를 함께 쓸 수 있습니다.';
+  }
+
   function readReviewRegion() {
     return {start:parseRegionTime($('#review-mute-start').value),end:parseRegionTime($('#review-mute-end').value),
       duration:Number(mediaState.voiceVideo?.durationMs)/1000 || Number(reviewPlayer.duration) || Number(mediaState.voiceVideo?.pages?.at(-1)?.endMs)/1000 || 0,
@@ -180,6 +200,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       label: name || '고른 목소리',
     });
     pendingCandidateContext = null;
+    setOverrideText('');
+    $('#voice-script-override').open = false;
     $('#review-candidates-host').classList.add('hidden');
     // 교체를 담았다면 그 페이지는 처리된 것이므로 목록에서도 내린다.
     reviewFindings
@@ -251,11 +273,29 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     return reviewFindings.filter((finding) => !clearedFindings.has(findingKey(finding)));
   }
 
+  // 확인할 곳이 여섯이면 여섯 줄이 한꺼번에 펼쳐져 사이드바를 가득 채웠고,
+  // 그 안에서 확인·재생성·사유·대본은 22픽셀 아이콘으로 밀려났다. 같은 페이지의
+  // 여러 지적은 결국 그 페이지를 한 번 다시 읽히는 한 가지 일이므로, 페이지로
+  // 묶어 접어 두고 펼친 자리에서만 버튼을 제대로 세운다.
+  let expandAll = false;
+
+  function findingGroups(findings) {
+    const groups = new Map();
+    for (const finding of findings) {
+      const number = Number(finding.slideNumber);
+      const group = groups.get(number) || { number, findings: [] };
+      group.findings.push(finding);
+      groups.set(number, group);
+    }
+    return [...groups.values()].sort((left, right) => left.number - right.number);
+  }
+
   function renderFindings() {
     const remaining = visibleFindings();
     const cleared = reviewFindings.length - remaining.length;
+    const groups = findingGroups(remaining);
     $('#review-finding-count').textContent = String(remaining.length);
-    const rows = remaining.map(renderVoiceFindingRow);
+    const rows = groups.map((group, index) => renderFindingGroup(group, index === 0 && groups.length === 1));
     if (cleared > 0) {
       const note = document.createElement('li');
       note.className = 'findings-cleared';
@@ -271,11 +311,113 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       rows.push(note);
     }
     $('#review-findings-list').replaceChildren(...rows);
+    $('#review-findings-expand').classList.toggle('hidden', groups.length < 2);
+    $('#review-findings-expand').textContent = expandAll ? '모두 접기' : '모두 펼치기';
+    $('#review-findings-expand').setAttribute('aria-expanded', String(expandAll));
     $('#review-findings-note').textContent = reviewFindings.length === 0
       ? '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
       : remaining.length === 0
         ? '확인할 항목을 모두 정리했습니다. 담아 둔 교체가 있으면 저장하세요.'
-        : '자동 검수 권장 구간입니다. 눌러서 직접 확인하세요.';
+        : `자동 검수 권장 ${remaining.length}곳 · ${groups.length}페이지입니다. 페이지를 펼쳐 듣고 확인하세요.`;
+  }
+
+  $('#review-findings-expand').addEventListener('click', () => {
+    expandAll = !expandAll;
+    renderFindings();
+  });
+
+  function pageOf(finding) {
+    return mediaState.voiceVideo?.pages?.find(page => page.number === Number(finding.slideNumber)) || null;
+  }
+
+  // 한 페이지의 지적들. 접힌 줄만 보고도 어느 페이지의 무슨 일인지 읽히도록
+  // 페이지·시각·판정만 요약에 둔다.
+  function renderFindingGroup(group, open = false) {
+    const row = document.createElement('li');
+    const worst = group.findings.some(finding => finding.severity !== 'warning') ? 'failed' : 'warning';
+    row.className = 'finding-group';
+    row.dataset.severity = worst;
+
+    const details = document.createElement('details');
+    details.open = expandAll || open;
+    const summary = document.createElement('summary');
+    const page = pageOf(group.findings[0]);
+    const at = findingSeek(group.findings[0], page);
+
+    const title = document.createElement('strong');
+    title.textContent = `${group.number}페이지`;
+    const count = document.createElement('span');
+    count.className = 'finding-count';
+    count.textContent = `${group.findings.length}곳`;
+    count.classList.toggle('hidden', group.findings.length < 2);
+    const time = document.createElement('span');
+    time.className = 'finding-time';
+    time.textContent = voiceFindingLabel(at);
+    const verdict = document.createElement('span');
+    verdict.className = 'finding-verdict';
+    verdict.textContent = worst === 'failed' ? '재생성 필요' : '청취 확인';
+    summary.append(title, count, verdict, time);
+
+    const body = document.createElement('div');
+    body.className = 'finding-body';
+    body.append(...group.findings.map(renderVoiceFindingRow));
+
+    // 버튼은 페이지 단위다. 같은 페이지의 지적 둘을 따로 재생성할 수는 없다.
+    const tools = document.createElement('div');
+    tools.className = 'finding-tools';
+    const done = document.createElement('button');
+    done.type = 'button'; done.className = 'finding-done';
+    done.textContent = group.findings.length > 1 ? '이 페이지 확인' : '확인';
+    done.title = '확인 완료로 표시';
+    done.setAttribute('aria-label', `${group.number}페이지 확인 완료로 표시`);
+    done.addEventListener('click', () => group.findings.forEach(clearFinding));
+    // 확인 항목의 대부분은 결국 그 페이지를 다시 읽히는 것으로 끝난다. 화면을
+    // 옮겨 페이지를 다시 고르는 두 걸음을 지우고 그 자리에 버튼을 둔다.
+    const again = document.createElement('button');
+    again.type = 'button'; again.className = 'finding-regenerate';
+    again.textContent = '재생성';
+    again.title = '이 페이지의 목소리를 대본 그대로 새로 만듭니다';
+    again.setAttribute('aria-label', `${group.number}페이지 목소리 재생성`);
+    again.disabled = !page;
+    again.addEventListener('click', () => regenerateFinding(group.findings[0], page));
+    // 다시 읽혀도 같은 자리에서 같게 읽히는 말이 있다. 그때는 읽을 말을 사람이
+    // 적는다. 기본은 여전히 재생성이고, 이 버튼은 그 입력칸을 여는 일만 한다.
+    const rewrite = document.createElement('button');
+    rewrite.type = 'button'; rewrite.className = 'finding-rewrite';
+    rewrite.textContent = '읽는 말 바꿔 재생성';
+    rewrite.title = '읽을 말을 직접 적어 이 페이지를 다시 만듭니다';
+    rewrite.setAttribute('aria-label', `${group.number}페이지 읽는 말 바꿔 재생성`);
+    rewrite.disabled = !page;
+    rewrite.addEventListener('click', () => rewriteFinding(group.findings[0], page));
+    tools.append(done, again, rewrite);
+    body.append(tools);
+
+    details.append(summary, body);
+    details.addEventListener('toggle', () => {
+      if (!details.open) return;
+      if (!expandAll) {
+        for (const other of $$('#review-findings-list details')) {
+          if (other !== details) other.open = false;
+        }
+      }
+      openFinding(group.findings[0], page, at);
+    });
+    row.append(details);
+    if (details.open) openFinding(group.findings[0], page, at, { seek: false });
+    return row;
+  }
+
+  // 펼치는 것과 그 자리를 듣는 것은 한 동작이다. 펼쳐 놓고 다시 눌러야
+  // 들린다면 목록은 그냥 목차일 뿐이다.
+  function openFinding(finding, page, at, { seek = true } = {}) {
+    selectReviewPage(page, voiceFindingReason(finding));
+    showFindingDiff(finding);
+    if (!seek) return;
+    // 항목의 구간은 청크 전체다. 그대로 옮기면 문단 첫머리에 떨어져 문제가 된
+    // 낱말을 다시 찾아야 한다. 낱말 시각이 있으면 그 자리로 간다.
+    seekReview(at.startMs / 1000, at.endMs / 1000);
+    setReviewRegion(at.startMs / 1000, at.endMs / 1000);
+    if (reviewMode !== 'regenerate') showReviewWave((at.startMs + at.endMs) / 2000, (at.endMs - at.startMs) / 1000 + 2);
   }
 
   function clearFinding(finding) {
@@ -290,25 +432,20 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     persistClearedFindings();
   }
 
-  // 사유는 길고 대본 문장은 더 길다. 셋을 한 줄에 나란히 두면 문장이 잘리거나
-  // 줄이 무너지므로, 짧은 것(페이지·시각)만 윗줄에 두고 문장은 아래 한 줄을
-  // 통째로 쓴다. 사유는 아이콘 툴팁으로 접는다.
+  // 판정과 사유, 그리고 걸린 낱말이 있는 문장. 접혀 있던 것을 펼친 자리이므로
+  // 사유를 아이콘 뒤에 숨기지 않고 그대로 읽힌다.
   function renderVoiceFindingRow(finding) {
-    const row = document.createElement('li');
-    row.dataset.severity = finding.severity;
+    const item = document.createElement('article');
+    item.className = 'finding-item';
+    item.dataset.severity = finding.severity;
 
-    const button = document.createElement('button');
-    button.type = 'button'; button.className = 'voice-finding';
+    const status = document.createElement('p');
+    status.className = 'finding-status';
+    status.textContent = findingStatus(finding);
 
-    const head = document.createElement('div');
-    head.className = 'finding-head';
-    const title = document.createElement('strong'); title.textContent = `${finding.slideNumber}페이지`;
-    const time = document.createElement('span');
-    time.className = 'finding-time';
-    const page = mediaState.voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
-      const at = findingSeek(finding, page);
-    time.textContent = voiceFindingLabel(at);
-    head.append(title, time);
+    const why = document.createElement('p');
+    why.className = 'finding-why';
+    why.textContent = voiceFindingReason(finding);
 
     // 대본을 통째로 말면 어느 낱말을 들어야 하는지가 오히려 묻힌다. 걸린 낱말과
     // 그 앞뒤만 짧게 보여 준다.
@@ -328,67 +465,41 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     };
     paintExcerpt();
 
-    const status = document.createElement('p'); status.className = 'finding-status';
-    status.textContent = findingStatus(finding);
-    button.append(head, status, line);
-
-    const tools = document.createElement('div');
-    tools.className = 'finding-tools';
     // 발췌는 걸린 낱말을 짚으려고 앞뒤를 잘랐다. 잘린 데가 궁금할 때를 위해
-    // 펼칠 수 있게 둔다. 항목 버튼 안에 버튼을 넣을 수는 없으므로 옆에 세운다.
+    // 펼칠 수 있게 둔다.
     const full = String(finding.expectedText || '').trim();
     const more = document.createElement('button');
     more.type = 'button';
     more.className = 'finding-more';
-    more.textContent = '⋯';
+    more.textContent = '대본 전체 보기';
     more.setAttribute('aria-expanded', 'false');
-    more.title = '대본 전체 보기';
-    more.setAttribute('aria-label', `${finding.slideNumber}페이지 대본 전체 보기`);
     more.disabled = !full;
     more.addEventListener('click', () => {
       const open = more.getAttribute('aria-expanded') !== 'true';
       more.setAttribute('aria-expanded', String(open));
-      more.title = open ? '발췌만 보기' : '대본 전체 보기';
+      more.textContent = open ? '발췌만 보기' : '대본 전체 보기';
       line.classList.toggle('full', open);
       if (open) { line.replaceChildren(); line.textContent = full; }
       else paintExcerpt();
     });
-    const why = document.createElement('span');
-    why.className = 'finding-why';
-    why.setAttribute('tabindex', '0');
-    why.setAttribute('role', 'note');
-    // 툴팁과 스크린리더가 같은 문구를 읽도록 한 값에서 낸다.
-    why.dataset.tooltip = voiceFindingReason(finding);
-    why.setAttribute('aria-label', `확인 사유: ${voiceFindingReason(finding)}`);
-    why.textContent = 'ⓘ';
-    const done = document.createElement('button');
-    done.type = 'button'; done.className = 'finding-done';
-    done.textContent = '확인';
-    done.title = '확인 완료로 표시';
-    done.setAttribute('aria-label', `${finding.slideNumber}페이지 확인 완료로 표시`);
-    done.addEventListener('click', () => clearFinding(finding));
-    // 확인 항목의 대부분은 결국 그 페이지를 다시 읽히는 것으로 끝난다. 화면을
-    // 옮겨 페이지를 다시 고르는 두 걸음을 지우고 그 자리에 버튼을 둔다.
-    const again = document.createElement('button');
-    again.type = 'button'; again.className = 'finding-regenerate';
-    again.textContent = '재생성';
-    again.title = '이 페이지의 목소리를 새로 만듭니다';
-    again.setAttribute('aria-label', `${finding.slideNumber}페이지 목소리 재생성`);
-    again.disabled = !page;
-    again.addEventListener('click', () => regenerateFinding(finding, page));
-    tools.append(why, more, done, again);
 
-    row.append(button, tools);
-    button.addEventListener('click', () => {
-      selectReviewPage(page, voiceFindingReason(finding));
-      showFindingDiff(finding);
-      // 항목의 구간은 청크 전체다. 그대로 옮기면 문단 첫머리에 떨어져 문제가 된
-      // 낱말을 다시 찾아야 한다. 낱말 시각이 있으면 그 자리로 간다.
-      seekReview(at.startMs / 1000, at.endMs / 1000);
-      setReviewRegion(at.startMs/1000,at.endMs/1000);
-      if(reviewMode!=='regenerate')showReviewWave((at.startMs+at.endMs)/2000,(at.endMs-at.startMs)/1000+2);
+    const listen = document.createElement('button');
+    listen.type = 'button';
+    listen.className = 'finding-listen';
+    listen.textContent = '이 자리 듣기';
+    const page = pageOf(finding);
+    const at = findingSeek(finding, page);
+    listen.setAttribute('aria-label', `${finding.slideNumber}페이지 ${voiceFindingLabel(at)} 듣기`);
+    listen.addEventListener('click', () => {
+      openFinding(finding, page, at);
+      playReviewRange(at.startMs / 1000, at.endMs / 1000);
     });
-    return row;
+
+    const actions = document.createElement('div');
+    actions.className = 'finding-item-actions';
+    actions.append(listen, more);
+    item.append(status, why, line, actions);
+    return item;
   }
 
   async function openReview(target, finding = null) {
@@ -433,6 +544,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#region-audio-preview').classList.add('hidden');
     $('#region-audio-name').textContent = 'WAV·M4A·MP3 파일을 선택하세요.';
     pendingCandidateContext = null;
+    setOverrideText('');
+    $('#voice-script-override').open = false;
     $('#review-candidates-host').classList.add('hidden');
     $('#review-saved').classList.add('hidden');
     pendingFixes.clear();
@@ -473,6 +586,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   }
   function selectReviewPage(page, reason = '') {
     if (!page || reviewBusy) return;
+    // 적어 둔 읽을 말은 그 페이지의 것이다. 다른 페이지로 옮기면 지운다.
+    if (reviewSelection && reviewSelection.number !== page.number) setOverrideText('');
     reviewPlayer.pause(); reviewSelection = page;
     $('#voice-start-page').value = $('#voice-end-page').value = String(page.number);
     $('#review-selection-title').textContent = `${page.number}페이지 수정`;
@@ -492,7 +607,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-result-play').textContent=reviewMode==='mute'?'무음 처리 후 듣기':'교체 후 앞뒤 듣기';
     $('#review-range-page').disabled=!mediaState.voiceVideo?.pages?.length||reviewBusy;
     $('#review-original').disabled = !reviewSelection || reviewBusy;
-    $('#start-review-label').textContent = reviewMode === 'mute' ? '선택 구간을 무음 처리한 새 버전 저장' : reviewMode === 'replace' ? '선택 구간의 음성을 교체한 새 버전 저장' : '새 목소리 후보 만들기';
+    $('#start-review-label').textContent = reviewMode === 'mute' ? '선택 구간을 무음 처리한 새 버전 저장'
+      : reviewMode === 'replace' ? '선택 구간의 음성을 교체한 새 버전 저장'
+        : readOverrideText() ? '입력한 말로 후보 만들기' : '새 목소리 후보 만들기';
     $('#review-form .review-save-note').textContent = reviewMode !== 'regenerate'
       ? '원본을 보관하고 수정본을 새 버전으로 저장합니다.' : '후보를 듣고 선택한 뒤 새 버전으로 저장합니다. 원본은 보관됩니다.';
   }
@@ -598,7 +715,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     const payload = reviewMode !== 'regenerate'
       ? {operation:reviewMode === 'replace' ? 'replace-region' : 'mute-region', name, videoToken:mediaState.voiceVideo.token, audioToken:regionAudio?.token, muteStart:region.start, muteEnd:region.end, durationPolicy:region.fit}
       : {operation:'voice-candidates', name, videoToken:mediaState.voiceVideo.token, audioSource:'generate', originalStartMs:reviewSelection.startMs, originalEndMs:reviewSelection.endMs, sourceDisplayName:mediaState.voiceVideo.name, startPage:reviewSelection.number, endPage:reviewSelection.number,
-        candidateCount:Number($('#voice-candidate-count').value), durationPolicy:$('#voice-duration-policy').value};
+        candidateCount:Number($('#voice-candidate-count').value), durationPolicy:$('#voice-duration-policy').value, overrideText:readOverrideText()};
     reviewResumeMs = reviewMode !== 'regenerate' ? Math.max(0, payload.muteStart * 1000 - 1000) : reviewSelection.startMs;
     pendingCandidateContext = {...payload};
     $("#review-candidates-host").classList.add("hidden");
@@ -617,6 +734,26 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     selectReviewPage(page, voiceFindingReason(finding));
     startReviewRepair();
   }
+
+  // 몇 번을 다시 만들어도 같게 읽히는 자리가 있다. 이 버튼은 생성을 걸지 않고
+  // 읽을 말을 적는 칸을 대본으로 채워 연다. 고쳐 적은 뒤 사람이 시작한다.
+  function rewriteFinding(finding, page) {
+    if (!page) { showToast('이 항목은 페이지 정보가 없어 재생성할 수 없습니다.', 'error'); return; }
+    if (reviewBusy) { showToast('앞선 작업이 끝난 뒤에 다시 눌러 주세요.'); return; }
+    if (reviewMode !== 'regenerate') setReviewMode('regenerate');
+    selectReviewPage(page, voiceFindingReason(finding));
+    setOverrideText(readOverrideText() || page.text || '', { open: true });
+    updateReviewAction();
+    $('#voice-override-text').focus?.();
+  }
+
+  $('#voice-override-text').addEventListener('input', () => { updateOverrideState(); updateReviewAction(); });
+  $('#voice-override-fill').addEventListener('click', () => {
+    if (!reviewSelection) { showToast('먼저 수정할 페이지를 선택해 주세요.'); return; }
+    setOverrideText(reviewSelection.text || '', { open: true });
+    updateReviewAction();
+  });
+  $('#voice-override-clear').addEventListener('click', () => { setOverrideText(''); updateReviewAction(); });
   $('#review-candidate-original').addEventListener('click', () => {
     if (pendingCandidateContext) playReviewRange(pendingCandidateContext.originalStartMs / 1000, pendingCandidateContext.originalEndMs / 1000);
   });
@@ -651,6 +788,10 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     selectReviewPage,
     currentReviewPage,
     renderVoiceFindingRow,
+    renderFindingGroup,
+    renderFindings,
+    readOverrideText,
+    setOverrideText,
     savePendingFixes,
     visibleFindings,
     clearFinding,

@@ -253,7 +253,6 @@
               <section class="review-transcript"><h3>현재 페이지 대본</h3><p id="review-script">페이지 타임라인이 있는 영상에서 대본을 볼 수 있습니다.</p></section>
             </section>
             <aside class="review-sidebar">
-              <section class="card review-findings"><h2>확인할 부분 <span id="review-finding-count">0</span></h2><p id="review-findings-note">자동 검수 결과는 참고용입니다. 아래 목록에 없어도 직접 수정할 수 있습니다.</p><ul id="review-findings-list"></ul></section>
               <form class="card" id="review-form">
                 <h2 id="review-selection-title">수정할 부분을 선택하세요</h2><p id="review-selection-reason">영상을 멈추고 ‘이 페이지 수정’을 누르세요.</p>
                 <div class="segmented" id="review-mode-tabs"><button type="button" data-repair-mode="regenerate" class="selected">페이지 재생성</button><button type="button" data-repair-mode="mute">짧은 소리 제거</button><button type="button" data-repair-mode="replace">구간 음성 교체</button></div>
@@ -261,6 +260,14 @@
                   <input id="voice-start-page" type="hidden" value="1"><input id="voice-end-page" type="hidden" value="1">
                   <p id="voice-page-meta">선택 페이지의 전체 음성을 새로 만듭니다.</p>
                   <button type="button" class="secondary-small" id="review-original">선택 페이지 원본 듣기</button>
+                  <details class="script-override" id="voice-script-override">
+                    <summary>읽는 말 바꾸기<span id="voice-override-badge" class="hidden">입력함</span></summary>
+                    <div>
+                      <label class="field full"><span>이 페이지를 이렇게 읽어 주세요</span><textarea id="voice-override-text" rows="4" maxlength="2000" placeholder="예) 주문 에이 이공구일의 환불을 요청했습니다."></textarea></label>
+                      <div class="script-override-actions"><button type="button" class="secondary-small" id="voice-override-fill">대본 그대로 가져오기</button><button type="button" class="secondary-small" id="voice-override-clear">지우기</button></div>
+                      <p id="voice-override-note">비워 두면 강의 대본 그대로 다시 읽습니다. 입력하면 자막·대본은 그대로 두고 읽는 말만 바꿉니다. 한국어와 영어를 함께 쓸 수 있습니다.</p>
+                    </div>
+                  </details>
                   <details class="advanced-options"><summary>후보·길이 설정</summary><div><label class="field"><span>비교할 후보 수</span><input id="voice-candidate-count" type="number" min="2" max="8" value="3"></label><label class="field"><span>길이가 달라질 때</span><select id="voice-duration-policy"><option value="match-audio">새 음성 길이에 화면 맞춤</option><option value="keep-video">화면 길이 유지</option></select></label><p>기존 길이보다 긴 음성은 자르지 않고 적용을 멈춥니다. 새 음성 길이에 화면 맞춤을 선택하세요.</p></div></details>
                 </div>
                 <div id="review-mute-panel" class="hidden">
@@ -284,6 +291,10 @@
                 <button class="primary-button full" id="start-review-button" type="submit" disabled><span id="start-review-label">새 목소리 후보 만들기</span><span>→</span></button>
                 <p class="review-save-note">후보를 듣고 선택한 뒤 새 버전으로 저장합니다. 원본은 보관됩니다.</p>
               </form>
+              <section class="card review-findings" id="review-findings">
+                <div class="findings-head"><h2>확인할 부분 <span id="review-finding-count">0</span></h2><button type="button" class="secondary-small" id="review-findings-expand" aria-expanded="false">모두 펼치기</button></div>
+                <p id="review-findings-note">자동 검수 결과는 참고용입니다. 아래 목록에 없어도 직접 수정할 수 있습니다.</p><ul id="review-findings-list"></ul>
+              </section>
             </aside>
           </div>
           <section class="card hidden" id="review-candidates-host"><h2>원본과 비교하고 후보 선택</h2><p id="review-candidate-scope"></p><div id="review-candidate-actions"><button type="button" class="secondary-small" id="review-candidate-original">이 후보의 원본 페이지 듣기</button></div></section>

@@ -249,26 +249,33 @@ test('다른 영상을 열면 앞 영상의 표시가 따라가지 않는다', (
   assert.equal(context.testReview.cleared().size,0);
 });
 
-test('실제 L04 행은 누락 구절·미해결 횟수를 보이고 해당 문장부터 재생한다', async () => {
+test('실제 L04 항목은 누락 구절·미해결 횟수를 보이고 해당 문장부터 재생한다', async () => {
   const {finding,page}=JSON.parse(await fs.readFile(new URL('../fixtures/ch02-l04-omission.json',import.meta.url),'utf8'));
   const {context,$}=fixture();
   context.testReview.setReviewVideo({token:'l04',name:'L04.mp4',videoUrl:'file:///l04.mp4',pages:[{...page,text:finding.expectedText,slideId:'defaults-org-now'}],voiceFindings:[finding]});
-  const row=context.testReview.renderVoiceFindingRow(finding);
-  const button=row.children[0];
-  assert.equal(button.children[1].textContent,'재생성 필요 · 구절 누락 의심 · 4회 생성 후 미해결');
-  assert.equal(button.children[2].children[1].textContent,'다음 요청에서는 개발자 지시와 도구를');
-  button.listeners.click();
+  const item=context.testReview.renderVoiceFindingRow(finding);
+  const [status,,line]=item.children;
+  assert.equal(status.textContent,'재생성 필요 · 구절 누락 의심 · 4회 생성 후 미해결');
+  assert.equal(line.children[1].textContent,'다음 요청에서는 개발자 지시와 도구를');
+
+  // 펼치는 것과 그 자리를 듣는 것은 한 동작이다.
+  const row=context.testReview.renderFindingGroup({number:Number(finding.slideNumber),findings:[finding]});
+  const details=row.children[0];
+  details.open=true;
+  details.listeners.toggle();
   assert.equal($('#review-player').currentTime,290.055);
   assert.match($('#polish-diff-note').textContent,/구절 누락 의심 · 4회 생성 후 미해결/);
 });
 
 test('확인 항목의 재생성은 그 페이지로 후보 생성을 바로 건다', async () => {
   const {context,$,calls,modes,findings}=fixture();
-  const row=context.testReview.renderVoiceFindingRow(findings[1]);
-  // 확인 다음에 재생성이 선다. 넘어가기와 다시 만들기가 나란히 있어야 한다.
-  const [,,done,again]=row.children[1].children;
+  const row=context.testReview.renderFindingGroup({number:2,findings:[findings[1]]});
+  // 넘어가기와 다시 만들기, 그리고 읽는 말 고치기가 한 줄에 나란히 선다.
+  const tools=row.children[0].children[1].children.at(-1);
+  const [done,again,rewrite]=tools.children;
   assert.equal(done.textContent,'확인');
   assert.equal(again.textContent,'재생성');
+  assert.equal(rewrite.textContent,'읽는 말 바꿔 재생성');
   await again.listeners.click();
   assert.equal(calls.length,1);
   assert.equal(calls[0].operation,'voice-candidates');
@@ -355,4 +362,42 @@ test('교체 전 미리듣기는 길이 정책을 넘기며 아직 편집본을 
   assert.equal(requests[0].mode,'replace');assert.equal(requests[0].durationPolicy,'match-audio');
   assert.equal($('#review-preview-player').src,'file:///after.wav');assert.equal(calls.length,0);
   assert.match($('#review-preview-note').textContent,/아직 저장하지 않았습니다/);
+});
+
+
+test('읽는 말을 적으면 그 말로 후보를 만들고, 누르기만 해서는 생성하지 않는다', async () => {
+  // 몇 번을 다시 만들어도 같게 읽히는 자리가 있다. 그때는 사람이 읽을 말을 적는다.
+  const {context,$,calls,findings,page2}=fixture();
+  const row=context.testReview.renderFindingGroup({number:2,findings:[findings[1]]});
+  const [,,rewrite]=row.children[0].children[1].children.at(-1).children;
+
+  rewrite.listeners.click();
+  assert.equal(calls.length,0,'입력칸만 열고 생성을 걸지는 않는다');
+  assert.equal($('#voice-override-text').value,page2.text,'대본을 그대로 채워 고쳐 쓰게 한다');
+  assert.equal($('#voice-script-override').open,true);
+
+  $('#voice-override-text').value='주문 에이 이공구일의 환불';
+  $('#voice-override-text').listeners.input();
+  assert.equal($('#start-review-label').textContent,'입력한 말로 후보 만들기');
+
+  $('#review-form').listeners.submit({preventDefault(){}});
+  await Promise.resolve();
+  assert.equal(calls.at(-1).operation,'voice-candidates');
+  assert.equal(calls.at(-1).overrideText,'주문 에이 이공구일의 환불');
+  assert.equal(calls.at(-1).startPage,2);
+});
+
+test('적어 둔 읽는 말은 그 페이지에만 쓰인다', async () => {
+  const {context,$,calls,page1}=fixture();
+  $('#review-player').currentTime=35;
+  $('#review-select-page').listeners.click();
+  $('#voice-override-text').value='이 페이지에만 쓰는 말';
+  $('#voice-override-text').listeners.input();
+
+  context.testReview.selectReviewPage(page1);
+
+  assert.equal($('#voice-override-text').value,'','다른 페이지로 옮기면 앞 페이지의 말을 물려주지 않는다');
+  $('#review-form').listeners.submit({preventDefault(){}});
+  await Promise.resolve();
+  assert.equal(calls.at(-1).overrideText,'');
 });

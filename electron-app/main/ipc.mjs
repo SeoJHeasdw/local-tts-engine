@@ -288,8 +288,14 @@ export function createIpcService({
         adapterScale: Number(rawOptions.adapterScale ?? 0.6),
         startPage: Number(rawOptions.startPage ?? 1),
         endPage: Number(rawOptions.endPage ?? rawOptions.startPage ?? 1),
+        // 사람이 적어 준 읽을 말. 비어 있으면 대본을 그대로 다시 읽는다.
+        overrideText: typeof rawOptions.overrideText === "string"
+          ? rawOptions.overrideText.replace(/\s+/g, " ").trim().slice(0, 2000) : "",
       };
       options = applyVoiceSettings(options, settings);
+      if (options.overrideText && !(operation === "voice-candidates" && options.audioSource === "generate")) {
+        throw new Error("읽을 말을 직접 적는 것은 페이지 재생성에서만 사용할 수 있습니다.");
+      }
       if (["voice", "voice-candidates"].includes(operation) && options.audioSource === "generate") {
         const catalog = await loadCatalog(studio);
         const ranges = Array.isArray(options.videoItems) && options.videoItems.length

@@ -601,7 +601,8 @@ function handleEditEvent(event) {
     renderVoiceCandidates(event.candidates);
     if (event.options) review.pendingCandidateContext = { ...event.options };
     $('#review-candidates-host').classList.remove('hidden');
-    $('#review-candidate-scope').textContent = `${review.pendingCandidateContext?.sourceDisplayName || ''} · ${review.pendingCandidateContext?.startPage || ''}페이지 전체 음성을 교체합니다.`;
+    const spoken = review.pendingCandidateContext?.overrideText;
+    $('#review-candidate-scope').textContent = `${review.pendingCandidateContext?.sourceDisplayName || ''} · ${review.pendingCandidateContext?.startPage || ''}페이지 전체 음성을 교체합니다.${spoken ? ` 입력한 말: “${spoken}”` : ''}`;
     $('#review-candidates-host').insertBefore($('#candidate-gallery'), $('#review-candidate-actions'));
     $('#review-candidate-actions').append($('#apply-voice-candidate'));
     $('#edit-job-dialog').close();

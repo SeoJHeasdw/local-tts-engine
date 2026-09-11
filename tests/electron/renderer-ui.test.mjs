@@ -133,19 +133,17 @@ test("완성 영상은 자기 타임라인을 데리고 발행된다", async () 
 });
 
 
-test("확인할 부분에서 바로, 몇 번이고 다시 읽힐 수 있다", async () => {
-  const [script, css] = await Promise.all([
-    readRendererSource(),
+test("확인할 부분은 고칠 자리 아래에 접혀 있고, 읽는 말을 적을 칸을 갖는다", async () => {
+  const [html, css] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
     fs.readFile(path.join(renderer, "styles.css"), "utf8"),
   ]);
-  assert.match(script, /again\.className = 'finding-regenerate'/);
-  assert.match(script, /tools\.append\(why, more, done, again\)/);
-  // 한 번 쓰고 사라지는 버튼이 아니다. 제출 경로를 공유하므로 후보가 별로면
-  // 그 자리에서 또 누르면 된다.
-  assert.match(script, /function startReviewRepair\(\)/);
-  assert.match(script, /\$\('#review-form'\)\.addEventListener\('submit', event => \{ event\.preventDefault\(\); return startReviewRepair\(\); \}\)/);
-  assert.match(script, /again\.addEventListener\('click', \(\) => regenerateFinding\(finding, page\)\)/);
-  assert.match(css, /\.finding-regenerate \{/);
+  // 고칠 자리가 먼저고 확인 목록이 그 아래다. 목록이 길어져도 고치는 칸을
+  // 찾으러 스크롤하지 않는다. 동작은 renderer-review 검사가 맡는다.
+  assert.ok(html.indexOf('id="review-form"') < html.indexOf('id="review-findings"'));
+  assert.match(html, /id="voice-override-text"/);
+  assert.match(css, /\.finding-group \{/);
+  assert.match(css, /\.script-override \{/);
 });
 
 
