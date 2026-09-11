@@ -84,12 +84,12 @@ def test_missing_counter_spacing_is_repaired() -> None:
     assert {item["rule"] for item in report["checks"]} == {"counter-spacing"}
 
 
-def test_an_unmapped_letter_number_identifier_requires_an_explicit_reading() -> None:
+def test_an_unmapped_letter_number_identifier_is_marked_for_later_review() -> None:
     report = korean_naturalness_preflight("주문 B-3099와 B3099를 조회합니다")
 
     assert report["warnings"] == [
-        "B-3099: 영문·숫자 식별자의 읽기를 발음 사전에 지정하세요.",
-        "B3099: 영문·숫자 식별자의 읽기를 발음 사전에 지정하세요.",
+        "B-3099: 발음 사전 미등록 — 제작 후 읽기 확인",
+        "B3099: 발음 사전 미등록 — 제작 후 읽기 확인",
     ]
 
 

@@ -517,6 +517,11 @@ button:disabled { cursor: not-allowed; }
   box-shadow: 0 0 0 10px var(--lime-wash);
 }
 .complete-actions { display: flex; gap: var(--s2); margin-top: var(--s5); }
+.complete-panel.has-failures .complete-icon { background: var(--warn-wash); color: var(--warn); box-shadow: none; }
+.job-failure-note { color: var(--danger); font-size: var(--fs-xs); }
+.unit-failures { width: 100%; margin-top: var(--s4); padding: var(--s3); text-align: left;
+  white-space: pre-line; overflow-wrap: anywhere; color: var(--danger);
+  border: 1px solid var(--line); border-radius: var(--r-md); font-size: var(--fs-sm); }
 
 /* 목소리 확인 구간 */
 .voice-quality-panel {
@@ -1281,7 +1286,7 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
    제작 진행 — 몇 번째 편인지와 남은 시간
    ========================================================================== */
 .now-making { flex-wrap: wrap; }
-.job-pace { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+.job-pace { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
 .job-unit {
   padding: var(--s1) var(--s2); border-radius: var(--r-full);
   background: var(--lime-soft); color: var(--lime);
@@ -1301,6 +1306,17 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
 }
 .batch-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
 .batch-eta { color: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.eta-calculating { display: inline-flex; align-items: center; gap: 6px; }
+.eta-calculating::before {
+  content: ""; width: 11px; height: 11px; flex: 0 0 11px;
+  border: 1.5px solid var(--line-2); border-top-color: currentColor;
+  border-radius: 50%; animation: eta-spin 0.9s linear infinite;
+}
+@keyframes eta-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .eta-calculating::before { animation: none; }
+}
 
 /* ============================================================================
    영상 편집 — 클립 타임라인

@@ -1,371 +1,100 @@
-# 결정 기록
+# 승인·라이선스 근거
 
-아래는 각 날짜의 판단 근거다. 현재 실행·승인 상태는 HANDOFF와 AGENTS가 정본이며,
-과거의 미결·다음 작업을 현재 지시로 실행하지 않는다.
+현재 동작은 [QUALITY](QUALITY.md)와 [ARCHITECTURE](ARCHITECTURE.md)를 따른다.
+여기에는 채택·기각을 유지해야 할 이유와 당시 확인 출처만 남긴다. 아래 날짜의
+라이선스 확인 기록은 최신 재검증을 의미하지 않는다.
 
-## 2026-09-10 — 지정한 영어 용어는 거리가 아니라 표기 목록으로 검수한다
+## 로컬 제작과 음성 선택
 
-- 문제: 문장 안에 영어 철자로 넣는 용어(`inline`)의 검수는 지정 발음 관문
-  하나뿐인데, 그 관문이 네 음절짜리 용어의 자모 하나를 통째로 삼켰다.
-  `Anthropic`(앤스로픽, 10자모)에서 받아쓰기 `안쓰로픽`은 거리 0.100으로
-  `PRONUNCIATION_MATCH_DISTANCE = 0.15` 아래라 **아무 표시 없이 통과**했다.
-  이 강의 실제 받아쓰기에서 9번 그렇게 지나갔다.
-- 왜 문턱으로는 못 고치는가: 같은 받아쓰기에 정상 표기 `엔트로픽`(θ를 트로 적음)
-  도 정확히 0.100으로 있다. 정상과 오독이 같은 거리에 있으므로 어떤 값으로
-  내리거나 올려도 둘을 가르지 못한다. 갈리는 것은 거리가 아니라 **어느 자모가
-  다른가**다 — 첫 모음(ㅐ/ㅏ)은 다른 낱말이고, θ의 스/트는 같은 소리다.
-- 결정: `comparisonReading`을 가진 항목은 **선언한 표기에만** 통과를 준다.
-  받아들일 다른 표기는 `comparisonVariants`에 적는다. 선언이 없는 항목은 지금
-  관문 그대로다.
-- 변형은 미리 넣지 않는다. 사용자가 2026-09-10에 "틀린 표기가 나와도 내가
-  체크해보면 되는 거 아냐? 그래서 확인·재생성을 만든 거고"라고 정했다. θ를 트로
-  적은 `엔트로픽`이 받아쓰기 표기차인지 실제로 T로 읽은 것인지는 귀로만 갈리므로,
-  미리 받아주지 않고 확인 항목으로 올린다. 들어 보고 정상이면 그 항목의
-  `comparisonVariants`에 한 줄 넣는다 — 경고에 들린 표기가 함께 적히므로 무엇을
-  넣을지는 읽는 순간 정해진다.
-- [기존 관문 원칙](QUALITY.md#검수-관문을-유지하는-근거)과의 관계: 원칙은 "관문을 조이지 않는다"이고 그 값은 **하나도 바꾸지
-  않았다**. 다만 기존 관문 원칙의 표는 자모 하나 차이를 일괄로 '사람 말투'로 놓는데,
-  사용자가 2026-09-10에 `안th로픽`을 오독으로 지적했다. 그래서 기존 관문 원칙이 스스로
-  제시한 처방("잡히지 않는 자모 하나짜리 차이는 사전의 표기를 바꿔서 다룬다")을
-  따라, 판단을 문턱이 아니라 사전 항목이 지게 했다. 적용 범위는 읽는 법을 직접
-  정한 영어 용어 9개뿐이고, 기존 관문 원칙이 다룬 한국어 음차 232개는 그대로다.
-- 되돌리는 법: 어떤 표기가 사실 자연스러운 발화였다면 전역 문턱을 푸는 대신
-  그 항목의 `comparisonVariants`에 한 줄 넣는다. 경고에 들린 표기가 함께
-  적히므로 무엇을 넣을지는 읽는 순간 정해진다.
-- 과거 기록 3,090건 재판정: 바뀐 판정은 `Anthropic` 23건(통과 → 경고)이다.
-  들린 표기는 `안쓰로픽` 9건(오독)과 `엔트로픽` 14건(귀로 판단할 것)이다.
-  `앤트로픽`을 미리 허용하면 9건만 남지만, 위 결정에 따라 둘 다 올린다.
+| 날짜 | 결정과 이유 |
+| --- | --- |
+| 2026-08-23 | 보유한 M4 Max에서 반복 수정 비용과 음성 비공개를 위해 로컬 제작 선택. Qwen3-TTS가 Chatterbox보다 낫다는 사용자 A/B 청취로 Qwen 채택 |
+| 2026-08-25 | `jaeho-ko-r16-v1` LoRA 채택. 1.00의 발화 노이즈·과한 학습 흔적을 줄이고 장시간 청취에 적합했던 0.60 선택 |
+| 2026-08-26 | 개인 음성 원본·정제본을 `data/private/voice/`로 이관하고 복사 전후 동일성 확인. 덱의 예전 음성은 복구용 사본으로 유지 |
+| 2026-08-26 | 앱의 새 제작은 TTS·정렬·촬영 캐시 우회. 독립 CLI 캐시는 유지 |
+| 2026-09-08 | 추가 강도 비교 후에도 제작값 0.60 유지 |
+| 2026-09-09 | 영어 인용문은 비교 5번 `english-speaker-only-v1` 채택: LoRA 미적용, 본인 목소리 특징만 참조, English, 참조 전사 없음 |
 
+LoRA 학습은 승인한 92클립·12.252분 중 train 82개로 수행했다. rank 16, learning
+rate 2e-5, batch 1, gradient accumulation 4, 60 optimizer step이었다. 평균 손실
+1.0072, 학습 35.3초, peak Metal 7.235GB, 어댑터 약 67MB를 기록했고 재로딩·청취를
+확인했다. 이 수치는 과거 실행 근거이며 재학습 지시나 일반 성능 보증이 아니다.
 
-## 2026-08-23 — 로컬 우선
+## 영어 문장과 용어의 청취 선택
 
-- 결정: 로컬 TTS 파일럿을 먼저 수행한다.
-- 이유: 전체 대본은 157,838자이며 반복 수정이 예상된다. M4 Max 36GB를 이미
-  보유해 로컬 추론의 경제성이 높다.
-- 검증 후보: Qwen3-TTS 1.7B Base, Chatterbox Multilingual V3.
-- 미결: 실제 한국어 품질, 음색 유사도, 장문 안정성, 생성 성능.
+영어 문장 5번에 대한 승인을 개별 영어 단어 분리 합성으로 확대하지 않는다.
+2026-09-09 Observation, Anthropic, Authentication/Authorization, permission denied의
+단어별 전환 샘플 네 개는 모두 거절됐다. 실험·거절 구현은
+`output/reviews/2026-09-09/selected-english-terms/`에 보존돼 있다.
 
-## 2026-08-23 — 데이터는 외부 정본 참조 (2026-08-26에 대체됨)
+2026-09-10 한국어 문장 전체에 영어 철자를 넣은 Observation 0.60·0.20은 모두
+승인됐고 기존 0.60을 유지했다. 표본은
+`unsplit-english-term/comparison-20260909-235104-467862`다. 후속 선별 용어 기록은
+`output/reviews/2026-09-10/unsplit-remaining-terms/`에 있다.
 
-- 결정: 713MB 음성 폴더를 새 저장소에 중복 복사하지 않는다.
-- 이유: 원본 훼손과 중복 데이터 불일치를 피한다.
-- 정본: `/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/voice/`.
+| 용어 | 사용자 선택 |
+| --- | --- |
+| Observation, Anthropic, permission denied 및 붙임·밑줄 별칭 | 영어 철자를 한국어 문장 안에 유지하는 0.60 방식 채택 |
+| Artificial Analysis, Intelligence Index, Boris Cherny, Y Combinator | 같은 전체 문장 방식 채택 |
+| Authentication, Authorization | 새 방식 보류, 기존 한글 읽기 유지 |
+| Attention Budget, knowledge cutoff | 새 방식 불채택, 기존 한글 읽기 유지 |
 
-이후 모델, 라이선스, 음성 프로필, 연동 방식이 확정될 때 이 파일에 날짜와
-근거를 추가한다.
+CH01·CH02의 해당 문장은 최신 수정본에서 이어 보정했다. CH01 첫 Anthropic은
+영어 철자 0.60, CH02 L04의 후속 한 문장은 사용자가 고른 `앤쓰로픽` 후보다.
+L04 선택을 전역 사전으로 확대하지 않는다. 결과·청취 기록 위치는 [HANDOFF](HANDOFF.md)에 있다.
 
-## 2026-08-26 — 제작 자산을 local-tts-engine으로 이관
+미국식 발음은 청취 목표다. 영어 억양·강세·음색이나 모든 문맥의 품질을 자동 검사가
+보증하지 않는다. 선택 당시 참조:
+[Base voice clone 설명](https://github.com/QwenLM/Qwen3-TTS#voice-clone) (2026-09-09),
+[Cambridge Anthropic 발음](https://dictionary.cambridge.org/us/pronunciation/english/anthropic) (2026-09-10).
 
-- 사용자 결정에 따라 개인 음성 원본과 정제본 20개(약 688MB)를
-  `data/private/voice/`로 복사하고 원본과 차이가 없음을 `rsync` 검증으로
-  확인했다. 이후 이 경로를 불변 정본으로 사용한다.
-- 기존 `udemy-agent/deck/voice/`는 즉시 삭제하지 않고 복구용 사본으로 남겼다.
-- 기존 자막·타임라인·오디오 약 191MB는
-  `artifacts/production/captions/`, 완성 MP4 2개 약 114MB는
-  `artifacts/production/videos/`로 이관했다. 중간 WebM 원본은 이관하지 않았다.
-- 강의 대본과 슬라이드 UI, 캡처 실행 코드는 계속 `udemy-agent`에 둔다.
-- 앱의 모든 경로는 `artifacts/app-settings.json`에 저장하며 설정 화면에서
-  바꿀 수 있다.
+## 검수 정책의 근거
 
-## 2026-08-26 — 텍스트 다중 후보와 앱 영상 캐시 우회
+| 날짜 | 결정과 근거 |
+| --- | --- |
+| 2026-08-24 | 스텝별 독립 생성과 글자 수 비례 자막의 끊김·시각 오차를 줄이기 위해 의미 단위 청킹과 실제 단어 정렬 채택 |
+| 2026-09-03 | Qwen과 같은 계열의 자기평가 대신 독립 Whisper 판독 채택. 같은 계열의 발음 편향 공유를 피함 |
+| 2026-09-03 | 철자가 아닌 자모 발음 공간에서 비교. `27B` 같은 ASR 표기차를 실제 오독과 구분 |
+| 2026-09-03~04 | 숫자·단위의 읽기를 TTS 전에 정규화. Whisper는 `열 개`와 `십 개`를 모두 `10개`로 적을 수 있어 자연스러움 판단을 대신할 수 없음. 승인 예외 `50개 → 오십 개` 유지 |
+| 2026-09-10 | `comparisonReading`이 있는 영어 용어는 선언 표기와 승인된 `comparisonVariants`로 검사. 전역 거리 문턱은 유지 |
+| 2026-09-11 | 사전 누락으로 제작을 중단하거나 제작 중 발음 승인을 요구하지 않음. 완성 후 기존 확인·페이지 재생성 기능 사용 |
+| 2026-09-11 | 레슨 분할 제작은 개별 실패 후 나머지를 계속하고 완료·실패 결과를 나눠 기록. 사용자 중지·공통 입력 오류는 전체 중단 |
 
-- 임의 텍스트를 2~8개의 서로 다른 시드로 생성하고, 최대 2개씩 병렬 처리해
-  사용자가 직접 듣고 하나를 `selected.wav`로 고르는 기능을 추가했다.
-- 독립 CLI의 캐시는 호환성을 위해 유지한다. Electron 앱의 강의 제작과 영상
-  목소리 재생성은 `--no-cache`를 전달해 TTS 클립과 강제 정렬 결과를 읽지 않는다.
-- Playwright 캡처도 Chromium HTTP 캐시 비활성화, no-cache 헤더와 매 실행
-  cache-busting URL을 사용한다.
+Anthropic의 `안쓰로픽`과 `엔트로픽`은 모두 거리 0.100으로 문턱 0.15만으로
+가려지지 않았다. 과거 3,090건 재판정에서 Anthropic 23건(안쓰로픽 9, 엔트로픽 14)을
+확인 대상으로 올렸다. 두 표기 모두 미리 허용하지 않으며 사용자 청취 후 변형을
+추가한다. 현재 관문·측정·한계는 [QUALITY](QUALITY.md#검수-관문을-유지하는-근거)에 있다.
 
-## 2026-08-23 — 첫 로컬 A/B 후보와 라이선스 재검증
+2026-09-11 사용자가 지정한 번호 읽기는 `B-3102 → 비 삼일공이`, `R-042 → 알 공사이`다.
+이는 읽기 지정이며 새 합성의 청취 승인과는 별개다. 다른 미등록 용어를 자동으로
+사전에 등록하지 않는다. 이 결정은 음성 기본값·자동 검수·재시도 예산을 바꾸지 않는다.
 
-- 결정: Qwen3-TTS 1.7B Base BF16과 Chatterbox Multilingual V3를 같은
-  참조 음성·대본으로 먼저 비교한다. 최종 모델은 사용자 청취 뒤에만 고른다.
-- Qwen 근거: 2026-01-22 공개, 한국어 및 zero-shot 복제 지원, Apache-2.0.
-  - https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base
-- Chatterbox 근거: Multilingual V3는 한국어 포함 23개 언어를 지원하고 이전
-  버전보다 음색 유사도와 환각 억제를 개선했으며, 모델과 코드가 MIT다.
-  - https://huggingface.co/ResembleAI/chatterbox
-  - https://huggingface.co/mlx-community/chatterbox-multilingual-v3
-- MLX-Audio 근거: Apple Silicon용 Qwen3-TTS voice cloning과 Chatterbox V3
-  실행 경로를 공식 문서에서 확인했다. 설치 버전은 0.5.0이다.
-  - https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/qwen3-tts.md
-  - https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/chatterbox.md
+## 모델·코드 라이선스 확인 기록
 
-## 2026-08-23 — Fish Audio는 첫 로컬 상업 후보에서 제외
+| 확인일 | 대상·당시 판단 | 출처 |
+| --- | --- | --- |
+| 2026-08-23, 09-03, 09-09 | Qwen3-TTS 1.7B Base: Apache-2.0, 제작 채택 | [모델 카드](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base), [공식 저장소](https://github.com/QwenLM/Qwen3-TTS) |
+| 2026-08-23, 09-03 | MLX-Audio 0.5.0: MIT, Apple Silicon 추론 | [라이선스](https://github.com/Blaizzy/mlx-audio/blob/main/LICENSE), [Qwen 문서](https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/qwen3-tts.md) |
+| 2026-08-23 | Chatterbox Multilingual V3: MIT. 비교 후 제작에서 제외 | [원본](https://huggingface.co/ResembleAI/chatterbox), [MLX 모델](https://huggingface.co/mlx-community/chatterbox-multilingual-v3), [MLX 문서](https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/chatterbox.md) |
+| 2026-08-24 | Qwen3-ForcedAligner 0.6B: Apache-2.0, 단어 정렬 채택 | [원본](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B), [MLX 8-bit](https://huggingface.co/mlx-community/Qwen3-ForcedAligner-0.6B-8bit) |
+| 2026-08-25 | MLX-Tune 0.6.0: Apache-2.0, `.venv-train`에서 LoRA 학습 | [저장소](https://github.com/ARahim3/mlx-tune), [Qwen 학습 예제](https://github.com/ARahim3/mlx-tune/blob/main/examples/20_qwen3_tts_finetuning.py) |
+| 2026-09-03 | Whisper 원본 코드·가중치: MIT. 독립 검수에 MLX FP16 변환 모델 사용 | [Whisper 라이선스](https://github.com/openai/whisper/blob/main/LICENSE), [변환 모델](https://huggingface.co/mlx-community/whisper-large-v3-turbo-asr-fp16) |
+| 2026-08-23 | Fish S2 Pro: 상업 이용에 별도 서면 라이선스 필요, 후보 제외. S2.1 Pro 클라우드 경로도 로컬·비공개 목표와 맞지 않아 제외 | [S2 Pro 라이선스](https://huggingface.co/fishaudio/s2-pro/blob/main/LICENSE.md), [S2.1 당시 안내](https://fish.audio/blog/s2-1-pro-free-api/) |
 
-- S2.1 Pro는 2026-06-23 공개된 Fish Audio의 최신 모델이지만 현재 공식 사용
-  경로는 클라우드 API이며, 공개 글은 요청 데이터 보관 가능성과 기간 한정 무료
-  제공을 명시한다. 로컬 우선·개인 음성 비공개 목표와 맞지 않는다.
-  - https://fish.audio/blog/s2-1-pro-free-api/
-- 로컬 공개 가중치는 S2 Pro다. 한국어와 zero-shot 복제를 지원하지만 Fish Audio
-  Research License는 상업적 이용에 별도 서면 라이선스를 요구한다. 이번 결과는
-  유료 강의에 사용될 예정이므로 라이선스 확보 전에는 생성 후보로 넣지 않는다.
-  - https://huggingface.co/fishaudio/s2-pro
-  - https://huggingface.co/fishaudio/s2-pro/blob/main/LICENSE.md
+MLX-Tune LoRA는 Qwen의 공식 CUDA 전체 SFT와 다른 경로다.
+[공식 학습 문서](https://github.com/QwenLM/Qwen3-TTS/blob/main/finetuning/README.md)는
+2026-08-25 비교 근거이며, 이미 완료된 학습을 다시 시작하라는 지시가 아니다.
 
-## 2026-08-23 — Qwen3-TTS를 로컬 기준 모델로 선택
+## 고객 배포 경계
 
-- 사용자 A/B 청취 결과 Qwen3-TTS 1.7B Base BF16이 Chatterbox Multilingual
-  V3보다 확실히 낫다고 판정했다. Chatterbox는 후속 파일럿에서 제외한다.
-- Confucius4-TTS는 사용자가 별도로 조사하며, 현재 로컬 제작 기준선은
-  Qwen3-TTS로 고정한다.
-- 강의 시작부터 실제 음성 10분 1.14초를 생성했다. CH00과 CH01 초반의
-  19개 화면·66개 스텝·4,661자를 포함하며, 로컬 ASR 대조 유사도는 97.11%,
-  2초 이상 비정상 무음은 없었다. 장문 사용 승인은 사용자 청취 뒤에만 한다.
+2026-09-03 판단: 현재는 개인 로컬 도구다. 고객 배포 시 개인 어댑터·학습 데이터·
+참조 음성을 포함하지 않으며 고객의 음성 권리 확인과 별도 입력 계약이 필요하다.
 
-## 2026-08-24 — 강의용 연속 호흡·강제 정렬 파이프라인
+당시 FFmpeg 8.1.1은 GPL/libx264 구성으로 확인했고 현재 환경 진단은 nonfree 기능도
+확인한다. 로컬 사용 바이너리를 고객 앱에 그대로 묶지 않는다. 배포 전 코덱·고지·
+소스 제공 조건을 다시 검토한다. [FFmpeg 법적 안내](https://ffmpeg.org/legal.html).
 
-- 사용자 리뷰에서 스텝·슬라이드 전환 시 간헐적인 끊김, `똑-같이`처럼 늘어지는
-  운율, 약 1초 빠른 자막이 발견됐다. Qwen 모델만의 문제가 아니라 스텝별 독립
-  생성, 고정 무음, 글자 수 비례 자막, 브라우저 녹화 시작시각 추정이 겹친
-  파이프라인 문제로 판정했다.
-- 같은 슬라이드의 2~4개 스텝을 최대 300자까지 한 번에 생성한다. 강의 생성은
-  temperature 0.75, top_p 0.95로 낮춰 이상 운율의 재발 가능성을 줄인다.
-- 생성 클립의 앞뒤 무음을 정리하고 24ms 경계 페이드를 적용한다. 클립 경계는
-  같은 슬라이드 200ms, 슬라이드 사이 350ms다. 내부 무음은 700ms를 넘는
-  이상치만 480ms로 줄여 일반적인 호흡은 보존한다.
-- 발음용 문장과 자막 원문을 계속 분리한다. `똑같이`는 로컬 발음 사전에서
-  `똑까치`로만 치환하고 화면 자막은 원문을 유지한다.
-- 실제 자막과 화면 전환 시각은 Qwen3-ForcedAligner 0.6B 8-bit의 단어 단위
-  정렬 결과를 사용한다. 모델은 Apache-2.0이며 MLX 캐시 용량은 약 1.28GB다.
-  - https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B
-  - https://huggingface.co/mlx-community/Qwen3-ForcedAligner-0.6B-8bit
-- Playwright 녹화는 벽시계 차이로 자르지 않는다. 캡처 직전 흰색 동기 프레임을
-  기록하고 원본 WebM에서 해당 프레임의 종료 PTS를 찾아 정확히 자른다.
-
-## 2026-08-24 — 수정 파이프라인 5분 리뷰본
-
-- 최종 리뷰본은 CH00 시작 9개 화면·36개 스텝·2,396자를 13개 연속 호흡
-  클립으로 생성했다. 길이는 의미 단위를 자르지 않은 4분 50.045초다.
-- 첫 음성은 0.974초, 첫 자막은 0.920초이며 60ms의 자막 선행 표시만 둔다.
-  시작 여백을 제외하면 700ms 이상 무음은 없다.
-- 영상은 H.264 1920×1080 25fps, 음성은 AAC 48kHz mono다. 영상과 음성
-  스트림 길이 차이는 5ms다.
-- 사용자 청취 승인 전에는 전체 강의로 확장하지 않는다.
-
-## 2026-08-25 — 파인튜닝은 데이터 준비와 학습을 분리
-
-- Qwen 공식 경로는 12Hz 1.7B/0.6B Base의 단일 화자 전체 SFT이며,
-  `audio`·`text`·동일한 `ref_audio`가 든 JSONL과 CUDA를 요구한다.
-  - https://github.com/QwenLM/Qwen3-TTS/blob/main/finetuning/README.md
-- 현재 사용 중인 MLX-Audio 0.5.0에는 공식 학습 경로가 없다. Apple Silicon용
-  Qwen3-TTS LoRA 구현은 별도 실험 프로젝트에 있으나 실제 학습 백엔드로 아직
-  채택하지 않았다.
-  - https://github.com/Blaizzy/mlx-audio
-  - https://github.com/akashicMarga/mlx-audio-train
-- 결정: 먼저 53분 정본을 읽기 전용으로 유지하면서 3~14초 클립, Qwen3-ASR
-  초벌 전사, 사람 검수표와 공식 JSONL 내보내기 절차만 준비한다. 학습·모델
-  다운로드·외부 업로드는 별도 승인 전까지 실행하지 않는다.
-- 결과: 5개 정본 3,200.525초를 398개 클립으로 분할했다. 중앙값 7.99초,
-  최대 13.919초이며 강제 절단은 0개다. 녹음 당시 Git 대본과 ASR을 대조하고
-  대표 10개를 사용자가 청취했다. 글자 단위 완전 일치와 사용자 확인을 통과한
-  92개·12.252분만 1차 세트로 승인했고, 말실수 2개는 제외했다. 나머지 304개는
-  필요할 때만 추가 검수하도록 보류했다.
-
-## 2026-08-25 — MLX-Tune LoRA v1과 제작 강도 0.60 선택
-
-- MLX-Tune 0.6.0은 Apache-2.0이며 Apple Silicon에서 Qwen3-TTS LoRA 학습을
-  지원한다. 기존 추론 환경과 분리된 `.venv-train`에서만 사용한다.
-  - https://github.com/ARahim3/mlx-tune
-  - https://github.com/ARahim3/mlx-tune/blob/main/examples/20_qwen3_tts_finetuning.py
-- 첫 실행은 기존 `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` 가중치를
-  재사용한다. rank 16, learning rate 2e-5, batch 1의 보수적 LoRA로 시작한다.
-- 공식 Qwen CUDA 전체 SFT와 동일한 경로가 아니므로 결과는 MLX-Tune LoRA다.
-- 실행 결과: 승인된 train 82개를 60 optimizer step(gradient accumulation 4)으로
-  학습했다. 평균 손실은 1.0072, 마지막 구간은 약 0.82, 학습 시간은 35.3초,
-  peak Metal 메모리는 7.235GB였다. rank 16 어댑터 크기는 67MB다.
-- 저장 어댑터를 새 프로세스에서 다시 불러와 같은 문장·참조·시드로 A/B 음성을
-  생성했고 Qwen3-ASR 대조에서 목표 문장을 보존했다.
-- 청취 비교의 핵심은 LoRA v1 자체의 채택 여부가 아니라 적용 강도였다. `1.00`은
-  사람 발화의 노이즈와 과한 학습 흔적이 많이 들렸고, `0.60`은 강의에 듣기 좋은
-  목소리를 유지하면서 AI 특유의 슬롭을 가장 잘 줄였다.
-- 최종 제작 프로필은 Qwen3-TTS 1.7B Base BF16 + 짧은 참조 음성·전사 +
-  `jaeho-ko-r16-v1` LoRA 강도 `0.60`이다. LoRA v1은 현재 제작에 채택된
-  어댑터다.
-- 추가 파인튜닝이나 제작 강도 변경은 명확한 품질 가설과 사용자 청취 승인 전에는
-  진행하지 않는다.
-
-## 2026-09-03 — 첫 판매 형태는 로컬 데스크톱 유료 베타
-
-- 결정: 현재 코드를 인터넷 서비스로 바로 노출하지 않는다. 첫 고객 제품은 Apple
-  Silicon에서 음성 원본과 결과물을 로컬 처리하는 데스크톱 앱으로 잡는다.
-- 이유: 현재의 품질·비용·개인정보 장점을 유지하면서 계정, 다중 사용자 저장소,
-  GPU 작업 큐와 음성 데이터 삭제 시스템을 한꺼번에 새로 만들지 않아도 된다.
-- 첫 유료 범위는 텍스트 개인 음성 후보와 기존 영상 음성 교체다. 전용
-  `udemy-agent` 계약에 의존하는 강의 영상 자동 제작은 고객 입력 형식을 분리한
-  뒤 공개한다.
-- 개인 제작 프로필 `jaeho-ko-r16-v1`, 학습 데이터와 참조 음성은 고객 빌드에
-  넣지 않는다. 고객 음성은 본인 또는 명시적 허가를 받은 음성이라는 확인 기록을
-  요구한다.
-- 현재는 개인 로컬 제작 도구다. 제품화 제안서는 구조 정리에서 제거했으며,
-  아래 라이선스·고객 배포 경계 기록은 유지한다.
-
-## 2026-09-03 — 상업 배포 라이선스와 플랫폼 정책 재확인
-
-- Qwen3-TTS 1.7B Base 모델 카드는 Apache-2.0을 표시하고 한국어와 짧은 참조
-  음성 기반 복제를 지원한다.
-  - https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base
-- MLX-Audio 저장소의 현재 라이선스는 MIT다.
-  - https://github.com/Blaizzy/mlx-audio/blob/main/LICENSE
-- FFmpeg는 기본 LGPL 2.1 이상이지만 사용한 선택 기능에 따라 GPL이 적용될 수
-  있다. 현재 로컬 FFmpeg 8.1.1은 `--enable-gpl --enable-libx264` 구성이고 영상
-  명령도 `libx264`를 사용한다. 이 바이너리는 고객 앱에 그대로 묶지 않으며,
-  배포용 코덱 경로와 소스 제공·고지 의무를 별도로 검토한다. 이 기록만으로 법률
-  판단을 대신하지 않는다.
-  - https://ffmpeg.org/legal.html
-- Electron 고객 빌드는 현재처럼 context isolation, renderer sandbox, IPC sender
-  검증과 외부 탐색 차단을 유지하고, 서명·hardened runtime·Apple 공증을 거친다.
-  - https://www.electronjs.org/docs/latest/tutorial/security
-  - https://developer.apple.com/documentation/Xcode/preparing-your-app-for-distribution
-- YouTube는 본인 음성 복제를 보이스오버에 쓰는 경우를 공개가 필요 없는 예시로
-  들지만, 실제 타인의 음성·초상을 허가 없이 쓰는 문제는 별도다. 또한 반복적이고
-  대량 생산된 저가치 템플릿 콘텐츠는 수익화에 부적합할 수 있으므로 제품은 업로드
-  수가 아니라 창작자의 독창성과 검수 시간을 개선하는 도구로 설명한다.
-  - https://support.google.com/youtube/answer/14328491
-  - https://support.google.com/youtube/answer/1311392
-  - https://support.google.com/youtube/answer/17133929
-
-## 2026-09-03 — 독립 Whisper 자동 검수와 위험 청크 다중 후보
-
-- 결정: 제작 TTS와 같은 Qwen 계열의 자기평가를 사용하지 않는다. Qwen3-TTS로
-  만든 음성은 독립된 Whisper large-v3-turbo MLX FP16으로 다시 받아쓴다.
-- 이유: 같은 모델 계열은 발음 편향과 오류를 공유할 수 있다. 사용자가 이 문제를
-  현재 가장 중요한 제작 차단점으로 지정했다.
-- 위험 청크는 발음 치환, 숫자 정규화 또는 미해결 영문이 있는 청크다. 서로 다른
-  시드 후보를 최대 3개 생성하고 받아쓰기 문자 오류율, 지정 발음 포함 여부,
-  무음·클리핑·발화 속도로 자동 선택한다. 모두 실패하면 가장 나은 후보를 보존하되
-  페이지를 `needsReview`로 표시한다.
-- Whisper MLX 모델은 0.8B FP16, 약 1.61GB이며 로컬에 내려받았다. 원본 OpenAI
-  Whisper 코드·가중치와 MLX-Audio는 MIT이고, 변환 모델 카드는 원본 모델을
-  참조한다.
-  - https://huggingface.co/mlx-community/whisper-large-v3-turbo-asr-fp16
-  - https://github.com/openai/whisper/blob/main/LICENSE
-  - https://github.com/Blaizzy/mlx-audio/blob/main/LICENSE
-- 제작 음색 모델, `jaeho-ko-r16-v1`, LoRA 강도 0.60은 변경하지 않았다.
-
-## 2026-09-03 — 검수를 철자가 아니라 발음으로 비교한다
-
-- 결정: 독립 Whisper 검수는 유지하되, 받아쓰기와 대본을 **발음 공간**에서
-  비교한다. 한글을 자모로 분해하고, 전사에 남은 로마자를 한국어 자모음 이름으로
-  읽고, 현대 한국어가 구분하지 않는 차이(된소리, `ㅐ/ㅔ`)만 접는다.
-- 이유: 첫 구현은 정확히 읽은 페이지를 실패로 표시했다. Whisper가 `이십칠 비`를
-  `27B`로, `큐웬`을 `QN`으로 적기 때문이다. 문제는 검수기가 아니라 비교 계층이
-  철자를 보고 있었다는 점이다. 실측에서 표기차는 발음 거리 0.03 이하, 실제 누락과
-  오독은 0.35 이상으로 열 배 이상 벌어진다.
-- 평가기를 Qwen 계열로 바꾸는 선택지는 다시 검토해 기각했다. 제작 모델과 같은
-  계열은 발음 편향을 공유하므로 같은 실수를 함께 저지르고, 검수가 통과 도장이
-  된다. 독립 계열 유지가 검수의 전제다.
-- 판정을 3단으로 나눈다. 실패만 재생성 대상이고, 경고는 제작을 막지 않되 사람이
-  들어 볼 구간으로 남는다. 경고가 모든 시드에서 재현되면 실패로 승격한다.
-  근거는 노이즈는 흔들리고 체계적 오독은 재현된다는 점이다.
-- 검수 켠 상태에서도 정상 청크는 생성 1회로 끝난다. 판독기를 생성기와 함께
-  상주시키고 청크마다 즉시 받아쓰기해 통과하면 멈춘다. 비용은 실제로 문제가
-  있는 곳에서만 발생하므로 강의 전체를 검수하면서도 이전보다 빠르다.
-- 사람 검수 UX: 음성 의심 구간은 제작 실패가 아니라 별도 확인 항목이다.
-  파일·영상 오류만 제작 실패로 처리한다.
-- 제작 음색 모델, `jaeho-ko-r16-v1`, LoRA 강도 0.60은 변경하지 않았다.
-
-## 2026-09-03 — 남은 숫자는 추측시키지 않고 한자어로 읽는다
-
-- 결정: 구조 정규화와 발음 사전을 모두 적용한 뒤에도 숫자로 남은 표현은
-  한자어 수로 읽어 TTS에 넘긴다. 숫자를 그대로 넘기면 모델이 읽는 방식을
-  고르고, 그 추측이 사용자가 처음 지적한 `호십개`를 만들었다.
-- 근거: 실제 제작 매니페스트 31개(1094 스텝, 75,766자)를 훑어 그렇게 넘어가던
-  표현 133종을 확인했다. 규칙 적용 후 숫자로 남는 것은 식별자 `n8n`, `4o`뿐이고,
-  지정 발음 314건 대 원문 표기 받아쓰기의 불일치는 0건이다.
-- 사전이 이 규칙보다 먼저 돈다. 숫자가 든 사전 항목은 그대로 우선하고, 고유어
-  수가 자연스러운 자리(`한 턴`, `두 배`, `한 시간`)는 사전 항목으로 덮는다.
-  기본값을 고유어로 바꾸는 것은 청취 승인이 필요하므로 하지 않았다.
-
-## 2026-09-04 — Whisper 앞에 한국어 자연스러움 검사를 둔다
-
-- 결정: 발음문을 만든 뒤 Whisper로 확인하는 기존 폐루프 앞에, 숫자와 단위의
-  자연스러운 읽기를 고르는 결정적 사전검사를 둔다.
-- 이유: Whisper는 `열 개`와 `십 개`를 모두 `10개`로 표기할 수 있다. 148페이지는
-  기대 발음문부터 `십 개`였기 때문에 실제로 그 발음을 정확히 한 음성이 통과했다.
-  ASR은 지시 이행을 검사할 수 있지만 지시문의 한국어 자연스러움까지 정할 수 없다.
-- 범위: 문맥이 명확한 `개·명·가지`는 100 미만에서 고유어 관형형, 100 이상에서
-  한자어를 쓴다. 이미 청취 승인된 `50개 → 오십 개`는 예외로 보존한다.
-  `번·장·시간`처럼 의미에 따라 읽기가 달라지는 단위는 자동화하지 않는다.
-- 감사 가능성: 어떤 원문을 어떤 읽기로 바꿨는지 manifest의 `naturalness`에
-  페이지·스텝별로 기록한다. 발음 사전은 이 일반 규칙보다 우선한다.
-## 2026-09-09 영어 인용문 제작값
-
-- 사용자 청취 선택: 비교 5번, `english-speaker-only-v1`.
-- Qwen3-TTS 1.7B Base의 영어 문장에 LoRA를 적용하지 않고, 기존 본인 참조 음성의
-  화자 특징만 사용한다. 참조 전사는 넘기지 않는다. 한국어는 LoRA v1 0.60 유지.
-- 같은 모델·리비전·본인 음성 원본을 사용하며 새 모델 설치·학습·외부 음성 사용은 없다.
-- 모델의 기존 Apache-2.0 선택을 유지한다. 공식 Base 모델의 화자 특징만 참조하는
-  방식은 음성 복제 품질이 낮아질 수 있다고 명시한다. 사용자는 이질감을 비교한 뒤
-  5번을 선택했다. 미국식 억양의 강제 지원이나 자동 품질 보증으로 표현하지 않는다.
-- 확인 출처(2026-09-09): [Qwen3-TTS 공식 모델·라이선스](https://github.com/QwenLM/Qwen3-TTS),
-  [Base voice clone 설명](https://github.com/QwenLM/Qwen3-TTS#voice-clone).
-
-### 같은 날 후속: 단어별 영어 전환 불채택
-
-사용자가 어색한 용어만 선별하도록 위임해 Observation, Anthropic,
-Authentication/Authorization, permission denied의 한국어 문장 내 분리 합성을
-비교했다. 영어는 5번, 한국어와 조사·어미는 0.60으로 합성하고 경계 쉼을 줄였다.
-사용자가 각 새 샘플을 듣고 **“다 fail 망함”**으로 모두 거절했다.
-
-용어 사전·분리/연결 로직·UI 설명을 실험 전으로 되돌렸다. L09 교체는 실행하지
-않았으며 기존 5번 영어 인용문 처리와 L05 수정본은 유지한다. 실패 원인을
-특정 음소·목소리·연결부로 단정하지 않는다. 받아쓰기 통과는 청취 승인과 다르며,
-영어 문장에 대한 승인을 단어 삽입 방식에 확대 적용하지 않는다.
-
-실험 음성과 검수 기록은 `output/reviews/2026-09-09/selected-english-terms/`,
-복원 전 변경은 그 안의 `rejected-implementation/`에 보존했다. 생성 결과는
-`reviewStatus: rejected`로 기록하고 L09용 ready.json은 rejected-ready.json으로
-이동해 기존 준비 결과가 후속 교체 대상으로 남지 않게 했다. 후속 자동 생성·
-영상 수정은 중단한다. 다시 비교할 때는 개별 청취 확인을 먼저 받는다.
-
-### 2026-09-10 후속: Observation 전체 문장 합성 승인
-
-사용자가 `다음 판단에 넣을 새로운 Observation입니다.`를 문장 전체로 합성한
-0.60·0.20 샘플을 듣고 “둘 다 좋은데?”라고 승인했다. 영어 철자를 보존하면서
-한국어 모드·기존 참조 음성과 전사를 쓰며 단어마다 음성 모드를 바꾸지 않는다.
-기존 제작값을 보존하는 0.60을 채택한다. 앞선 실패와는 합성 단위뿐 아니라
-영어의 참조 방식도 달라졌으므로, 어느 한 요소만 원인으로 입증했다고 표현하지
-않는다. 승인 표본은 unsplit-english-term/comparison-20260909-235104-467862다.
-
-프로그램에는 Observation만 먼저 반영했다. 나머지 선별 용어는 같은 0.60으로
-문장 여섯 개를 준비해 독립 청취한다. 이 제안 사전과 실행 계획은
-`output/reviews/2026-09-10/unsplit-remaining-terms/`에 있으며 제작 사전과 분리한다.
-L09에서는 단어만 교체하지 않고 승인된 문장 범위를 교체한다. 현재 영상은 아직
-수정하지 않았고 새 단어 정렬과 나머지 샘플 청취를 기다린다.
-
-### 같은 날 후속: 용어별 최종 선택
-
-사용자가 여섯 후속 샘플을 각각 듣고 1·3·5·6은 좋음, 2는 애매함, 4는 이상함으로
-판정했다. Anthropic, permission denied, Artificial Analysis/Intelligence Index,
-Boris Cherny/Y Combinator를 한국어 문장 안에서 영어 철자를 유지하는 0.60 방식으로
-채택한다. 이전에 승인한 Observation도 유지한다. permissiondenied와
-permission_denied는 같은 `permission denied` 발음문으로 읽는다.
-
-Authentication/Authorization은 보류하고 Attention Budget/knowledge cutoff의
-새 읽기는 적용하지 않는다. 이 네 용어는 기존 한글 읽기를 유지한다. 원어민 억양이나
-모든 사용 문맥의 품질을 보증하는 결정이 아니라 해당 샘플의 사용자 청취 선택이다.
-제작 사전은 승인 항목 9개 표기만 inline으로 지정한다. 단어별 음성 분리는 사용하지
-않으며 한국어 0.60·참조 전사와 기존 영어 인용문 5번 정책을 보존한다.
-
-L09는 승인한 Observation의 전체 문장과 permission denied를 포함한 전체 스텝을
-교체한다. 거절된 단어별 분리 음성을 재사용하지 않는다. 원본의 말끝을 남기지
-않도록 교체 끝을 조용한 꼬리 구간으로 넓혔다(152.480초와 191.560초).
-원본 영상과 수정 밖 음성은 보존하고, 검수 기록에서는 교체한 지적 단어만 해결
-이력으로 이동하며 교체 밖 `반환` 지적은 유지한다.
-
-### 같은 날 기존 CH01·CH02 보정과 추가 청취
-
-사용자가 기존 17개 영상에도 정책 적용을 요청했다. 추가 대상은 CH01의 Anthropic
-2문장, CH02 L03의 Boris Cherny 1문장, L04의 Anthropic 5문장, L05의 Anthropic
-1문장, L08의 Artificial Analysis/Intelligence Index 2문장이다. 이미 보정한 L09는
-유지했다. L04·L05는 최신 편집 PCM·타임라인에서 이어 편집해 과거 수리를 보존한다.
-
-이 과정에서 Boris Cherny의 새 문장은 사용자가 직접 승인했다. CH01의 첫
-Anthropic 문장은 두 번의 비교 이후 세 후보 중 영어 철자 0.60을 선택했다.
-0.20과 앤쓰로픽 한글 표기 후보는 실험에만 사용하고 현재 정책은 유지한다.
-
-발음 기준 확인(2026-09-10): [Cambridge Anthropic 발음](https://dictionary.cambridge.org/us/pronunciation/english/anthropic)의
-미국식은 /ænˈθrɑː.pɪk/이다. 첫 모음은 /æ/여서 한국어로는 앤 쪽에 가깝지만
-TH /θ/를 한국어 쓰와 동일한 소리라고 표현하지 않는다. 이 설명과 개별 합성의
-첫 모음·자연스러움이 좋은지는 별개이며, 최종 후보는 사용자의 청취로 선택했다.
+Electron의 context isolation·renderer sandbox·IPC 송신자 검증을 유지한다.
+외부 배포 시 서명·hardened runtime·공증을 검토한다. 당시 확인 출처:
+[Electron 보안](https://www.electronjs.org/docs/latest/tutorial/security),
+[Apple 배포 준비](https://developer.apple.com/documentation/Xcode/preparing-your-app-for-distribution).

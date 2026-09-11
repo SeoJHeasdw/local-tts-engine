@@ -402,16 +402,21 @@ def test_natural_counter_reading_reaches_tts_manifest_and_asr_gate(studio) -> No
     assert manifest["quality"]["summary"]["clean"] is True
 
 
-def test_an_unmapped_letter_number_identifier_stops_before_generation(studio) -> None:
+def test_an_unmapped_letter_number_identifier_generates_and_keeps_review_evidence(studio) -> None:
     lecture = studio(
         slides={"ch00": ["identifier"]},
         scripts={"ch00": "## identifier\n### 1\n주문 B-3099를 조회합니다.\n"},
     )
 
-    with pytest.raises(ValueError, match="영문·숫자 식별자"):
-        lecture.run(start_page=1, end_page=1)
-
-    assert lecture.tts.calls == []
+    manifest = lecture.run(start_page=1, end_page=1)
+    assert lecture.tts.calls[0]["text"] == "주문 B-3099를 조회합니다."
+    assert manifest["entries"][0]["source_text"] == "주문 B-3099를 조회합니다."
+    assert "B-3099" in manifest["entries"][0]["unresolved_tokens"]
+    assert "B-3099" in manifest["naturalness"]["warnings"][0]["messages"][0]
+    assert manifest["chunks"][0]["endMs"] > manifest["chunks"][0]["startMs"]
+    assert Path(manifest["audioPath"]).is_file()
+    assert manifest["cachePolicy"] == "disabled"
+    assert manifest["stats"]["cacheHits"] == 0
 
 
 def test_one_wrong_word_in_a_long_chunk_gets_another_take(studio) -> None:

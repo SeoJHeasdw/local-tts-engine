@@ -46,7 +46,8 @@ COUNTER_SPACING_PATTERN = re.compile(
 
 # Letter-number identifiers require a pronunciation decision. Reading the
 # digits as one cardinal number turned A-2041 into A-이천사십일. A concrete
-# dictionary entry must settle such a token before a course can start.
+# dictionary entry settles the reading. Unknown tokens remain review warnings
+# and never prevent course production.
 MIXED_IDENTIFIER_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])"
     r"(?=[A-Za-z0-9._+/#-]*[A-Za-z])(?=[A-Za-z0-9._+/#-]*\d)"
@@ -153,7 +154,7 @@ def korean_naturalness_preflight(text: str) -> dict[str, Any]:
     rewritten = NATIVE_COUNTER_PATTERN.sub(replace, rewritten)
     identifiers = [match.group(0) for match in MIXED_IDENTIFIER_PATTERN.finditer(rewritten)]
     warnings = [
-        f"{identifier}: 영문·숫자 식별자의 읽기를 발음 사전에 지정하세요."
+        f"{identifier}: 발음 사전 미등록 — 제작 후 읽기 확인"
         for identifier in identifiers
         if not any(pattern.fullmatch(identifier) for pattern in SAFE_STRUCTURED_IDENTIFIER_PATTERNS)
     ]

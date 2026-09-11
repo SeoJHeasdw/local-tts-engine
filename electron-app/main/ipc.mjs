@@ -475,9 +475,9 @@ export function createIpcService({
       const record = await readActiveJob();
       if (!record?.options?.name) return null;
       const settings = await readAppSettings();
-      const studio = runtimePaths(settings.paths);
-      const units = (record.unitNames || []).map((name) => ({ name }));
-      const finished = units.length ? await finishedUnitNames(units, studio) : [];
+      const studio = runtimePaths(record.options.paths || settings.paths);
+      const units = (record.unitNames || []).map((name) => ({ name, videoQuality: record.options.videoQuality }));
+      const finished = units.length ? await finishedUnitNames(units, studio, record.options.inputFingerprint) : [];
       const remaining = units.length ? pendingUnits(units, finished).length : 1;
       if (units.length && remaining === 0) { await clearActiveJob(); return null; }
       return {
@@ -488,11 +488,15 @@ export function createIpcService({
         done: finished.length,
         remaining,
         paused: Boolean(record.paused),
+        failed: (record.failedUnits || []).filter(unit => !finished.includes(unit.name)).length,
       };
     });
 
     ipcMain.handle("studio:discard-resumable", async (event) => {
       guard(event);
+      if (['running', 'paused', 'cancelling'].includes(state.activeJob?.state)) {
+        throw new Error('실행 중인 작업의 이어하기 기록은 지울 수 없습니다.');
+      }
       await clearActiveJob();
       return true;
     });

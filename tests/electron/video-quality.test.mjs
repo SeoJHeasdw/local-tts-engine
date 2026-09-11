@@ -63,6 +63,9 @@ for (const quality of Object.values(VIDEO_QUALITIES)) {
     assert.equal(report.videoQuality.id, quality.id);
     assert.equal(report.capture.profile.width, quality.width);
     assert.equal(calls.filter(call => call.stage === 'capture').length, 2);
+    for (const call of calls.filter(call => ['voice', 'capture'].includes(call.stage))) {
+      assert.ok(call.args.includes('--no-cache'), `${quality.id} ${call.stage}는 새로 생성해야 한다`);
+    }
     for (const call of calls.filter(call => call.stage === 'capture')) assert.equal(call.args[call.args.indexOf('--quality') + 1], quality.id);
     assert.deepEqual(JSON.parse(await fs.readFile(configPath, 'utf8')), config);
     const units = service.chapterUnits({ ...options, mode: 'chapter', chapterMode: 'lesson', chapter: 'ch00', startPage: 1, endPage: 2 }, { lessons: [

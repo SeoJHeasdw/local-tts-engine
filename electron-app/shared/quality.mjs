@@ -20,7 +20,8 @@ export function voiceQualityFindings(manifest = {}) {
   const timings = new Map(
     (manifest.chunks || []).map((chunk) => [String(chunk.key || ""), chunk]),
   );
-  return (manifest.quality?.chunks || [])
+  const byChunk = new Map();
+  const findings = (manifest.quality?.chunks || [])
     .map((chunk) => ({ chunk, severity: voiceFindingSeverity(chunk) }))
     .filter(({ severity }) => severity === "failed" || severity === "warning")
     .map(({ chunk, severity }) => {
@@ -32,7 +33,7 @@ export function voiceQualityFindings(manifest = {}) {
       const englishChecks = (selected.englishChecks || []).filter(check => !check.passed);
       const onlyEnglish = englishChecks.length > 0 && reasons.every(reason => reason === "영어 구절 받아쓰기 확인 필요");
       const clipStart = Number(timing.startMs || 0);
-      return {
+      const finding = {
         chapter: String(chunk.chapter || ""),
         slideId: String(chunk.slideId || ""),
         slideNumber: Number(chunk.slideNumber || 0),
@@ -54,12 +55,51 @@ export function voiceQualityFindings(manifest = {}) {
         selectedAttempt: Number(selected.attempt || 1),
         attempts: Array.isArray(chunk.candidates) ? chunk.candidates.length : 1,
       };
-    })
-    .sort((left, right) => left.startMs - right.startMs || left.slideNumber - right.slideNumber);
+      byChunk.set(String(chunk.chunkKey || ""), finding);
+      return finding;
+    });
+  const entriesByChunk = new Map();
+  for (const entry of manifest.entries || []) {
+    for (const key of entry.chunkKeys || [entry.chunkKey]) {
+      if (!key) continue;
+      if (!entriesByChunk.has(key)) entriesByChunk.set(key, []);
+      entriesByChunk.get(key).push(entry);
+    }
+  }
+  for (const [key, entries] of entriesByChunk) {
+    const unresolved = entries.filter(entry => entry.unresolved_tokens?.length || entry.naturalness_warnings?.length);
+    if (!unresolved.length) continue;
+    const timing = timings.get(key);
+    if (!timing) continue;
+    const terms = [...new Set(unresolved.flatMap(entry => entry.unresolved_tokens || []))];
+    const reason = "발음 사전 미등록 · 제작 후 읽기 확인";
+    const existing = byChunk.get(key);
+    if (existing) {
+      existing.reasons = [...new Set([...existing.reasons, reason])];
+      existing.terms.push(...terms.filter(term => !existing.terms.some(item => item.term === term))
+        .map(term => ({ term, status: 'unresolved' })));
+      // A narrow ASR warning must not hide another unknown term in the same clip.
+      existing.startMs = Math.min(existing.startMs, Number(timing.startMs));
+      existing.endMs = Math.max(existing.endMs, Number(timing.endMs));
+      continue;
+    }
+    const quality = (manifest.quality?.chunks || []).find(chunk => chunk.chunkKey === key);
+    findings.push({
+      chapter: entries[0].chapter, slideId: entries[0].slide_id,
+      slideNumber: Number(entries[0].slide_number),
+      startMs: Number(timing.startMs), endMs: Number(timing.endMs),
+      severity: 'warning', kind: 'pronunciation-unresolved', reasons: [reason],
+      terms: terms.map(term => ({ term, status: 'unresolved' })),
+      expectedText: quality?.selected?.expectedText || entries.map(entry => entry.tts_text || entry.source_text).join(' '),
+      recognizedText: quality?.selected?.recognizedText || '',
+    });
+  }
+  return findings.sort((left, right) => left.startMs - right.startMs || left.slideNumber - right.slideNumber);
 }
 
-export function combineChapterReports(options, reports) {
-  const checks = reports.flatMap(report => report.checks || []);
+export function combineChapterReports(options, reports, failedUnits = []) {
+  const checks = [...reports.flatMap(report => report.checks || []),
+    ...failedUnits.map(unit => ({ label: `${unit.title || unit.name} 제작 실패`, ok: false }))];
   const voiceFindings = reports.flatMap(report => (report.voiceFindings || []).map(finding => ({
     ...finding, target: report.target, displayName: report.displayName || report.name,
   })));
@@ -70,11 +110,12 @@ export function combineChapterReports(options, reports) {
     videoPath: reports.length === 1 ? reports[0].videoPath : null,
     audioPath: reports.length === 1 ? reports[0].audioPath : null,
     target: reports[0]?.target || null,
-    voiceQuality: reports.length === 1 ? reports[0].voiceQuality : reports.every(report => report.voiceQuality) ? {
+    voiceQuality: reports.length === 1 ? reports[0].voiceQuality : reports.length && reports.every(report => report.voiceQuality) ? {
       ok: reports.every(report => report.voiceQuality.ok),
       clean: reports.every(report => report.voiceQuality.clean),
     } : null,
     voiceFindings, checks, summary: summarizeChecks(checks),
+    failedUnits, completedUnits: reports.length, totalUnits: reports.length + failedUnits.length,
     units: reports.map(report => ({name: report.name, displayName: report.displayName,
       durationMs: report.durationMs, videoPath: report.videoPath || null,
       audioPath: report.audioPath || null, target: report.target, summary: report.summary,

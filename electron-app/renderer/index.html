@@ -152,6 +152,7 @@
                   <span class="job-total-eta hidden" id="job-total-eta"></span>
                 </div>
               </div>
+              <p class="job-failure-note hidden" id="job-failure-note" role="status"></p>
               <ol class="stage-list">
                 <li data-stage="voice"><span>1</span><div><strong>목소리 만들기</strong><small>대본을 자연스러운 음성으로 변환</small></div><b></b></li>
                 <li data-stage="captions"><span>2</span><div><strong>타이밍 맞추기</strong><small>말과 화면이 함께 넘어가도록 조정</small></div><b></b></li>
@@ -166,8 +167,9 @@
 
             <div class="complete-panel hidden" id="complete-panel">
               <div class="complete-icon">✓</div>
-              <h3>제작과 검증이 끝났습니다</h3>
+              <h3 id="complete-title">제작과 검증이 끝났습니다</h3>
               <p id="complete-summary"></p>
+              <div class="unit-failures hidden" id="complete-failures"></div>
               <section class="voice-quality-panel hidden" id="voice-quality-panel" data-tone="warning" aria-label="목소리 확인 구간">
                 <div><strong id="voice-quality-title"></strong><small class="repair-hint">구간을 먼저 듣고, 필요하면 해당 페이지를 교체하세요</small></div>
                 <ul id="voice-quality-list" class="hidden"></ul><button type="button" class="secondary-small" id="review-latest">영상 검수·수정에서 확인</button>

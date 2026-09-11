@@ -69,6 +69,7 @@ from .course.script import (
     slide_ids_from_source,
     split_forced_pause_segments,
     strip_markdown,
+    report_naturalness_warnings,
 )
 from .course.serialization import stable_digest, write_json
 from .course.settings import (
@@ -463,20 +464,7 @@ def synthesize_excerpt(
         start_slide,
         end_slide_number=end_page,
     )
-    naturalness_issues = [
-        (entry, warning)
-        for entry in entries
-        for warning in entry.naturalness_warnings
-    ]
-    if naturalness_issues:
-        details = "; ".join(
-            f"{entry.slide_number}페이지 {warning}"
-            for entry, warning in naturalness_issues[:8]
-        )
-        remaining = len(naturalness_issues) - 8
-        if remaining > 0:
-            details += f"; 외 {remaining}건"
-        raise ValueError(f"한국어 자연스러움 사전검사 실패: {details}")
+    report_naturalness_warnings(entries)
     report_unresolved_terms(entries)
     chunks = group_course_entries(entries)
     initial_pad_ms = START_PAD_MS + entries[0].pause_before_ms

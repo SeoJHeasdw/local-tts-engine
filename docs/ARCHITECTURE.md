@@ -1,155 +1,92 @@
-# 아키텍처와 변경 경계
+# 아키텍처와 데이터 계약
 
-## 저장소 책임
+## 책임과 코드 위치
 
-`udemy-agent`는 강의 대본·슬라이드·캡처 도구를 소유한다. 이 저장소는 개인 음성,
-TTS 작업, 제작 앱, 자막·타임라인과 완성 영상을 소유한다. 두 저장소를 수정해야
-할 때는 강의 소스의 `NARRATION-PIPELINE.md`, `VIDEO-PACING-GUIDELINES.md`를 먼저 읽는다.
+`udemy-agent`는 강의 대본·화면·자료·캡처 도구, 이 저장소는 개인 음성·TTS 작업·
+자막·타임라인·완성 영상을 소유한다. 실행법은 [README](../README.md)에 있다.
 
-## 코드 배치
-
-```text
-electron-app/
-  main.mjs                    Electron 실행 진입점
-  preload.cjs                 허용된 IPC API
-  main/
-    application.mjs           서비스 조립과 앱 수명
-    paths.mjs                 프로젝트 경로·제작 기본값
-    runtime-config.mjs        외부 실행 도구 탐색
-    runtime.mjs               작업 실행과 진행 이벤트
-    job-process.mjs           자식 프로세스·중지·일시정지
-    settings.mjs, catalog.mjs  설정과 강의 목록
-    production.mjs            입력 고정→TTS→자막→촬영→검증
-    voices.mjs                페이지·텍스트 후보와 학습 작업
-    media.mjs                 선택 파일 토큰과 미디어 정보
-    files.mjs, outputs.mjs    파일·결과 목록·이름·검수 상태
-    editing.mjs               편집 작업 분기
-    editing/                  합치기·페이지 교체·구간 편집
-    ipc.mjs, window.mjs       화면 요청과 창 관리
-    workers/prepare-input.mjs 독립 입력 복사·검사 프로세스
-  renderer/
-    app.js                    초기화·화면 전환·제작 진행 연결
-    controllers/              검수·클립 편집·최근 결과
-    index.html, styles.css    화면·디자인 규칙
-    motion.mjs, view-utils.mjs 화면 동작과 표시 계산
-  shared/                     옵션·이름·타임라인·검수·시간 규칙
-src/local_tts_engine/
-  course_pilot.py             강의 생성 조립과 기존 CLI
-  course/                    대본·청킹·오디오·정렬·직렬화
-  course_catalog.py           모델을 로드하지 않는 목록 CLI
-  text_candidate.py          텍스트 후보 CLI
-  export_udemy.py             기존 덱 타임라인 계약으로 내보내기
-  pronunciation.py 등         발음·받아쓰기·운율 검수
-  finetune_*.py               데이터 준비·학습·평가
-scripts/                     진단·수동 검수·복구 CLI
-config/                      제작 사전·데이터 연결
-tests/electron/              앱·실제 FFmpeg·화면 동작 검사
-tests/test_*.py, fixtures/   Python 검사·재현 자료
-```
+| 위치 | 책임 |
+| --- | --- |
+| `electron-app/main.mjs` | Electron 실행 진입점 |
+| `electron-app/main/application.mjs` | 서비스 조립과 앱 수명 |
+| `electron-app/main/runtime.mjs`, `job-process.mjs` | 프로세스 실행·진행 이벤트·중지·일시정지 |
+| `electron-app/main/production.mjs` | 입력 고정 → 합성 → 자막 → 촬영 → 검증·발행 |
+| `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보와 학습 작업 |
+| `electron-app/main/editing/` | 합치기·페이지 교체·구간 편집·미리듣기 |
+| `electron-app/main/`의 나머지 서비스 | 경로·설정·목록·파일·미디어·결과·IPC·창 관리 |
+| `electron-app/renderer/app.js` | 초기화·화면 전환·제작 진행 |
+| `electron-app/renderer/controllers/` | 검수·클립 편집·최근 결과 화면 |
+| `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산 |
+| `src/local_tts_engine/course_pilot.py` | 강의 생성 CLI 조립 |
+| `src/local_tts_engine/course/` | 대본 입력·청킹·오디오·정렬·직렬화 |
+| `src/local_tts_engine/course_catalog.py` | 생성 모델을 로드하지 않는 목록 CLI |
+| `src/local_tts_engine/`의 나머지 모듈 | 발음·독립 검수·텍스트 후보·내보내기·학습 |
+| `scripts/`, `tests/` | 수동 운영 도구와 회귀 검사 |
 
 ## 의존성 규칙
 
-- 실행 진입점은 서비스를 조립한다. 서비스는 Electron을 직접 가져오지 않으며,
-  필요한 실행기·파일 선택·상태·UI API를 생성자 인자로 받는다.
-- 앱 작업 상태와 창, 도구 경로는 `application`이 만든 상태를 공유한다.
-  선택 파일과 검수 미리보기 등 기능별 상태는 소유 서비스 안에 둔다.
-- `main`은 `renderer` 구현에 의존하지 않는다. 양쪽에서 쓰는 계산은 `shared`에 둔다.
-- 브라우저 컨트롤러는 `main`, Node, Electron을 가져오지 않고 preload API를 사용한다.
-- `shared`는 `main`·`renderer`를 역으로 참조하지 않는다. 브라우저는 Node 의존성이
-  없는 모듈만 직접 가져온다. `shared/index.mjs`는 Node 측의 모음 진입점이다.
-- Python `course`의 입력·오디오·정렬 모듈은 `course_pilot` 실행 조립에 역의존하지 않는다.
-  기존 CLI 이름은 안정된 외부 계약이므로 내부 폴더 정리 때문에 바꾸지 않는다.
-- `scripts`는 저장된 검수 실행 파일에서도 호출한다. 일회성 생성물은 여기에
-  추가하지 않고 `output/reviews/` 또는 `artifacts/`에 둔다.
+- Electron은 진입점에서 서비스에 주입한다. 서비스는 Electron을 직접 import하지 않는다.
+- `main`과 `renderer`는 서로의 구현을 import하지 않는다. 공통 계산은 `shared`에 두고
+  `shared`에서 상위 계층을 참조하지 않는다.
+- renderer의 의존성 전체에는 Node·Electron이 없어야 한다. Node용 공유 모음은
+  `shared/index.mjs`, 브라우저는 필요한 개별 모듈을 사용한다.
+- Python `course/`는 `course_pilot` 조립 모듈을 역참조하지 않는다. 기존 CLI·helper
+  import와 저장된 검수 명령의 `scripts/` 경로는 호환 계약이다.
+- `npm run check:architecture`가 경로 단절·계층 역참조·순환·브라우저 의존성을 검사한다.
+  동작 검사는 실제 서비스·컨트롤러를 import하며 소스 조각 평가로 구현을 복제하지 않는다.
 
-새 기능은 책임이 맞는 모듈에 넣는다. 공통 계산을 거대한 utils 파일에 계속 쌓거나,
-테스트에서 실행 파일의 문자열 조각을 평가해 내부 함수를 호출하지 않는다.
-`npm run check:architecture`가 경로 단절, 계층 역참조, 순환 의존성을 확인한다.
-
-## 제작 흐름
+## 제작 흐름과 복구
 
 ```text
-preload IPC → 작업 서비스 → 독립 Node 입력 준비 → Python 생성·검수
-            → export → 덱 자막·캡처 도구 → 결과 검증·발행
+preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검수·정렬
+            → export → 덱 자막·촬영 → 파일 검증 → 발행
 ```
 
-시작 시 `udemy-agent/deck/tools/production.mjs`가 화면·대본·자료·순서를
-`.production-input`에 고정한다. 전후 해시, 선택 ID와 스텝, 챕터 린터를 검사하고
-영상이면 타입 검사와 정적 빌드까지 수행한다. 같은 챕터의 모든 레슨은 이 복사본을
-사용한다. 원본의 narration.config를 제작 중 고치지 않는다.
+`main/workers/prepare-input.mjs`가 덱의 `tools/production.mjs`를 별도 프로세스로
+실행한다. 화면·대본·자료·순서를 `.production-input`에 고정하고 전후 해시, 선택 ID·
+스텝, 챕터 린터를 검사한다. 영상이면 타입 검사·정적 빌드도 수행한다. 한 챕터의 모든
+레슨은 이 입력을 사용하며 원본 `narration.config.json`을 제작 중 수정하지 않는다.
 
-입력 복사와 빌드는 별도 Node 프로세스이므로 앱 중지 요청을 막지 않는다.
-`sourceContract`는 음성 manifest → export timeline → 검수 기록으로 전달한다.
-촬영 전 실제 타임라인의 구도·videoBeats 검사와 사이트 계약 대조를 수행한다.
+발음 처리는 각 레슨의 `course_entries`에서 한 번 수행한다. 미등록 용어는 합성을
+막지 않고 실제 청크 시각과 함께 완료 후 검수 대상으로 남긴다. 상세는 [QUALITY](QUALITY.md).
+`sourceContract`는 manifest → export timeline → 검수·촬영 기록으로 전달한다.
+촬영 전 타임라인의 ID·구도·videoBeats가 고정한 사이트와 일치하는지 확인한다.
 
-중지는 자식 프로세스 그룹에 SIGTERM을 보내고 남으면 3초 뒤 SIGKILL을 보낸다.
-촬영 중 일시정지는 현재 편 종료 뒤 처리하여 화면·음성의 시계를 지킨다.
-임시 입력 정리 뒤 종료 상태를 표시한다. 진행 중 stdout/stderr는 앱과 실행
-터미널에 함께 전달한다. 중단 작업 기록은 `artifacts/active-job.json`이 담당한다.
+중지는 프로세스 그룹에 SIGTERM, 남으면 3초 뒤 SIGKILL을 보낸다. 촬영 중 일시정지는
+현재 편 뒤에 처리한다. 다른 단계의 실제 정지 시간은 남은 시간 추정에서 제외한다.
+레슨 분할 제작은 개별 실패를 기록하고 나머지를 계속하되 사용자 중지는 즉시 전파한다.
 
-## 생성·자막 계약
+| 기록 | 의미 |
+| --- | --- |
+| `.production-input/production-input.json` | 고정 입력·선택 범위의 판본 |
+| 음성 `manifest.json` | 발음문·실제 음성 길이·정렬·검수 근거 |
+| 레슨 `validation-report.json` | 파일 검사·음성 확인 항목·결과 위치 |
+| 챕터 `chapter-report.json` | 완료·실패 레슨과 원인 |
+| `artifacts/active-job.json` | 명시적 이어하기의 옵션·완료·실패 기록 |
 
-- `sourceText`/`source_text`는 자막 원문, `ttsText`/`tts_text`는 발음 치환문이다.
-- 의미 단위의 짧은 청크를 생성하고 실제 파일의 길이를 잰다. 시간은 추정하지 않는다.
-- 모델·참조·발음·운율 판정과 승인 정책은 [QUALITY](QUALITY.md)를 따른다.
-- 단어 시각은 생성·검수 모델 해제 후 ForcedAligner로 얻어 기존 덱 계약으로 내보낸다.
-- `[Ns]`는 단독 줄의 0.1~10초 강제 대기다. 문장 앞·사이·같은 페이지 다음 스텝
-  앞에 실제 무음을 넣되 자막에는 노출하지 않는다. 마커만 있는 스텝은 입력 오류다.
-- CLI 해시 캐시는 문장·모델 revision·참조 해시·언어·seed·설정을 포함한다.
-  앱 강의 제작은 TTS·정렬·브라우저 캐시를 항상 우회한다.
-- 캡처는 고정 사이트·독립 서버에서 PNG 프레임의 시각을 고정 영상 시계로 맞춘다.
-  앱이 선택한 1080p/1440p/4K와 실제 프레임·출력 규격을 검증한다. 세부 계약과
-  실제 브라우저 검증의 한계는 [VIDEO-QUALITY](VIDEO-QUALITY.md)를 따른다.
-- 촬영 파일은 화질·자막 옵션으로 정확히 선택하고 영상별 촬영 기록의 SHA-256과
-  판본을 검증한다. 없는 파일을 예전 MP4로 대체하지 않는다. 이어하기도 같은
-  입력 판본·화질·실제 파일·해시를 확인하고, 새 작업은 기존 완성본을 자동 건너뛰지 않는다.
+실패 시 입력을 보존하고 성공·중지·이어하기 기록 삭제 때 정리한다. 이어하기는 완료
+레슨의 실제 파일·화질·판본·해시를 검사한다. 실패 레슨의 음성·정렬·촬영은 새로 실행한다.
+새 작업은 과거 완성본을 자동으로 건너뛰지 않으며 앱의 생성 캐시는 항상 꺼져 있다.
 
-## 편집과 결과 보존
+## 타임라인과 편집
 
-페이지 교체는 선택 범위의 음성만 바꾼다. 원본 앞뒤는 유지하고 길이 차이를
-뒤쪽 타임라인에 반영한다. 여러 교체는 뒤쪽부터 적용해 원래 좌표를 유지한다.
-단일·복수 페이지 진입점은 하나의 검증·렌더·기록 보존 경로를 사용한다.
-두 경로 모두 화면 길이가 같으면 영상 스트림을 복사하고 기존 보고서 형식을 유지한다.
-교체에 겹친 옛 판독은 `교체 후 청취 확인`으로 바꾸고 다른 경고·확인 키를 보존한다.
-JSON/SRT/VTT도 화면과 같은 비율로 이동하며 문구·묶음은 유지한다. 새 단어
-정렬을 추론하는 기능으로 설명하지 않는다.
+`sourceText`/`source_text`는 자막 원문, `ttsText`/`tts_text`는 발음문이다. 생성 후
+실제 오디오와 ForcedAligner 단어 시각으로 화면·자막을 배치한다. `[Ns]` 단독 줄은
+0.1~10초 무음이며 자막에 노출하지 않는다. 읽을 문장 없는 마커는 입력 오류다.
 
-구간 무음은 0.05~2초, 준비된 음성 교체는 0.05~120초다. `match-audio`는 음성을
-자르거나 속도를 바꾸지 않고 화면을 조정한다. `keep-video`는 짧으면 무음을 채우고
-길면 거절한다. 양끝 5ms 페이드를 적용한다. 미리듣기는 실제 WAV를 잘라 재생하며
-오래된 선택의 응답을 버린다. 미리보기 임시 파일은 최근 8개와 앱 종료 때 정리한다.
+페이지 교체는 선택 음성과 그 길이 차이만 반영한다. 여러 교체는 뒤에서부터 적용하고
+다른 페이지의 검수·확인 키·자막을 보존한다. 교체된 판독은 다시 청취할 대상으로 표시한다.
+최신 수정본의 PCM·타임라인을 사용하며 원본 manifest로 되돌리지 않는다.
 
-클립 합치기는 규격·스트림 헤더가 같은 전체 클립이면 복사한다. 자르기나 서로 다른
-규격의 합치기는 가장 큰 입력 크기를 유지하며 모든 구간을 공통 규격으로 정규화한다.
-전체 MP4 하나는 원본을 복사한다. 재인코딩 시 미지원 HDR·색심도 변환을 거절하고
-입력 프레임률·SAR을 보존한다. 검증·기록 후 그 실행의 중간 MP4만 정리한다.
-자르기의 시작점은 음성 트랙 유무와 관계없이 영상에 적용한다. 페이지 타임라인도
-남은 범위에 맞춰 이어 붙인다.
+영상 스트림 복사·재인코딩·해상도·프레임률 보존 기준은 [VIDEO-QUALITY](VIDEO-QUALITY.md)에
+모아 둔다. 구간 편집은 `match-audio`에서 화면 길이를 음성에 맞추고, `keep-video`에서
+짧은 음성은 무음으로 채우되 긴 음성은 거절한다. 무음은 0.05~2초, 준비 음성 교체는
+0.05~120초다. 미리듣기는 실제 WAV를 자르며 오래된 응답을 버리고 임시 파일은 최근 8개만 둔다.
 
-파일 선택·합치기의 입력 정보 검사는 요청당 최대 4개씩 실행한다. 파일 선택은
-설정을 한 번 읽고 같은 파일의 검사를 해당 요청 안에서만 공유한다. 새 요청은
-파일을 다시 읽는다. 합치기 정규화는 앞서 읽은 입력 정보를 재사용한다.
-이는 TTS·정렬·촬영 캐시와 별개인 미디어 정보 조회 정책이다.
+미디어 정보 조회는 요청당 최대 4개씩 실행하고 같은 요청의 중복 파일 조회만 공유한다.
+이 내부 병렬 조회는 실패 뒤 새 배정을 멈추고 이미 실행 중인 작업을 기다린다.
+이는 레슨별 제작 실패 후 다음 레슨으로 진행하는 정책과 별개다.
 
-병렬 작업에서 하나가 실패하면 새 항목 배정을 멈추고 이미 시작한 작업이
-끝난 뒤 첫 오류를 전달한다. 다른 작업을 남겨둔 채 실패 완료 상태로 바뀌어
-새 제작과 자원이 겹치는 것을 막는다.
-
-완성 영상은 자기 이름의 `.timeline.json`을 함께 갖는다. 이름 변경은 연결 파일과
-검수 기록도 함께 옮긴다. 삭제는 UI 확인 후 작업·영상 폴더를 휴지통으로 보낸다.
-기존 결과·정본·가중치를 소스 정리나 앱 업그레이드 과정에서 자동 삭제하지 않는다.
-
-`validation-report.json`의 자동 검사와 `review.status=approved`는 별개다.
-사용자 확인 키는 결과에 저장하며 취소할 수 있다. 새 수정본의 전체 청취 상태는
-pending이다. 최신 수정본을 다시 편집할 때는 최신 PCM·타임라인·자막과 그 해시를
-기준으로 삼는다.
-
-## 검증과 문서 유지
-
-`npm test`는 `tests/electron`과 Python 검사를 실행한다. 미디어 회귀 검사는
-짧은 합성 신호와 실제 FFmpeg를 사용하며 개인 음성이나 모델 다운로드를 요구하지 않는다.
-모델 대체물을 쓰는 파이프라인 검사와 실제 TTS 생성·사용자 청취 승인은 구분한다.
-
-README는 실행·폴더 안내, HANDOFF는 현재 상태, 이 문서는 책임·계약,
-QUALITY는 음성 검수, DECISIONS는 승인·라이선스 근거를 소유한다.
-완료된 UI 변경이나 일회성 실행 로그는 이 문서들에 반복해서 누적하지 않는다.
+완성 영상은 같은 이름의 `.timeline.json`을 갖고 이름 변경 시 연결 파일도 이동한다.
+삭제는 UI 확인 후 휴지통으로 보낸다. 원본·완성본·개인 음성·가중치는 자동 정리하지 않는다.
+`review.status=approved`와 사용자 확인 키는 자동 파일 검사와 독립적으로 저장한다.

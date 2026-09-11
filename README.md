@@ -76,7 +76,6 @@ npm run check
 - [아키텍처와 변경 경계](docs/ARCHITECTURE.md)
 - [음성 검수 계약과 측정 근거](docs/QUALITY.md)
 - [승인·라이선스 결정 기록](docs/DECISIONS.md)
-- [파인튜닝 데이터 준비](docs/FINETUNING-DATA.md)
 - [점검·검수 스크립트 안내](scripts/README.md)
 
 모델 비교와 LoRA 선택은 완료됐다. 새 설치·학습·전체 강의 재생성은 사용자가

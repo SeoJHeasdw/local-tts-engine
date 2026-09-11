@@ -96,7 +96,7 @@ test("남은 시간은 관측을 시작한 지점부터 재고, 편이 바뀌면
 
   ui.renderJobEvent({ type: "voice-progress", done: 4, total: 24 });
   assert.equal(ui.pace().baseline, 4, "화면을 늦게 열었어도 그 지점부터 센다");
-  assert.equal($("#job-eta").textContent, "", "아직 잰 구간이 없으면 지어내지 않는다");
+  assert.equal($("#job-eta").textContent, "남은 시간 계산 중", "아직 잰 구간이 없으면 계산 중임을 알린다");
 
   ui.renderJobEvent({ type: "voice-progress", done: 8, total: 24 });
   assert.equal(ui.pace().done, 8);
@@ -105,7 +105,7 @@ test("남은 시간은 관측을 시작한 지점부터 재고, 편이 바뀌면
   // 그대로 재면 남은 시간이 크게 어긋난다.
   ui.renderJobEvent({ type: "unit", index: 4, total: 9, title: "CH02 L04" });
   assert.equal(ui.pace(), null);
-  assert.equal($("#job-eta").textContent, "");
+  assert.equal($("#job-eta").textContent, "이 편 남은 시간 계산 중");
 });
 
 test("작업을 새로 시작하면 이전 작업의 진행 표시가 남지 않는다", () => {
@@ -119,7 +119,7 @@ test("작업을 새로 시작하면 이전 작업의 진행 표시가 남지 않
   assert.equal(ui.unit(), null);
   assert.equal(ui.pace(), null);
   assert.equal($("#job-unit").textContent, "");
-  assert.equal($("#job-eta").textContent, "");
+  assert.equal($("#job-eta").textContent, "남은 시간 계산 중");
 });
 
 test("한 편짜리 작업에는 두 번째 시계를 띄우지 않는다", () => {
@@ -144,7 +144,7 @@ test("레슨으로 나눠 만들 때만 편별 분량으로 전체 시계를 낸
   ] });
 
   ui.renderJobEvent({ type: "unit", index: 1, total: 4, title: "L01" });
-  assert.equal($("#job-total-eta").textContent, "", "첫 편이 끝나기 전에는 잴 것이 없다");
+  assert.equal($("#job-total-eta").textContent, "전체 남은 시간 계산 중", "첫 편이 끝나기 전에도 계산 상태를 보여 준다");
 
   ui.renderJobEvent({ type: "unit", index: 2, total: 4, title: "L02" });
 

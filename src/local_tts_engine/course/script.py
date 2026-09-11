@@ -447,6 +447,20 @@ def course_entries(
     return entries
 
 
+def report_naturalness_warnings(entries: list[CourseEntry]) -> None:
+    """Announce unresolved readings; production continues for post-production review."""
+    issues = [(entry, warning) for entry in entries for warning in entry.naturalness_warnings]
+    if not issues:
+        return
+    details = "; ".join(
+        f"{entry.slide_number}페이지 {warning}" for entry, warning in issues[:8]
+    )
+    if len(issues) > 8:
+        details += f"; 외 {len(issues) - 8}건"
+    print(f"[발음 확인 예정] {details}")
+    print("사전에 없는 용어도 제작을 계속합니다. 완성 후 영상 검수·수정에서 확인하세요.")
+
+
 def report_unresolved_terms(entries: list[CourseEntry]) -> list[dict[str, Any]]:
     """Announce every term still spelled in Latin letters before generating.
 
@@ -458,9 +472,9 @@ def report_unresolved_terms(entries: list[CourseEntry]) -> list[dict[str, Any]]:
     answered instead of discovered.
 
     Deliberately English spans are marked ``"literal": true`` in the dictionary
-    and never reach this list.  This warns rather than stops: an unread term is
-    a term read badly, while a mixed identifier (A-2041 → 에이 이천사십일) is a
-    term read as something else entirely, which is why only that one raises.
+    and never reach this list. Missing terms and mixed identifiers are review
+    findings, not fatal input errors. Explicit dictionary readings still take
+    precedence; production does not persist new readings for unknown tokens.
     """
     unresolved = [
         {

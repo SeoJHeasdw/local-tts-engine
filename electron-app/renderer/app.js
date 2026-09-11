@@ -296,6 +296,7 @@ function setBusy(busy) {
   $("#start-button").disabled = busy;
   $("#job-form").querySelectorAll("input, select, .segmented button").forEach((element) => { element.disabled = busy; });
   $("#cancel-button").classList.toggle("hidden", !busy);
+  $("#pause-button").classList.toggle("hidden", !busy);
   $("#active-progress .spinner").classList.toggle("hidden", !busy);
   if (!busy) $$(".stage-list li").forEach(item => item.classList.remove("running"));
 }
@@ -314,6 +315,7 @@ async function requestJobCancellation(button, kind) {
   button.setAttribute("aria-busy", "true");
   if (kind === "create") {
     creationState = "cancelling";
+    renderJobPace();
     setJobState("중지 요청 중", "running");
     $("#current-stage").textContent = "실행 중인 작업을 종료하고 있습니다.";
   } else {
@@ -325,6 +327,7 @@ async function requestJobCancellation(button, kind) {
       resetCancelButton(button);
       if (kind === "create" && creationState === "cancelling") {
         creationState = "idle";
+        renderJobPace();
         setBusy(false);
         setJobState("종료됨", "idle");
         $("#current-stage").textContent = "이미 종료된 작업입니다. 새로 제작할 수 있습니다.";
@@ -335,6 +338,7 @@ async function requestJobCancellation(button, kind) {
     resetCancelButton(button);
     if (kind === "create" && creationState === "cancelling") {
       creationState = "running";
+      renderJobPace();
       setJobState("실행 중", "running");
       $("#current-stage").textContent = previousLabel;
     }
@@ -419,6 +423,7 @@ async function refreshResumable() {
     if (!pending) return;
     $("#resume-title").textContent = pending.paused
       ? "일시정지된 작업이 있습니다"
+      : pending.failed ? "실패한 레슨을 다시 제작할 수 있습니다"
       : "이어서 만들 작업이 있습니다";
     $("#resume-detail").textContent = pending.total > 1
       ? `${pending.title} · ${pending.total}편 중 ${pending.done}편 완료 · ${pending.remaining}편 남음`
@@ -826,12 +831,14 @@ function renderJobEvent(event) {
     setBusy(true);
     setJobState("실행 중", "running");
     resetCancelButton($("#cancel-button"));
-    resetJobPace();
+    resetJobPace(event.options);
     updateStages("starting");
   } else if (event.type === "plan") {
+    if (creationState !== "running") return;
     jobPlan = { units: event.units || [], completedPages: 0, completedMs: 0, unitStartedAt: null };
     renderJobPace();
   } else if (event.type === "unit") {
+    if (creationState !== "running") return;
     advanceChapterPlan(event.index);
     jobUnit = { index: event.index, total: event.total };
     // 편이 바뀌면 속도 관측을 다시 시작한다. 레슨마다 길이가 달라 앞 편의
@@ -846,12 +853,24 @@ function renderJobEvent(event) {
       jobPace.done = event.done;
     }
     renderJobPace();
+  } else if (event.type === "unit-failed") {
+    if (creationState !== "running") return;
+    jobPace = null;
+    if (jobUnit) jobUnit.failed = true;
+    if (jobPlan) jobPlan.unitStartedAt = null;
+    $("#job-failure-note").textContent = `${event.failedCount}개 레슨 실패 · 나머지 레슨 제작을 계속합니다`;
+    $("#job-failure-note").classList.remove("hidden");
+    $("#current-stage").textContent = `${event.title} 제작 실패 · 다음 레슨 준비 중`;
+    renderJobPace();
   } else if (event.type === "stage") {
     if (creationState !== "running") return;
+    if (event.state === "running" && event.stage !== "voice") jobPace = null;
     updateStages(event.stage, event.state === "done" && event.stage === "verify");
+    renderJobPace();
   } else if (event.type === "log") {
     appendLog(event.text);
   } else if (event.type === "paused") {
+    if (creationState !== "running") return;
     const pending = event.immediate === false;
     setJobState(pending ? "일시정지 대기" : "일시정지", pending ? "running" : "paused");
     $("#pause-button").textContent = pending ? "정지 예약 취소" : "이어하기";
@@ -859,7 +878,9 @@ function renderJobEvent(event) {
     // 멈춰 있는 동안은 시간을 세지 않는다. 그러지 않으면 남은 시간이 멈춘
     // 만큼 부풀어 다시 켰을 때 엉뚱한 값을 말한다.
     if (!pending && !jobPausedAt) jobPausedAt = Date.now();
+    renderJobPace();
   } else if (event.type === "resumed") {
+    if (creationState !== "running") return;
     setJobState("실행 중", "running");
     $("#pause-button").textContent = "일시정지";
     if (jobPausedAt) {
@@ -871,6 +892,7 @@ function renderJobEvent(event) {
     renderJobPace();
   } else if (event.type === "cancelling") {
     creationState = "cancelling";
+    renderJobPace();
     setJobState("중지 중", "running");
     $("#current-stage").textContent = "안전하게 중지 중";
     $("#cancel-button").disabled = true;
@@ -878,6 +900,7 @@ function renderJobEvent(event) {
   } else if (event.type === "failed") {
     refreshResumable();
     creationState = event.cancelled ? "cancelled" : "failed";
+    renderJobPace();
     setBusy(false);
     resetCancelButton($("#cancel-button"));
     showJobView("active");
@@ -886,20 +909,28 @@ function renderJobEvent(event) {
     appendLog(`\n[중단] ${event.message}\n`);
     $("#job-log").closest("details").open = true;
     outputs.loadOutputs();
-  } else if (event.type === "complete") {
+  } else if (event.type === "complete" || event.type === "partial-complete") {
     refreshResumable();
-    creationState = "done";
+    const report = event.report;
+    const failedCount = report.failedUnits?.length || 0;
+    creationState = failedCount ? (report.units?.length ? 'partial' : 'failed') : "done";
+    renderJobPace();
     setBusy(false);
     resetCancelButton($("#cancel-button"));
     showJobView("complete");
-    setJobState("완료", "idle");
-    updateStages("verify", true);
-    const report = event.report;
+    setJobState(failedCount ? (report.units?.length ? "일부 제작 실패" : "제작 실패") : "완료", failedCount ? "failed" : "idle");
+    updateStages("verify", !failedCount);
+    $("#complete-panel").classList.toggle("has-failures", Boolean(failedCount));
+    $("#complete-panel .complete-icon").textContent = failedCount ? "!" : "✓";
+    $("#complete-title").textContent = failedCount ? "제작을 마쳤지만 실패한 레슨이 있습니다" : "제작과 검증이 끝났습니다";
+    $("#complete-failures").textContent = (report.failedUnits || []).map(unit => `${unit.title || unit.name}\n${unit.message}`).join('\n\n');
+    $("#complete-failures").classList.toggle("hidden", !failedCount);
     latestTarget = report.target;
     const findings = completionFindings(report);
     const unitCount = report.units?.length || 1;
     $("#complete-summary").textContent = completionSummary(report, formatDuration(report.durationMs));
-    if (findings.length) setJobState('제작 완료 · 확인 필요', 'idle');
+    if (findings.length && !failedCount) setJobState('제작 완료 · 확인 필요', 'idle');
+    $("#complete-panel .complete-actions").classList.toggle('hidden', !report.target);
     $("#open-latest").textContent = unitCount > 1 ? "첫 영상 열기" : "영상 열기";
     review.renderCompleteVoiceFindings(findings, report.videoPath ? report.target : null);
     outputs.loadOutputs();
@@ -919,6 +950,7 @@ let jobPace = null;
 let jobUnit = null;
 let jobPlan = null;
 let jobPausedAt = null;
+let jobHasTotal = false;
 
 // 목소리 후보도 하나에 수십 초씩 걸린다. 몇 개 남았는지만 알려주는 것과
 // 얼마나 더 기다려야 하는지 알려주는 것은 다르다.
@@ -945,18 +977,28 @@ function renderJobPace() {
   const unit = jobUnit ? unitLabel(jobUnit) : "";
   $("#job-unit").textContent = unit;
   $("#job-unit").classList.toggle("hidden", !unit);
-  $("#job-eta").textContent = jobPace
+  const running = creationState === "running";
+  const split = jobHasTotal || Boolean(jobPlan) || Number(jobUnit?.total) > 1;
+  const label = running && jobPace
     ? etaLabel({
         done: jobPace.done,
         total: jobPace.total,
         elapsedMs: Date.now() - jobPace.startedAt,
         baseline: jobPace.baseline,
-        scope: jobPlan ? "unit" : "job",
+        scope: split ? "unit" : "job",
       })
     : "";
-  const whole = jobPlan ? chapterProgressLabel() : "";
-  $("#job-total-eta").textContent = whole;
-  $("#job-total-eta").classList.toggle("hidden", !whole);
+  const whole = running && jobPlan ? chapterProgressLabel() : "";
+  const paused = Boolean(jobPausedAt);
+  renderEta($("#job-eta"), !running ? "" : paused ? "일시정지" : label || `${split ? "이 편 " : ""}남은 시간 계산 중`, running && !paused && !label);
+  renderEta($("#job-total-eta"), !running || !split ? "" : paused ? "전체 일시정지" : whole || "전체 남은 시간 계산 중", running && split && !paused && !whole);
+}
+
+function renderEta(element, label, calculating) {
+  element.textContent = label;
+  element.classList.toggle("hidden", !label);
+  element.classList.toggle("eta-calculating", calculating);
+  element.setAttribute("aria-busy", String(calculating));
 }
 
 function chapterProgressLabel() {
@@ -967,16 +1009,16 @@ function chapterProgressLabel() {
   return chapterEtaLabel({
     completedPages: jobPlan.completedPages,
     completedMs: jobPlan.completedMs,
-    currentPages: current.pages,
+    currentPages: jobUnit?.failed ? 0 : current.pages,
     currentElapsedMs: jobPlan.unitStartedAt ? Date.now() - jobPlan.unitStartedAt : 0,
-    pendingPages: units.slice(index).reduce((total, unit) => total + Number(unit.pages || 0), 0),
+    pendingPages: units.slice(index).filter(unit => !unit.completed).reduce((total, unit) => total + Number(unit.pages || 0), 0),
   });
 }
 
 // 편이 끝날 때마다 그 편의 실제 소요와 분량을 더해 속도를 갱신한다.
 function advanceChapterPlan(index) {
   if (!jobPlan) return;
-  const previous = (jobPlan.units || [])[index - 2];
+  const previous = (jobPlan.units || [])[Number(jobUnit?.index) - 1];
   if (previous && jobPlan.unitStartedAt) {
     jobPlan.completedMs += Date.now() - jobPlan.unitStartedAt;
     jobPlan.completedPages += Number(previous.pages || 0);
@@ -984,19 +1026,21 @@ function advanceChapterPlan(index) {
   jobPlan.unitStartedAt = Date.now();
 }
 
-function resetJobPace() {
+function resetJobPace(options = {}) {
   jobPace = null;
   jobUnit = null;
   jobPlan = null;
   jobPausedAt = null;
+  jobHasTotal = options.mode === "chapter" && options.chapterMode === "lesson";
+  $("#job-failure-note").textContent = "";
+  $("#job-failure-note").classList.add("hidden");
   $("#pause-button").textContent = "일시정지";
   renderJobPace();
 }
 
-// 청크 하나가 몇십 초 걸리므로, 이벤트 사이에도 남은 시간이 줄어드는 것이
-// 보이도록 주기적으로 다시 그린다.
+// 실행 중에만 추정값을 갱신한다. 실패·중지 후 옛 남은 시간을 되살리지 않는다.
 if (typeof setInterval === "function") {
-  setInterval(() => { if (jobPace) renderJobPace(); }, 5_000);
+  setInterval(() => { if (creationState === "running" && !jobPausedAt) renderJobPace(); }, 5_000);
 }
 
 async function initialize() {

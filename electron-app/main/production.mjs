@@ -22,6 +22,12 @@ export function createProductionService({
   }
 
   async function clearActiveJob() {
+    const record = await readActiveJob();
+    if (record?.options?.name && /^[a-z0-9][a-z0-9-]{0,63}$/.test(record.options.name)
+      && !['running', 'paused', 'cancelling'].includes(state?.activeJob?.state)) {
+      const studio = runtimePaths(record.options.paths);
+      await fs.rm(path.join(studio.captionOutputRoot, record.options.name, '.production-input'), { recursive: true, force: true }).catch(() => {});
+    }
     await fs.rm(ACTIVE_JOB_PATH, { force: true }).catch(() => {});
   }
 
@@ -323,6 +329,7 @@ export function createProductionService({
       ? await loadCatalog(studio, { tracked: true })
       : null;
     const units = chapterUnits(options, catalog);
+    const finished = resuming && units.length > 1 ? await finishedUnitNames(units, studio, fingerprint) : [];
     // 챕터 전체 남은 시간은 페이지 수로만 낼 수 있다. 편마다 분량이 크게 달라
     // 편 개수로 세면 남은 편이 가벼운지 무거운지를 놓친다. 여러 편으로 나눌
     // 때에만 보내고, 한 편짜리에는 두 번째 시계가 필요 없다.
@@ -332,23 +339,31 @@ export function createProductionService({
         units: units.map((unit) => ({
           title: unit.title,
           pages: Math.max(1, Number(unit.endPage) - Number(unit.startPage) + 1),
+          completed: finished.includes(unit.name),
         })),
       });
     }
-    const finished = resuming && units.length > 1 ? await finishedUnitNames(units, studio, fingerprint) : [];
     const remaining = pendingUnits(units, finished);
     if (finished.length) {
       emit({ type: "log", stream: "stdout",
         text: `이미 완성된 ${finished.length}편은 건너뜁니다. ${remaining.length}편을 이어서 만듭니다.\n` });
     }
     const reports = [];
-    await writeActiveJob({
+    const failedUnits = [];
+    const saveProgress = () => writeActiveJob({
       schemaVersion: 1, id: job.id, startedAt: job.startedAt, options,
       unitNames: units.map((unit) => unit.name), completed: [...finished],
+      failedUnits: [...failedUnits],
     });
+    await saveProgress();
+    // Keep this input until every lesson succeeds, so a retry uses the same source.
+    job.retainProductionInput = true;
     for (const [index, unit] of units.entries()) {
       if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
-      if (finished.includes(unit.name)) continue;
+      if (finished.includes(unit.name)) {
+        reports.push(await fs.readFile(path.join(studio.captionOutputRoot, unit.name, 'validation-report.json'), 'utf8').then(JSON.parse));
+        continue;
+      }
       // 일시정지는 편 사이에서 확정된다. 앱이 꺼져도 이어할 수 있는 지점이 곧
       // 여기이므로, 멈추는 자리와 이어붙이는 자리를 같게 둔다.
       while (job.pauseRequested && !job.cancelled) {
@@ -365,26 +380,36 @@ export function createProductionService({
           text: `챕터 레슨 단위 ${index + 1}/${units.length}: ${unit.title}를 제작합니다.\n`,
         });
       }
-      const report = await runPipelineUnit(unit, studio, input.site);
-      if (!report) return;
-      if (units.length > 1) {
+      try {
+        const report = await runPipelineUnit(unit, studio, input.site);
+        if (!report) return;
+        reports.push(report);
         finished.push(unit.name);
-        await writeActiveJob({
-          schemaVersion: 1, id: job.id, startedAt: job.startedAt, options,
-          unitNames: units.map((item) => item.name), completed: [...finished],
-        }).catch(() => {});
+      } catch (error) {
+        if (job.cancelled || units.length === 1) throw error;
+        if (state.activeJob !== job) return;
+        const failure = { name: unit.name, title: unit.title, index: index + 1,
+          startPage: unit.startPage, endPage: unit.endPage, stage: job.stage,
+          message: error.message || String(error) };
+        failedUnits.push(failure);
+        emit({ type: 'unit-failed', ...failure, total: units.length, failedCount: failedUnits.length });
+        emit({ type: 'log', stream: 'stderr', text: `${unit.title} 제작 실패: ${failure.message}\n나머지 레슨 제작을 계속합니다.\n` });
       }
-      reports.push(report);
+      await saveProgress();
     }
     if (state.activeJob !== job) return;
     if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
-    const report = units.length > 1 ? combineChapterReports(options, reports) : reports[0];
+    const report = units.length > 1 ? combineChapterReports(options, reports, failedUnits) : reports[0];
+    if (units.length > 1) {
+      await writeReport(path.join(originalStudio.captionOutputRoot, options.name, 'chapter-report.json'), report, 'chapter');
+    }
+    job.retainProductionInput = failedUnits.length > 0;
     await cleanupCaptureSite(job);
     if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
-    job.state = "done";
+    job.state = failedUnits.length ? (reports.length ? 'partial' : 'failed') : "done";
     job.stage = "done";
-    await clearActiveJob();
-    emit({ type: "complete", report });
+    if (!failedUnits.length) await clearActiveJob();
+    emit({ type: failedUnits.length ? 'partial-complete' : "complete", report });
   }
 
   function launchPipeline(options) {
@@ -419,6 +444,7 @@ export function createProductionService({
     for (const key of ["captureSiteDir", "productionInputDir"]) {
       const directory = job?.[key];
       if (!directory) continue;
+      if (key === 'productionInputDir' && job.retainProductionInput && !job.cancelled) continue;
       job[key] = null;
       await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
     }

@@ -124,12 +124,16 @@ export function completionFindings(report = {}) {
 
 export function completionSummary(report, durationLabel) {
   const units = report.units?.length || 1;
+  const failed = report.failedUnits?.length || 0;
+  if (failed && !report.units?.length) return `${failed}개 레슨 제작 실패 · 완성된 영상 없음`;
   const count = summarizeVoiceFindings(completionFindings(report));
-  const files = report.summary?.ok ? '파일 검사 통과' : '파일 검사 실패';
+  const files = failed ? '완성 영상 파일 검사 통과' : report.summary?.ok ? '파일 검사 통과' : '파일 검사 실패';
   const voice = count.total ? count.title
     : report.voiceQuality?.clean === true ? '목소리 검수 통과'
       : report.voiceQuality ? '목소리 검수 결과 확인 필요' : '목소리 검수 기록 없음';
-  return `${units > 1 ? `${units}개 영상 · ` : ''}${durationLabel}${units > 1 ? ' 합계' : ''} · ${files} · ${voice}`;
+  const prefix = failed ? `${report.totalUnits || units + failed}개 레슨 중 ${units}개 완료 · ${failed}개 실패 · `
+    : units > 1 ? `${units}개 영상 · ` : '';
+  return `${prefix}${durationLabel}${units > 1 ? ' 합계' : ''} · ${files} · ${voice}`;
 }
 
 export function createViewHistory(initial = 'new') {

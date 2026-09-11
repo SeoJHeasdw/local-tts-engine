@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { createReviewController } from '../../electron-app/renderer/controllers/review.mjs';
+import { voiceQualityFindings } from '../../electron-app/shared/quality.mjs';
 
 import { findingExcerpt, findingKeyOf, findingSeek, findingStatus } from '../../electron-app/renderer/view-utils.mjs';
 import {parseRegionTime,formatRegionTime,regionIssue,regionImpact,regionWindow,timeAtFraction} from '../../electron-app/shared/regions.mjs';
@@ -51,6 +52,22 @@ test('자동 권장이 없어도 재생 위치의 페이지를 직접 선택한�
   assert.equal(context.testReview.selection().number,2);
   assert.equal($('#start-review-button').disabled,false);
   assert.equal($('#voice-start-page').value,'2');
+});
+
+test('미등록 발음 경고도 기존 확인 완료·페이지 재생성 흐름을 사용한다', async () => {
+  const { context, $, saved, page1 } = fixture();
+  const [finding] = voiceQualityFindings({ chunks: [{ key: 'clip', startMs: 1300, endMs: 33000 }],
+    entries: [{ chunkKey: 'clip', chapter: 'ch03', slide_number: 1, slide_id: 'a',
+      tts_text: 'X-9876입니다.', unresolved_tokens: ['X-9876'] }] });
+  context.testReview.setReviewVideo({ token: 'new', name: 'new.mp4', videoUrl: 'file:///new.mp4',
+    pages: [page1], voiceFindings: [finding], reviewTarget: { root: 'render', name: 'new' } });
+  assert.equal(context.testReview.visible().length, 1);
+  await context.testReview.clear(finding);
+  assert.equal(context.testReview.visible().length, 0);
+  assert.deepEqual(saved.at(-1), { target: { root: 'render', name: 'new' }, keys: ['1:1300'] });
+  context.testReview.selectReviewPage(page1);
+  assert.equal($('#voice-start-page').value, '1');
+  assert.equal($('#start-review-button').disabled, false);
 });
 
 test('후보 생성 대상은 이후 선택 페이지와 별개로 고정된다', async () => {

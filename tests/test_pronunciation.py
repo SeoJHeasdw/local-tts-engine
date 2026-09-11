@@ -83,6 +83,8 @@ def test_production_dictionary_covers_every_term_the_user_reported() -> None:
     assert rules["IBM"] == "아이비엠"
     assert rules["Meta"] == "메타"
     assert rules["A-2041"] == "에이 이공사일"
+    assert rules["B-3102"] == "비 삼일공이"
+    assert rules["R-042"] == "알 공사이"
     assert rules["K-2314"] == "케이 이삼일사"
     assert rules["GPT-4"] == "지피티 포"
     # 2026-09-04 청취 승인. 한국 시청자 기준 엔-팔-엔으로 읽는다.
@@ -380,10 +382,9 @@ def test_an_entry_that_contains_a_hyphen_still_matches() -> None:
     assert apply_pronunciation("GPT-4랑 비교합니다.", dictionary) == "지피티 포랑 비교합니다."
 
 
-def test_a_number_hyphenated_to_a_letter_is_left_for_the_identifier_guard() -> None:
-    # Reading only the number half turned B-3099 into "B-삼천구십구". The guard
-    # in korean_naturalness stops the run on such a token; the pronunciation
-    # layer must not quietly half-answer it first.
+def test_a_number_hyphenated_to_a_letter_is_preserved_for_review() -> None:
+    # Reading only the number half turned B-3099 into "B-삼천구십구". Keep the
+    # unknown identifier intact for synthesis and post-production listening.
     assert apply_pronunciation("주문 B-3099를 조회합니다.", []) == "주문 B-3099를 조회합니다."
 
 
