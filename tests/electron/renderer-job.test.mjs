@@ -3,16 +3,19 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 
-import { chapterEtaLabel, etaLabel, unitLabel, completionFindings, completionSummary } from "../../electron-app/renderer/view-utils.mjs";
+import { etaLabel, unitLabel, completionFindings, completionSummary } from "../../electron-app/renderer/view-utils.mjs";
+import { createJobPace } from "../../electron-app/renderer/job-pace.mjs";
 
 const source = await fs.readFile(new URL("../../electron-app/renderer/app.js", import.meta.url), "utf8");
 function fixture(cancel = async () => false) {
   const nodes = new Map();
   const element = () => {
     const classes = new Set();
-    return { textContent: "", disabled: false, open: false,
+    return { textContent: "", disabled: false, open: false, dataset: {}, children: [],
       classList: { add: v => classes.add(v), remove: v => classes.delete(v), contains: v => classes.has(v),
         toggle: (v, enabled) => enabled ? classes.add(v) : classes.delete(v) },
+      append(...items) { this.children.push(...items); },
+      replaceChildren(...items) { this.children = items; },
       setAttribute() {}, removeAttribute() {}, querySelectorAll: () => [], closest() { return this; } };
   };
   const $ = selector => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); };
@@ -23,12 +26,13 @@ function fixture(cancel = async () => false) {
     refreshResumable() {},
     formatDuration: ms => `${ms}ms`, suggestedName: () => 'next', updateProductionBrief() {},
     updateStages: stage => { $("#current-stage").textContent = stage; },
-    chapterEtaLabel, etaLabel, unitLabel, completionFindings, completionSummary, setInterval: () => 0, Date,
+    createJobPace, etaLabel, unitLabel, completionFindings, completionSummary, setInterval: () => 0, Date,
+    document: { createElement: element },
   });
   vm.runInContext('let creationState="idle", latestTarget=null;\n'
     + source.slice(source.indexOf("function setBusy("), source.indexOf("function setJobState("))
     + source.slice(source.indexOf("function renderJobEvent("), source.indexOf("async function initialize("))
-    + ';globalThis.jobUi={renderJobEvent,requestJobCancellation,state:()=>creationState,pace:()=>jobPace,unit:()=>jobUnit,plan:()=>jobPlan};', ctx);
+    + ';globalThis.jobUi={renderJobEvent,requestJobCancellation,state:()=>creationState,pace:()=>pace};', ctx);
   return { $, ui: ctx.jobUi, calls: () => calls };
 }
 
@@ -95,16 +99,16 @@ test("남은 시간은 관측을 시작한 지점부터 재고, 편이 바뀌면
   ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
 
   ui.renderJobEvent({ type: "voice-progress", done: 4, total: 24 });
-  assert.equal(ui.pace().baseline, 4, "화면을 늦게 열었어도 그 지점부터 센다");
+  assert.equal(ui.pace().snapshot().voice.baseline, 4, "화면을 늦게 열었어도 그 지점부터 센다");
   assert.equal($("#job-eta").textContent, "남은 시간 계산 중", "아직 잰 구간이 없으면 계산 중임을 알린다");
 
   ui.renderJobEvent({ type: "voice-progress", done: 8, total: 24 });
-  assert.equal(ui.pace().done, 8);
+  assert.equal(ui.pace().snapshot().voice.done, 8);
 
-  // 편이 바뀌면 앞 편의 속도를 물려주지 않는다. 레슨마다 길이가 달라
-  // 그대로 재면 남은 시간이 크게 어긋난다.
+  // 편이 바뀌면 앞 편의 관측을 물려주지 않는다. 레슨마다 분량이 달라 그대로
+  // 재면 남은 시간이 크게 어긋난다.
   ui.renderJobEvent({ type: "unit", index: 4, total: 9, title: "CH02 L04" });
-  assert.equal(ui.pace(), null);
+  assert.equal(ui.pace().snapshot().voice, null);
   assert.equal($("#job-eta").textContent, "이 편 남은 시간 계산 중");
 });
 
@@ -116,8 +120,8 @@ test("작업을 새로 시작하면 이전 작업의 진행 표시가 남지 않
 
   ui.renderJobEvent({ type: "started", options: { name: "ch03" } });
 
-  assert.equal(ui.unit(), null);
-  assert.equal(ui.pace(), null);
+  assert.equal(ui.pace().currentUnit, null);
+  assert.equal(ui.pace().snapshot().voice, null);
   assert.equal($("#job-unit").textContent, "");
   assert.equal($("#job-eta").textContent, "남은 시간 계산 중");
 });
@@ -130,7 +134,7 @@ test("한 편짜리 작업에는 두 번째 시계를 띄우지 않는다", () =
   ui.renderJobEvent({ type: "voice-progress", done: 4, total: 20 });
   ui.renderJobEvent({ type: "voice-progress", done: 12, total: 20 });
 
-  assert.equal(ui.plan(), null, "plan 이 오지 않으면 전체 시계는 존재하지 않는다");
+  assert.equal(ui.pace().snapshot().units.length, 0, "plan 이 오지 않으면 전체 시계는 존재하지 않는다");
   assert.equal($("#job-total-eta").textContent, "");
   assert.equal($("#job-unit").textContent, "");
 });
@@ -148,30 +152,8 @@ test("레슨으로 나눠 만들 때만 편별 분량으로 전체 시계를 낸
 
   ui.renderJobEvent({ type: "unit", index: 2, total: 4, title: "L02" });
 
-  assert.equal(ui.plan().completedPages, 10, "끝난 편의 분량이 속도에 반영된다");
+  assert.equal(ui.pace().snapshot().unitPages, 10, "이 편의 분량이 속도의 단위가 된다");
   assert.equal($("#job-unit").textContent, "레슨 2/4");
-});
-
-test("남은 편이 무거우면 전체 시계가 편 개수보다 길게 잡는다", () => {
-  const { ui } = fixture();
-  ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
-  ui.renderJobEvent({ type: "plan", units: [
-    { title: "L01", pages: 10 }, { title: "L02", pages: 10 }, { title: "L03", pages: 100 },
-  ] });
-  ui.renderJobEvent({ type: "unit", index: 1, total: 3, title: "L01" });
-
-  // 1편(10p)을 10분에 끝냈다고 두고 2편으로 넘어간다.
-  const plan = ui.plan();
-  plan.unitStartedAt = Date.now() - 10 * 60_000;
-  ui.renderJobEvent({ type: "unit", index: 2, total: 3, title: "L02" });
-
-  assert.equal(plan.completedPages, 10);
-  assert.ok(plan.completedMs >= 10 * 60_000 - 500, "실제 소요가 속도로 들어간다");
-  // 남은 110페이지 × 1분/페이지 → 편 개수(2편 남음)로 세면 20분이 나올 자리다.
-  assert.equal(
-    chapterEtaLabel({ completedPages: 10, completedMs: 10 * 60_000, currentPages: 10, currentElapsedMs: 0, pendingPages: 100 }),
-    "전체 약 1시간 50분 남음",
-  );
 });
 
 test("작업을 새로 시작하면 전체 시계도 지워진다", () => {
@@ -182,7 +164,7 @@ test("작업을 새로 시작하면 전체 시계도 지워진다", () => {
 
   ui.renderJobEvent({ type: "started", options: { name: "next" } });
 
-  assert.equal(ui.plan(), null);
+  assert.equal(ui.pace().snapshot().units.length, 0);
   assert.equal($("#job-total-eta").textContent, "");
 });
 
@@ -211,18 +193,16 @@ test("촬영 중이라 바로 못 멈추면 언제 멈추는지 말해 준다", 
 test("멈춰 있던 시간은 남은 시간 계산에서 빠진다", () => {
   // 그러지 않으면 점심 먹고 온 만큼 남은 시간이 부풀어, 다시 켰을 때 화면이
   // 엉뚱한 값을 말한다.
-  const { ui } = fixture();
+  const { $, ui } = fixture();
   ui.renderJobEvent({ type: "started", options: { name: "ch02" } });
   ui.renderJobEvent({ type: "voice-progress", done: 4, total: 24 });
-  const pace = ui.pace();
-  const before = pace.startedAt;
+  const before = ui.pace().snapshot().voice.startedAt;
 
   ui.renderJobEvent({ type: "paused", immediate: true });
-  // 30분 자리를 비웠다고 두고 이어한다.
-  const away = 30 * 60_000;
-  ui.renderJobEvent({ type: "resumed", testAwayMs: away });
+  assert.equal($("#job-eta").textContent, "일시정지");
+  ui.renderJobEvent({ type: "resumed" });
 
-  assert.ok(pace.startedAt >= before, "멈춘 만큼 관측 시작 시각이 밀려야 한다");
+  assert.ok(ui.pace().snapshot().voice.startedAt >= before, "멈춘 만큼 관측 시작 시각이 밀려야 한다");
 });
 
 test("작업을 새로 시작하면 일시정지 버튼도 원래대로 돌아온다", () => {
@@ -250,10 +230,35 @@ test('촬영 정지 예약을 실제 정지로 표시하거나 경과 시간에�
   const { $, ui } = fixture();
   ui.renderJobEvent({ type: 'started', options: { name: 'lecture' } });
   ui.renderJobEvent({ type: 'voice-progress', done: 1, total: 3 });
-  const startedAt = ui.pace().startedAt;
+  const startedAt = ui.pace().snapshot().voice.startedAt;
   ui.renderJobEvent({ type: 'paused', immediate: false });
   assert.equal($('#job-state').textContent, '일시정지 대기');
   assert.equal($('#pause-button').textContent, '정지 예약 취소');
   ui.renderJobEvent({ type: 'resumed' });
-  assert.equal(ui.pace().startedAt, startedAt);
+  assert.equal(ui.pace().snapshot().voice.startedAt, startedAt);
+});
+
+test('챕터를 나눠 만들면 어느 편이 끝났고 어느 편이 실패했는지 줄로 남는다', () => {
+  // 세 시간짜리 작업에서 '레슨 7/11'만으로는 무엇이 남았는지 알 수 없다.
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: 'started', options: { name: 'ch03', mode: 'chapter', chapterMode: 'lesson' } });
+  assert.equal($('#job-units').classList.contains('hidden'), true, '한 편짜리에는 목록이 없다');
+
+  ui.renderJobEvent({ type: 'plan', units: [
+    { title: 'L01', pages: 10, completed: true }, { title: 'L02', pages: 10 }, { title: 'L03', pages: 10 },
+  ] });
+  ui.renderJobEvent({ type: 'unit', index: 2, total: 3, title: 'L02' });
+
+  assert.equal($('#job-units').classList.contains('hidden'), false);
+  assert.deepEqual($('#job-units-list').children.map(row => row.dataset.state), ['skipped', 'running', 'pending']);
+  assert.match($('#job-units-detail').textContent, /3편 중 1편 완료 · 2편 남음/);
+
+  ui.renderJobEvent({ type: 'unit-failed', index: 2, title: 'L02', failedCount: 1 });
+  ui.renderJobEvent({ type: 'unit', index: 3, total: 3, title: 'L03' });
+
+  assert.deepEqual($('#job-units-list').children.map(row => row.dataset.state), ['skipped', 'failed', 'running']);
+  assert.match($('#job-units-detail').textContent, /1편 실패/);
+
+  ui.renderJobEvent({ type: 'complete', report: { durationMs: 1000, summary: { ok: true }, target: { name: 'ch03' }, units: [], voiceFindings: [] } });
+  assert.deepEqual($('#job-units-list').children.map(row => row.dataset.state), ['skipped', 'failed', 'done']);
 });

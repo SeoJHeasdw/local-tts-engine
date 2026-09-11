@@ -11,7 +11,10 @@ function fixture() {
   const elements = new Map();
   const element = () => ({ value:'', textContent:'', disabled:false, currentTime:0, readyState:2, dataset:{}, listeners:{}, children:[], attributes:{},style:{},
     setPointerCapture(){},getBoundingClientRect(){return {left:0,width:1000};},
-    classList:{add(){},remove(){},toggle(){}}, append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},
+    classList:(()=>{const names=new Set();return {add:(...values)=>values.forEach(v=>names.add(v)),
+      remove:(...values)=>values.forEach(v=>names.delete(v)),contains:v=>names.has(v),
+      toggle(v,force=!names.has(v)){force?names.add(v):names.delete(v);return force;}};})(),
+    append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},
     setAttribute(k,v){this.attributes[k]=v;},getAttribute(k){return this.attributes[k];},removeAttribute(k){delete this.attributes[k];},
     pause(){this.paused=true;}, async play(){this.paused=false;}, click(){},
     addEventListener(name, callback){this.listeners[name]=callback;},
@@ -20,7 +23,8 @@ function fixture() {
   const modes = ['regenerate','mute','replace'].map(mode=>Object.assign(element(),{dataset:{repairMode:mode}}));
   const calls = [];
   const saved = [];
-  const context = { $, $$:key=>key==='#review-mode-tabs button'?modes:[],
+  const context = { $, $$:key=>key==='#review-mode-tabs button'?modes
+      :key==='#review-pages button'?$('#review-pages').children:[],
     document:{createElement:element}, mediaState:{voiceVideo:null, latestEditTarget:null},
     api:{startEdit:async payload=>calls.push(payload), setClearedFindings:async(target,keys)=>saved.push({target,keys})}, setEditBusy(){}, showToast(){},
     findingKeyOf, findingExcerpt, findingSeek, findingStatus,
@@ -190,6 +194,29 @@ test('확인 항목은 하나씩 확인 완료로 목록에서 내릴 수 있다
   assert.equal($('#review-finding-count').textContent,'1');
 });
 
+test('한 페이지의 여러 지적은 한 번의 확인으로 함께 내려간다', () => {
+  // 같은 페이지의 지적 둘을 따로 넘어갈 수는 없다. 고치는 단위가 페이지다.
+  const {context,$,saved}=fixture();
+  const twice=[
+    {slideNumber:1,startMs:1300,endMs:9000,severity:'failed',reasons:['단어 일부 누락']},
+    {slideNumber:1,startMs:9000,endMs:33000,severity:'warning',reasons:['발음 확인 필요']},
+  ];
+  context.testReview.setReviewVideo({token:'two',name:'two.mp4',videoUrl:'file:///two.mp4',
+    pages:[{number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'}],voiceFindings:twice,
+    reviewTarget:{root:'render',name:'two'}});
+  assert.equal($('#review-finding-count').textContent,'2');
+  const before=saved.length;
+
+  const row=context.testReview.renderFindingGroup({number:1,findings:twice});
+  const [done]=row.children[0].children[1].children.at(-1).children;
+  assert.equal(done.textContent,'이 페이지 확인');
+  done.listeners.click();
+
+  assert.equal(context.testReview.visible().length,0);
+  assert.equal($('#review-finding-count').textContent,'0');
+  assert.equal(saved.length,before+1,'표시 저장은 한 번만 보낸다');
+});
+
 test('교체를 담으면 그 페이지의 확인 항목도 함께 내려간다', async () => {
   const {context,$}=fixture();
   context.testReview.selectReviewPage(context.testReview.selection()||undefined);
@@ -249,26 +276,33 @@ test('다른 영상을 열면 앞 영상의 표시가 따라가지 않는다', (
   assert.equal(context.testReview.cleared().size,0);
 });
 
-test('실제 L04 행은 누락 구절·미해결 횟수를 보이고 해당 문장부터 재생한다', async () => {
+test('실제 L04 항목은 누락 구절·미해결 횟수를 보이고 해당 문장부터 재생한다', async () => {
   const {finding,page}=JSON.parse(await fs.readFile(new URL('../fixtures/ch02-l04-omission.json',import.meta.url),'utf8'));
   const {context,$}=fixture();
   context.testReview.setReviewVideo({token:'l04',name:'L04.mp4',videoUrl:'file:///l04.mp4',pages:[{...page,text:finding.expectedText,slideId:'defaults-org-now'}],voiceFindings:[finding]});
-  const row=context.testReview.renderVoiceFindingRow(finding);
-  const button=row.children[0];
-  assert.equal(button.children[1].textContent,'재생성 필요 · 구절 누락 의심 · 4회 생성 후 미해결');
-  assert.equal(button.children[2].children[1].textContent,'다음 요청에서는 개발자 지시와 도구를');
-  button.listeners.click();
+  const item=context.testReview.renderVoiceFindingRow(finding);
+  const [status,,line]=item.children;
+  assert.equal(status.textContent,'재생성 필요 · 구절 누락 의심 · 4회 생성 후 미해결');
+  assert.equal(line.children[1].textContent,'다음 요청에서는 개발자 지시와 도구를');
+
+  // 펼치는 것과 그 자리를 듣는 것은 한 동작이다.
+  const row=context.testReview.renderFindingGroup({number:Number(finding.slideNumber),findings:[finding]});
+  const details=row.children[0];
+  details.open=true;
+  details.listeners.toggle();
   assert.equal($('#review-player').currentTime,290.055);
   assert.match($('#polish-diff-note').textContent,/구절 누락 의심 · 4회 생성 후 미해결/);
 });
 
 test('확인 항목의 재생성은 그 페이지로 후보 생성을 바로 건다', async () => {
   const {context,$,calls,modes,findings}=fixture();
-  const row=context.testReview.renderVoiceFindingRow(findings[1]);
-  // 확인 다음에 재생성이 선다. 넘어가기와 다시 만들기가 나란히 있어야 한다.
-  const [,,done,again]=row.children[1].children;
+  const row=context.testReview.renderFindingGroup({number:2,findings:[findings[1]]});
+  // 넘어가기와 다시 만들기, 그리고 읽는 말 고치기가 한 줄에 나란히 선다.
+  const tools=row.children[0].children[1].children.at(-1);
+  const [done,again,rewrite]=tools.children;
   assert.equal(done.textContent,'확인');
   assert.equal(again.textContent,'재생성');
+  assert.equal(rewrite.textContent,'읽는 말 바꿔 재생성');
   await again.listeners.click();
   assert.equal(calls.length,1);
   assert.equal(calls[0].operation,'voice-candidates');
@@ -355,4 +389,181 @@ test('교체 전 미리듣기는 길이 정책을 넘기며 아직 편집본을 
   assert.equal(requests[0].mode,'replace');assert.equal(requests[0].durationPolicy,'match-audio');
   assert.equal($('#review-preview-player').src,'file:///after.wav');assert.equal(calls.length,0);
   assert.match($('#review-preview-note').textContent,/아직 저장하지 않았습니다/);
+});
+
+
+test('읽는 말을 적으면 그 말로 후보를 만들고, 누르기만 해서는 생성하지 않는다', async () => {
+  // 몇 번을 다시 만들어도 같게 읽히는 자리가 있다. 그때는 사람이 읽을 말을 적는다.
+  const {context,$,calls,findings,page2}=fixture();
+  const row=context.testReview.renderFindingGroup({number:2,findings:[findings[1]]});
+  const [,,rewrite]=row.children[0].children[1].children.at(-1).children;
+
+  rewrite.listeners.click();
+  assert.equal(calls.length,0,'입력칸만 열고 생성을 걸지는 않는다');
+  assert.equal($('#voice-override-text').value,page2.text,'대본을 그대로 채워 고쳐 쓰게 한다');
+  assert.equal($('#voice-script-override').open,true);
+
+  $('#voice-override-text').value='주문 에이 이공구일의 환불';
+  $('#voice-override-text').listeners.input();
+  assert.equal($('#start-review-label').textContent,'입력한 말로 후보 만들기');
+
+  $('#review-form').listeners.submit({preventDefault(){}});
+  await Promise.resolve();
+  assert.equal(calls.at(-1).operation,'voice-candidates');
+  assert.equal(calls.at(-1).overrideText,'주문 에이 이공구일의 환불');
+  assert.equal(calls.at(-1).startPage,2);
+});
+
+test('적어 둔 읽는 말은 그 페이지에만 쓰인다', async () => {
+  const {context,$,calls,page1}=fixture();
+  $('#review-player').currentTime=35;
+  $('#review-select-page').listeners.click();
+  $('#voice-override-text').value='이 페이지에만 쓰는 말';
+  $('#voice-override-text').listeners.input();
+
+  context.testReview.selectReviewPage(page1);
+
+  assert.equal($('#voice-override-text').value,'','다른 페이지로 옮기면 앞 페이지의 말을 물려주지 않는다');
+  $('#review-form').listeners.submit({preventDefault(){}});
+  await Promise.resolve();
+  assert.equal(calls.at(-1).overrideText,'');
+});
+
+test('페이지 막대는 확인할 곳과 교체 대기를 색으로 세운다', () => {
+  // 백 칸이 넘는 페이지에서 어디가 걸렸는지는 이름표가 아니라 색으로 읽힌다.
+  const {context,$}=fixture();
+  const cells=$('#review-pages').children;
+  assert.equal(cells.length,2);
+  assert.equal(cells[0].classList.contains('flagged'),true,'재생성 필요는 붉게 선다');
+  assert.equal(cells[1].classList.contains('advised'),true,'청취 확인은 다른 색으로 선다');
+  assert.match($('#page-rail-legend').textContent,/재생성 필요 1 · 청취 확인 1/);
+
+  context.testReview.pendingFixes.set(1,{startPage:1,endPage:1,audioToken:'a',label:'고른 목소리'});
+  context.testReview.renderPendingFixes();
+
+  assert.equal(cells[0].classList.contains('queued'),true,'담아 둔 교체는 처리된 자리로 표시한다');
+  assert.match($('#polish-facts').children.at(-1).children[0].textContent,/교체 대기/);
+});
+
+test('모두 펼치기는 보기만 넓히고 고칠 자리를 바꾸지 않는다', () => {
+  const {context,$,page1}=fixture();
+  context.testReview.selectReviewPage(page1);
+  assert.equal($('#review-selection-title').textContent,'1페이지 고치기');
+
+  $('#review-findings-expand').listeners.click();
+
+  assert.equal(context.testReview.selection().number,1,'펼친 마지막 페이지가 고칠 자리를 빼앗지 않는다');
+  assert.equal($('#review-findings-expand').textContent,'모두 접기');
+});
+
+test('페이지 이동은 번호로도, 앞뒤 버튼으로도 같은 자리를 고른다', () => {
+  const {context,$,page2}=fixture();
+  $('#review-page-jump').value='2';
+  $('#review-page-jump').listeners.change();
+  assert.equal(context.testReview.selection().number,2);
+  assert.equal($('#review-player').currentTime,page2.startMs/1000);
+
+  $('#review-page-prev').listeners.click();
+  assert.equal(context.testReview.selection().number,1);
+});
+
+test('담아 둔 교체를 취소하면 그 페이지의 확인 항목이 도로 올라온다', async () => {
+  // 담을 때 처리된 자리로 내렸으니, 되돌릴 때 함께 올리지 않으면 남은 일이
+  // 목록에서 사라진 채로 남는다.
+  const {context,$}=fixture();
+  context.testReview.selectReviewPage({number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'});
+  await $('#review-form').listeners.submit({preventDefault(){}});
+  context.testReview.queue('token','고른 목소리 1');
+  assert.equal(context.testReview.visible().length,1);
+  assert.equal($('#review-finding-count').textContent,'1');
+
+  $('#polish-discard').listeners.click();
+
+  assert.equal(context.testReview.pending().size,0);
+  assert.equal(context.testReview.visible().length,2,'취소한 페이지의 확인 항목이 돌아온다');
+  assert.equal($('#review-finding-count').textContent,'2');
+});
+
+test('같은 작업에서 나온 영상은 다듬기에서 앞뒤로 넘어간다', async () => {
+  // 한 챕터를 열한 편으로 나눠 만들면 다듬기도 열한 번이다. 편마다 결과
+  // 목록으로 돌아가면 그 걸음이 열 번 반복된다.
+  const {context,$}=fixture();
+  const opened=[];
+  context.api.adoptResultVideo=async target=>{opened.push(target);return {token:target.name,name:`${target.name}.mp4`,videoUrl:'',pages:[],voiceFindings:[]};};
+  const around={previous:{root:'render',name:'ch03-l01'},next:{root:'render',name:'ch03-l03'},index:2,total:11};
+  const review=createReviewController({...context,neighbours:()=>around});
+  review.setReviewVideo({token:'l02',name:'L02.mp4',videoUrl:'',pages:[],voiceFindings:[]},{root:'render',name:'ch03-l02'});
+
+  assert.equal($('#review-siblings').classList.contains('hidden'),false);
+  assert.equal($('#review-sibling-position').textContent,'2/11편');
+  assert.equal($('#review-next-video').disabled,false);
+
+  await $('#review-next-video').listeners.click();
+  assert.deepEqual(opened.at(-1),{root:'render',name:'ch03-l03'});
+
+  // 앞뒤가 없는 한 편짜리 결과에서는 자리를 차지하지 않는다.
+  const alone=createReviewController({...context,neighbours:()=>({previous:null,next:null,index:0,total:0})});
+  alone.setReviewVideo({token:'solo',name:'solo.mp4',videoUrl:'',pages:[],voiceFindings:[]},{root:'render',name:'solo'});
+  assert.equal($('#review-siblings').classList.contains('hidden'),true);
+});
+
+test('같은 낱말이 여러 페이지에서 걸리면 한 번에 알린다', () => {
+  // 한 낱말 때문에 다섯 페이지를 하나씩 고치는 일은 읽기를 정하는 편이 빠르다.
+  const {context,$}=fixture();
+  const term={term:'A2091',heard:'이공사일의'};
+  context.testReview.setReviewVideo({token:'repeat',name:'repeat.mp4',videoUrl:'',pages:[],
+    voiceFindings:[
+      {slideNumber:326,startMs:1,endMs:2,severity:'failed',terms:[term],reasons:['지정한 읽기와 다름']},
+      {slideNumber:330,startMs:3,endMs:4,severity:'failed',terms:[term],reasons:['지정한 읽기와 다름']},
+      {slideNumber:334,startMs:5,endMs:6,severity:'warning',reasons:['점수 미달']},
+    ]});
+
+  assert.match($('#review-findings-note').textContent,/‘A2091’이\(가\) 2페이지에서 걸렸습니다/);
+  assert.match($('#review-findings-note').textContent,/사전 등록을 검토/);
+});
+
+test('다듬기 자판 길은 글자를 치는 중에는 끼어들지 않는다', () => {
+  const {context,$,page2}=fixture();
+  const key=(value,target={tagName:'DIV'})=>({key:value,target,preventDefault(){}});
+  $('#review-player').currentTime=20;
+
+  context.testReview.reviewShortcut(key('ArrowRight'));
+  assert.equal($('#review-player').currentTime,25);
+  context.testReview.reviewShortcut(key('ArrowLeft'));
+  assert.equal($('#review-player').currentTime,20);
+  context.testReview.reviewShortcut(key('.'));
+  assert.equal($('#review-player').currentTime,20.01);
+
+  context.testReview.reviewShortcut(key(']'));
+  assert.equal(context.testReview.selection().number,page2.number,'[ ]는 페이지를 옮긴다');
+
+  // 읽을 말을 적는 중에는 자판이 그쪽 것이다.
+  $('#review-player').currentTime=20;
+  context.testReview.reviewShortcut(key('ArrowRight',{tagName:'TEXTAREA'}));
+  assert.equal($('#review-player').currentTime,20);
+});
+
+test('보던 자리에서 청취 승인을 적고, 결과 목록도 함께 갱신한다', async () => {
+  // 듣는 자리와 확인했다고 적는 자리가 다르면 열한 편마다 목록으로 돌아간다.
+  const {context,$}=fixture();
+  const saved=[];
+  let refreshed=0;
+  const review=createReviewController({...context,
+    api:{...context.api,setOutputReview:async(target,status)=>{saved.push({target,status});return {status};}},
+    refreshOutputs:()=>{refreshed++;}});
+  review.setReviewVideo({token:'v',name:'v.mp4',videoUrl:'',pages:[],voiceFindings:[],
+    reviewTarget:{root:'render',name:'ch03-l02'},review:{status:'pending'}},{root:'render',name:'ch03-l02'});
+
+  assert.equal($('#review-approve').classList.contains('hidden'),false);
+  assert.equal($('#review-approve').textContent,'직접 듣고 확인함');
+
+  await $('#review-approve').listeners.click();
+
+  assert.deepEqual(saved.at(-1),{target:{root:'render',name:'ch03-l02'},status:'approved'});
+  assert.equal($('#review-approve').textContent,'청취 승인 취소');
+  assert.equal(refreshed,1,'결과 목록의 같은 줄도 같은 상태가 된다');
+
+  // 직접 고른 파일에는 적을 결과가 없다.
+  review.setReviewVideo({token:'f',name:'file.mp4',videoUrl:'',pages:[],voiceFindings:[]});
+  assert.equal($('#review-approve').classList.contains('hidden'),true);
 });

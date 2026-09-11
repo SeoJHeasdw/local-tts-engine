@@ -1200,21 +1200,6 @@ def synthesize_excerpt(
     )
 
 
-def entries_for_item(item: dict[str, Any]) -> CourseEntry:
-    """manifest entries 항목 딕셔너리를 CourseEntry 인스턴스로 복원한다.
-
-    manifest.json을 다시 읽어 CourseEntry가 필요한 후처리에서 사용한다.
-    """
-    return CourseEntry(
-        chapter=item["chapter"],
-        slide_id=item["slide_id"],
-        slide_number=int(item["slide_number"]),
-        step=int(item["step"]),
-        source_text=item["source_text"],
-        tts_text=item["tts_text"],
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-project", type=Path, default=DEFAULT_SOURCE_PROJECT,

@@ -149,6 +149,8 @@ export function createOutputsService({
           review: report.review || null,
           path: videoPath || dir,
           fileName: videoPath ? path.basename(videoPath) : null,
+          // 어느 영상에서 나온 수정본인지는 결과가 스스로 적어 둔다.
+          sources: (report.inputs || []).filter((file) => typeof file === "string" && /\.(mp4|mov|m4v)$/i.test(file)),
         });
       }
     }
@@ -159,7 +161,9 @@ export function createOutputsService({
         result.push(...await listOutputs({ ...studio, ...LEGACY_OUTPUT_PATHS }, { includeLegacy: false, storeId: "legacy" }));
       }
     }
-    return result.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, 30);
+    // 챕터 하나가 열두 편이다. 서른 개는 한 번 만들면 바로 차서, 지난 챕터가
+    // 목록에서도 검색에서도 사라진다.
+    return result.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, 120);
   }
 
   function outputStoreForTarget(target, studio) {

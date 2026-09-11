@@ -21,7 +21,7 @@ export function makeJobName(now = new Date(), seconds = null) {
 // 파일 이름으로 쓸 수 없는 글자를 골라낸다. 남는 것이 없으면 빈 문자열이다.
 // 무엇으로 대신할지는 부르는 쪽이 정한다 — 자동으로 짓는 이름과 사람이 직접
 // 친 이름은 비었을 때 할 일이 다르다.
-export function sanitizeFileStem(value) {
+function sanitizeFileStem(value) {
   const replacements = {
     "<": "＜",
     ">": "＞",
@@ -44,7 +44,7 @@ export function sanitizeFileStem(value) {
     .trim();
 }
 
-export function displayVideoFileStem(value) {
+function displayVideoFileStem(value) {
   return sanitizeFileStem(String(value || "완성 영상").replace(/\.mp4$/i, "")) || "완성 영상";
 }
 

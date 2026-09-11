@@ -324,8 +324,7 @@ input:focus, select:focus, textarea:focus {
 }
 .segmented button:hover { color: var(--text-2); }
 .segmented button.selected { background: var(--float); color: var(--text); font-weight: var(--fw-medium); box-shadow: var(--shadow-sm); }
-.scope-tabs, .edit-tabs { grid-template-columns: repeat(3, 1fr); }
-.voice-source-tabs { grid-template-columns: 1fr 1fr; }
+.scope-tabs { grid-template-columns: repeat(3, 1fr); }
 
 .check-row { display: flex; align-items: center; gap: var(--s3); cursor: pointer; }
 .check-row input {
@@ -534,23 +533,13 @@ button:disabled { cursor: not-allowed; }
 .voice-quality-panel[data-tone="failed"] > div strong { color: var(--danger); }
 .voice-quality-panel > div small { color: var(--text-3); font-size: var(--fs-xs); }
 .voice-quality-panel[data-repairable="no"] .repair-hint { display: none; }
-.voice-quality-panel ul, .output-findings { display: grid; gap: var(--s2); margin: var(--s3) 0 0; padding: 0; list-style: none; }
-.output-findings { grid-column: 1 / -1; margin: var(--s0) 0 0; }
-
-.voice-finding {
-  display: grid; grid-template-columns: auto 1fr; gap: var(--s3); align-items: center;
-  width: 100%; padding: var(--s2); border: 1px solid transparent; border-radius: var(--r-sm);
-  background: var(--well); color: inherit; font: inherit; text-align: left; cursor: pointer;
-  transition: border-color var(--motion-fast), background var(--motion-fast);
+/* 열한 편을 한 번에 만들면 확인할 곳이 스무 줄을 넘는다. 완료 화면은 무엇이
+   남았는지 알리는 자리이지 다 읽는 자리가 아니므로 높이를 묶어 둔다. */
+.voice-quality-panel ul {
+  display: grid; gap: var(--s2); margin: var(--s3) 0 0; padding: 0; list-style: none;
+  max-height: 260px; overflow: auto;
 }
-.voice-finding:hover:not(:disabled), .voice-finding:focus-visible { border-color: var(--warn-edge); background: var(--nav); }
-.voice-finding:disabled { cursor: default; }
-.voice-finding > span { color: var(--warn); font: var(--fw-bold) var(--fs-micro) var(--mono); }
-li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
-.voice-finding strong, .voice-finding small { display: block; }
-.voice-finding strong { font-size: var(--fs-sm); font-weight: var(--fw-medium); }
-.voice-finding small { margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
-.voice-finding-preview { margin-top: var(--s1); color: var(--warn); font-size: var(--fs-micro); line-height: var(--lh-snug); }
+
 
 .log-panel { margin-top: auto; border-top: 1px solid var(--line); padding-top: var(--s4); }
 .log-panel summary { color: var(--text-3); font-size: var(--fs-xs); cursor: pointer; }
@@ -587,38 +576,79 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 }
 .inline-profile span { color: var(--text-3); font-size: var(--fs-sm); }
 .inline-profile strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
-.generated-voice {
-  display: grid; gap: var(--s3); padding: var(--s3);
-  border: 1px solid var(--lime-edge); border-radius: var(--r-md); background: var(--lime-wash);
-}
-.global-voice-note { margin: 0; color: var(--text-3); font-size: var(--fs-sm); line-height: var(--lh-body); }
 
 /* ============================================================================
    영상 검수·수정
    ========================================================================== */
-.review-toolbar { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s4); flex-wrap: wrap; }
-.review-toolbar strong { flex: 1; min-width: 200px; font-size: var(--fs-md); font-weight: var(--fw-semi); }
-.review-toolbar > span { color: var(--text-3); font-size: var(--fs-xs); }
+/* 이름·상태·고르기를 한 줄로 모은다. 제목과 설명, 조망 스트립, 도구 막대가
+   따로 서면 같은 사실을 세 번 읽는 동안 정작 영상이 화면 아래로 밀렸다. */
+.review-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s4);
+  flex-wrap: wrap; margin-bottom: var(--s4); padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+.review-file { display: flex; align-items: baseline; gap: var(--s3); min-width: 0; flex: 1; }
+.review-file h1 { margin: 0; font-size: var(--fs-xl); letter-spacing: -.02em; }
+.review-file strong {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-md); font-weight: var(--fw-medium); color: var(--text-2);
+}
+.review-siblings { display: flex; align-items: center; gap: var(--s2); color: var(--text-3); font-size: var(--fs-xs); }
+.review-siblings button { min-width: 30px; }
+.review-head-meta { display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap; }
+.review-head-meta > span { color: var(--text-3); font-size: var(--fs-xs); }
 
 /* 남는 폭은 전부 영상으로 보낸다. 확인 목록은 읽을 만큼만 있으면 되고,
    더 넓어져 봐야 한 줄에 담기는 글자만 늘 뿐이다. */
-.review-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: var(--s5); align-items: start; }
+.review-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: var(--s5); align-items: start; }
+/* 붙박이 저장 막대가 마지막 줄을 덮지 않도록 그만큼 자리를 비워 둔다. */
+#view-review:has(#polish-pending:not(.hidden)) .review-layout { padding-bottom: 108px; }
 .review-stage { padding: var(--s4); position: sticky; top: var(--s5); min-width: 0; }
 #review-player { display: block; width: 100%; aspect-ratio: 16 / 9; background: var(--nav); border-radius: var(--r-md); }
 
-.review-playback { display: flex; gap: var(--s3); align-items: center; margin: var(--s3) 0; }
-.review-playback strong { flex: 1; font-size: var(--fs-sm); font-weight: var(--fw-semi); }
-.review-fine-controls { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s3); }
-.review-fine-controls label { margin-left: auto; font-size: var(--fs-xs); color: var(--text-3); }
-.review-fine-controls select { width: auto; height: var(--h-sm); padding: 0 var(--s2); font-size: var(--fs-sm); }
-
-.review-pages { display: flex; flex-wrap: wrap; gap: var(--s2); padding: var(--s3) 0; border-top: 1px solid var(--line); }
-.review-pages button {
-  background: transparent; color: var(--text-3); border: 1px solid var(--line);
-  border-radius: var(--r-sm); padding: var(--s2) var(--s3); cursor: pointer; font-size: var(--fs-xs);
+/* 옮기고·고르는 손잡이는 한 줄이면 된다. 두 줄로 나뉘어 있으면 0.01초를
+   맞추다가 속도를 찾으러 눈이 한 번 더 내려간다. */
+.review-transport {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin: var(--s3) 0;
 }
-.review-pages button:hover { color: var(--text-2); border-color: var(--line-2); }
-.review-pages button[aria-current="true"] { color: var(--lime); border-color: var(--lime); }
+.transport-seek { display: flex; gap: var(--s2); }
+.review-transport > strong {
+  flex: 1; min-width: 140px; font-size: var(--fs-sm); font-weight: var(--fw-semi);
+  font-variant-numeric: tabular-nums;
+}
+.transport-speed { display: flex; align-items: center; gap: var(--s2); color: var(--text-3); font-size: var(--fs-xs); }
+.transport-speed select { width: auto; height: var(--h-sm); padding: 0 var(--s2); font-size: var(--fs-sm); }
+
+/* 페이지 막대 — 한 칸이 한 페이지
+   ----------------------------------------------------------------------------
+   백 칸이 넘는 페이지를 이름표 붙은 버튼으로 늘어놓으면 목록이 화면 한 판을
+   먹고, 정작 고르려는 페이지는 눈으로 세어야 찾힌다. 칸으로 두면 어디가
+   걸렸는지가 먼저 보이고, 정확한 이동은 옆의 번호가 맡는다. */
+.page-rail { padding: var(--s3) 0; border-top: 1px solid var(--line); display: grid; gap: var(--s2); }
+.review-pages { display: flex; flex-wrap: wrap; gap: var(--s1); }
+.review-pages button {
+  min-width: 34px; height: 26px; padding: 0 var(--s2);
+  background: var(--well); color: var(--text-3); border: 1px solid var(--line);
+  border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+.review-pages.dense { gap: 2px; flex-wrap: nowrap; overflow-x: auto; }
+.review-pages.dense button { min-width: 0; flex: 1 1 6px; height: 22px; padding: 0; border-radius: 2px; }
+.review-pages button:hover { color: var(--text); border-color: var(--line-2); background: var(--raised); }
+.review-pages button.advised { background: var(--warn-soft); border-color: var(--warn-edge); color: var(--warn); }
+.review-pages button.flagged { background: var(--dngr-soft); border-color: var(--danger); color: var(--danger); }
+.review-pages button.queued { background: var(--lime-soft); border-color: var(--lime-edge); color: var(--lime); }
+.review-pages button.current, .review-pages button[aria-current="true"] {
+  outline: 2px solid var(--lime); outline-offset: 1px; color: var(--text);
+}
+.page-rail-jump { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; color: var(--text-3); font-size: var(--fs-xs); }
+.page-rail-jump label { display: flex; align-items: center; gap: var(--s2); }
+.page-rail-jump input {
+  width: 78px; height: var(--h-sm); padding: 0 var(--s2); font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.page-rail-jump button { min-width: 34px; }
+.page-rail-legend { margin-left: auto; color: var(--text-4); }
 
 .review-transcript { border-top: 1px solid var(--line); padding-top: var(--s3); }
 .review-transcript h3 { font-size: var(--fs-sm); color: var(--text-2); margin: 0 0 var(--s2); font-weight: var(--fw-semi); }
@@ -629,7 +659,8 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 .review-sidebar h2 { font-size: var(--fs-lg); margin: 0 0 var(--s3); font-weight: var(--fw-semi); }
 .review-sidebar p, #review-player-status { color: var(--text-3); font-size: var(--fs-sm); line-height: var(--lh-body); }
 /* 항목이 문장까지 안고 있어 한 줄이 높다. 두세 개는 스크롤 없이 보이게 둔다. */
-#review-findings-list { padding: 0; margin: 0; list-style: none; max-height: 380px; overflow: auto; display: grid; gap: var(--s2); }
+/* 접힌 줄은 낮다. 펼친 한 페이지와 나머지 목록이 함께 보이도록 둔다. */
+#review-findings-list { padding: 0; margin: 0; list-style: none; max-height: 62vh; overflow: auto; display: grid; gap: var(--s2); }
 #review-finding-count { color: var(--lime); }
 #review-form .segmented { margin: var(--s4) 0; }
 #review-mode-tabs { display: flex; flex-wrap: wrap; gap: var(--s0); }
@@ -678,39 +709,8 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 .drop-zone strong { font-size: var(--fs-md); font-weight: var(--fw-semi); }
 .drop-zone p { margin: var(--s2) 0 var(--s3); color: var(--text-3); font-size: var(--fs-sm); }
 
-.media-queue { display: grid; gap: var(--s2); margin: 0; padding: 0; list-style: none; }
-.queue-item {
-  display: grid; grid-template-columns: 24px 1fr auto; align-items: center; gap: var(--s2);
-  min-height: 46px; padding: var(--s2) var(--s3);
-  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--well); cursor: grab;
-}
-.queue-item.dragging { opacity: .35; }
-.queue-handle { color: var(--text-4); font-size: var(--fs-md); letter-spacing: -2px; }
-.queue-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: var(--fw-medium); }
-.queue-item button { border: 0; background: transparent; color: var(--text-3); cursor: pointer; }
-.queue-item button:hover { color: var(--danger); }
-
-.file-picker {
-  width: 100%; min-height: 62px; display: grid; grid-template-columns: 36px 1fr auto;
-  align-items: center; gap: var(--s3); padding: var(--s3);
-  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well);
-  text-align: left; cursor: pointer;
-}
-.file-picker:hover { border-color: var(--lime-edge); }
-.file-picker > span {
-  display: grid; place-items: center; width: 34px; height: 34px;
-  border-radius: var(--r-sm); background: var(--float); color: var(--lime);
-}
-.file-picker strong, .file-picker small { display: block; }
-.file-picker strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
-.file-picker small {
-  max-width: 310px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs);
-}
-.file-picker b { color: var(--lime); font-size: var(--fs-xs); }
 
 .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
-.tool-hint { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-snug); }
 
 /* ============================================================================
    최근 결과
@@ -754,16 +754,11 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 .output-copy strong { font-size: var(--fs-md); font-weight: var(--fw-semi); }
 .output-copy small { color: var(--text-3); font-size: var(--fs-xs); margin-top: var(--s1); }
 
+/* 이후 수정본이 있는 줄은 '지금 쓸 파일'이 아닐 수 있다. 지우지는 않되 옅게 둔다. */
+.output-item.has-newer .output-copy strong { color: var(--text-2); }
+.output-item.has-newer .output-copy small { color: var(--warn); }
+
 .output-status { display: flex; align-items: center; gap: var(--s1); }
-.status-symbol {
-  display: grid; place-items: center; width: 26px; height: 26px;
-  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--raised);
-  font-size: var(--fs-micro); font-weight: var(--fw-bold);
-}
-.status-symbol.verified { color: var(--lime); }
-.status-symbol.advisory, .status-symbol.attention { color: var(--warn); border-color: var(--warn-edge); background: var(--warn-wash); }
-.status-symbol.unverified, .status-symbol.review-pending { color: var(--text-3); }
-.status-symbol.reviewed { color: var(--aqua); border-color: var(--aqua-edge); background: var(--aqua-wash); }
 
 .item-actions { display: flex; align-items: center; gap: var(--s2); }
 .item-actions button {
@@ -1012,7 +1007,7 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 ::view-transition { pointer-events: none; }
 .motion-resizing { overflow: clip; overflow-anchor: none; align-content: start; }
 
-:is(.lesson-picker, .chapter-picker, .manual-scope, .edit-panel, .generated-voice, .progress-card,
+:is(.lesson-picker, .chapter-picker, .manual-scope, .progress-card,
     #active-progress, #complete-panel, .candidate-gallery, .job-success, .job-error,
     .finetune-panel):not(.hidden) {
   animation: panel-enter var(--motion-normal) var(--motion-ease);
@@ -1098,31 +1093,18 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 }
 
 /* ============================================================================
-   다듬기 — 조망 스트립 · 받아쓰기 대조 · 교체 대기
+   다듬기 — 이 영상의 사실 · 받아쓰기 대조 · 교체 대기
    ----------------------------------------------------------------------------
-   확인할 곳은 보통 한 곳, 많아야 네 곳이다. 그래서 목록이 아니라 판단 재료를
-   크게 두고, 고른 교체는 파일로 굽지 않고 여기 쌓아 두었다가 한 번에 적용한다.
+   판단 재료를 크게 두고, 고른 교체는 파일로 굽지 않고 여기 쌓아 두었다가
+   한 번에 적용한다.
    ========================================================================== */
-.polish-strip {
-  display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap;
-  margin-bottom: var(--s4); padding: var(--s3) var(--s4);
-  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
-}
-.polish-strip > strong {
-  font-size: var(--fs-md); font-weight: var(--fw-semi); letter-spacing: -.015em;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch;
-}
-.polish-facts { display: flex; gap: var(--s4); }
+.polish-facts { display: flex; gap: var(--s4); flex-wrap: wrap; }
 .polish-facts span { display: flex; align-items: baseline; gap: var(--s2); }
 .polish-facts i { font-style: normal; color: var(--text-3); font-size: var(--fs-xs); }
 .polish-facts b {
   color: var(--text-2); font: var(--fw-semi) var(--fs-sm) var(--mono);
   font-variant-numeric: tabular-nums;
 }
-/* 페이지 하나가 칸 하나. 어디가 걸렸는지 한눈에 든다. */
-.polish-spark { display: flex; gap: 2px; margin-left: auto; flex-wrap: wrap; max-width: 340px; }
-.polish-spark i { width: 6px; height: 14px; border-radius: 2px; background: var(--float); display: block; }
-.polish-spark i.flagged { background: var(--warn); }
 
 .polish-diff {
   display: grid; gap: var(--s3); margin-top: var(--s3); padding: var(--s4);
@@ -1133,16 +1115,30 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 .polish-diff .diff-row p { margin: 0; font-size: var(--fs-md); line-height: var(--lh-body); }
 .polish-diff .diff-note { margin: 0; color: var(--warn); font-size: var(--fs-xs); line-height: var(--lh-snug); }
 
+/* 저장은 이 화면의 마지막 한 걸음이다. 맨 아래에 두면 담을 때마다 끝까지
+   내려가 확인해야 하므로, 담긴 것이 있는 동안 화면 아래에 붙여 둔다. */
 .polish-pending {
-  display: grid; gap: var(--s3); margin-top: var(--s5); padding: var(--s4) var(--s5);
-  border: 1px solid var(--lime-edge); border-radius: var(--r-md); background: var(--lime-wash);
+  position: sticky; bottom: var(--s4); z-index: 30;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  gap: var(--s3); margin-top: var(--s5); padding: var(--s3) var(--s4);
+  border: 1px solid var(--lime-edge); border-radius: var(--r-md);
+  background: var(--surface); box-shadow: var(--shadow-lg);
 }
-.polish-pending-copy strong { display: block; font-size: var(--fs-md); font-weight: var(--fw-semi); }
-.polish-pending-copy small { display: block; margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
+/* 담긴 것이 무엇인지는 눌러서 볼 일이고, 늘 보여야 하는 것은 몇 곳인지와
+   저장 단추다. 좁은 창에서 이 막대가 화면 아래를 반이나 먹지 않게 접어 둔다. */
+.polish-pending-copy > summary {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  cursor: pointer; list-style: none; min-height: 34px; padding-top: var(--s1);
+}
+.polish-pending-copy > summary::-webkit-details-marker { display: none; }
+#polish-pending-list { max-height: 132px; overflow: auto; margin-top: var(--s3); }
+.polish-pending-copy strong { font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.polish-pending-copy small { color: var(--text-3); font-size: var(--fs-xs); }
 #polish-pending-list { display: grid; gap: var(--s2); margin: 0; padding: 0; list-style: none; }
 #polish-pending-list li {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s3);
-  padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--well);
+  padding: var(--s1) var(--s3); min-height: 34px;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--well);
 }
 #polish-pending-list strong { font: var(--fw-semi) var(--fs-sm) var(--mono); color: var(--lime); }
 #polish-pending-list small {
@@ -1154,7 +1150,7 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
   background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-xs);
 }
 .polish-drop:hover { color: var(--danger); border-color: var(--dngr-edge); }
-.polish-pending-actions { display: flex; justify-content: flex-end; gap: var(--s2); }
+.polish-pending-actions { display: flex; justify-content: flex-end; gap: var(--s2); align-self: center; }
 
 /* ============================================================================
    사이드바 접기
@@ -1198,15 +1194,6 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
    목록에 남아 있는 것이 곧 남은 일이다. 듣고 문제 없다고 판단한 항목은
    그 자리에서 지워야 무엇이 남았는지가 목록만 봐도 읽힌다.
    ========================================================================== */
-#review-findings-list li:has(> .voice-finding) {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center;
-}
-.finding-done {
-  height: var(--h-sm); padding: 0 var(--s3); flex: none;
-  border: 1px solid var(--line); border-radius: var(--r-sm);
-  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-xs);
-}
-.finding-done:hover { color: var(--lime); border-color: var(--lime-edge); }
 .findings-cleared {
   display: flex; align-items: center; gap: var(--s3);
   padding: var(--s3) var(--s4); border: 1px solid var(--line); border-radius: var(--r-sm);
@@ -1236,51 +1223,99 @@ li[data-severity="failed"] .voice-finding > span { color: var(--danger); }
 }
 
 /* ============================================================================
-   확인 항목 — 짧은 것은 윗줄, 문장은 아랫줄
+   확인 항목 — 페이지로 묶어 접어 두기
    ----------------------------------------------------------------------------
-   페이지·시각·사유·대본 문장을 한 줄에 늘어놓으면 가장 중요한 문장이 가장
-   먼저 잘린다. 짧고 훑어보는 값만 윗줄에 두고, 문장에는 줄 하나를 통째로 준다.
-   사유는 판단이 아니라 근거라 아이콘 툴팁으로 접는다.
+   확인할 곳이 여섯이면 여섯 줄이 한꺼번에 펼쳐져 사이드바를 채웠고, 확인·재생성·
+   사유·대본은 22픽셀 아이콘으로 밀렸다. 같은 페이지의 여러 지적은 결국 그
+   페이지를 한 번 다시 읽히는 한 가지 일이다. 접힌 줄에는 페이지·판정·시각만
+   두고, 펼친 자리에서만 사유와 버튼을 제 크기로 세운다.
    ========================================================================== */
-#review-findings-list li:has(> .voice-finding) {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--s2); align-items: start;
+.finding-group { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--raised); }
+.finding-group[data-severity="failed"] { border-color: var(--dngr-edge); }
+.finding-group[data-severity="warning"] { border-color: var(--warn-edge); }
+.finding-group > details > summary {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  padding: var(--s3) var(--s4); cursor: pointer; list-style: none;
+  border-radius: var(--r-md);
 }
-.voice-finding {
-  display: grid; gap: var(--s2); align-items: start;
-  grid-template-columns: minmax(0, 1fr);
+.finding-group > details > summary::-webkit-details-marker { display: none; }
+.finding-group > details > summary::before {
+  content: "▸"; color: var(--text-4); font-size: var(--fs-xs); transition: transform .15s ease;
 }
-.finding-head {
-  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
+.finding-group > details[open] > summary::before { transform: rotate(90deg); }
+.finding-group > details > summary:hover { background: var(--nav); }
+.finding-group > details > summary strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--text); }
+.finding-count {
+  padding: 0 var(--s2); border-radius: var(--r-full); background: var(--nav);
+  color: var(--text-3); font: var(--fw-semi) var(--fs-micro) var(--mono);
 }
-.finding-head strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--text); }
-.finding-status { margin: 0; font-size: var(--fs-xs); line-height: var(--lh-body); color: var(--warn); }
-li[data-severity="failed"] .finding-status { color: var(--danger); }
+.finding-verdict { font-size: var(--fs-micro); font-weight: var(--fw-semi); color: var(--warn); }
+.finding-group[data-severity="failed"] .finding-verdict { color: var(--danger); }
 .finding-time {
-  color: var(--text-3); font: var(--fs-micro) var(--mono);
+  margin-left: auto; color: var(--text-3); font: var(--fs-micro) var(--mono);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-li[data-severity="failed"] .finding-time { color: var(--danger); }
-li[data-severity="warning"] .finding-time { color: var(--warn); }
+.finding-body {
+  display: grid; gap: var(--s3); padding: var(--s3) var(--s4) var(--s4);
+  border-top: 1px solid var(--line);
+}
+.finding-item { display: grid; gap: var(--s2); }
+.finding-item + .finding-item { padding-top: var(--s3); border-top: 1px dashed var(--line); }
+.finding-status { margin: 0; font-size: var(--fs-xs); font-weight: var(--fw-semi); color: var(--warn); }
+.finding-item[data-severity="failed"] .finding-status { color: var(--danger); }
+.finding-why { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-body); }
 .finding-line {
-  margin: 0; padding-top: var(--s2); border-top: 1px solid var(--line);
-  color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-body);
+  margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-body);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
-.finding-tools { display: flex; flex-direction: column; align-items: center; gap: var(--s1); }
-.finding-why {
-  display: grid; place-items: center; width: 22px; height: 22px;
-  border-radius: var(--r-sm); color: var(--text-3);
-  font-size: var(--fs-xs); cursor: help; user-select: none;
+.finding-item-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.finding-listen, .finding-more {
+  height: var(--h-sm); padding: 0 var(--s3);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-xs);
 }
-.finding-why:hover, .finding-why:focus-visible { color: var(--warn); background: var(--warn-wash); }
-/* 목록이 좁아 기본 툴팁 위치는 카드 밖으로 나간다. 왼쪽으로 물린다. */
-.finding-why::after { right: 0; left: auto; min-width: 200px; }
-.finding-done {
-  height: 24px; padding: 0 var(--s2); border: 1px solid var(--line); border-radius: var(--r-sm);
-  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-micro);
+.finding-listen:hover, .finding-more:hover:not(:disabled) { color: var(--text); border-color: var(--line-2); }
+.finding-more:disabled { opacity: .4; cursor: default; }
+.finding-more[aria-expanded="true"] { color: var(--lime); border-color: var(--lime-edge); }
+
+/* 넘어가기와 다시 만들기는 페이지 단위의 결정이다. 한 줄에 나란히 세우고,
+   좁아지면 접히되 글자가 잘리지는 않게 둔다. */
+.finding-tools { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.finding-done, .finding-regenerate, .finding-rewrite {
+  height: var(--h-sm); padding: 0 var(--s3); flex: 1 0 auto; white-space: nowrap;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-xs);
 }
 .finding-done:hover { color: var(--lime); border-color: var(--lime-edge); }
+.finding-regenerate { border-color: var(--lime-edge); color: var(--lime); }
+.finding-regenerate:hover:not(:disabled) { background: var(--lime-soft); }
+.finding-rewrite:hover:not(:disabled) { color: var(--text); border-color: var(--line-2); }
+.finding-regenerate:disabled, .finding-rewrite:disabled {
+  opacity: .4; cursor: default; border-color: var(--line); color: var(--text-4);
+}
+
+/* 읽을 말을 직접 적는 칸. 기본 경로는 여전히 대본 그대로 재생성이라 접어 둔다. */
+.script-override { margin-top: var(--s3); border: 1px solid var(--line); border-radius: var(--r-md); }
+.script-override > summary {
+  min-height: 38px; display: flex; align-items: center; gap: var(--s2);
+  padding: 0 var(--s3); cursor: pointer; font-size: var(--fs-sm); color: var(--text-2);
+}
+.script-override[open] > summary { border-bottom: 1px solid var(--line); }
+.script-override > div { padding: var(--s3); }
+.script-override > summary > span {
+  margin-left: var(--s2); padding: 0 var(--s2); border-radius: var(--r-full);
+  background: var(--lime-soft); color: var(--lime); font: var(--fw-semi) var(--fs-micro) var(--mono);
+}
+.script-override > div { display: grid; gap: var(--s2); }
+.script-override textarea {
+  width: 100%; min-height: 84px; resize: vertical; line-height: var(--lh-body);
+}
+.script-override-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+#voice-override-note { font-size: var(--fs-xs); color: var(--text-3); }
+
+.findings-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s3); }
+.findings-head h2 { margin: 0; }
+.findings-head button { margin-left: auto; }
 
 /* ============================================================================
    제작 진행 — 몇 번째 편인지와 남은 시간
@@ -1296,6 +1331,32 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
   color: var(--text-3); font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
+
+/* 어느 편이 끝났고 어느 편이 실패했는지는 접어 두고 요약만 늘 보인다. */
+.job-units { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well); }
+.job-units > summary {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  min-height: 38px; padding: 0 var(--s3); cursor: pointer; list-style: none;
+}
+.job-units > summary::-webkit-details-marker { display: none; }
+.job-units > summary strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.job-units > summary small { color: var(--text-3); font-size: var(--fs-xs); }
+#job-units-list {
+  display: grid; gap: var(--s1); margin: 0; padding: var(--s2) var(--s3) var(--s3);
+  max-height: 210px; overflow: auto; list-style: none;
+}
+#job-units-list li {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: var(--s2);
+  padding: var(--s1) var(--s2); border-radius: var(--r-sm); font-size: var(--fs-xs);
+}
+#job-units-list b { color: var(--text-4); font: var(--fs-micro) var(--mono); }
+#job-units-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+#job-units-list i { font-style: normal; color: var(--text-3); font-size: var(--fs-micro); }
+#job-units-list li[data-state="running"] { background: var(--lime-soft); }
+#job-units-list li[data-state="running"] i, #job-units-list li[data-state="running"] span { color: var(--lime); }
+#job-units-list li[data-state="done"] i, #job-units-list li[data-state="skipped"] i { color: var(--text-3); }
+#job-units-list li[data-state="failed"] { background: var(--dngr-soft); }
+#job-units-list li[data-state="failed"] i, #job-units-list li[data-state="failed"] span { color: var(--danger); }
 
 /* 두 시계는 위계가 다르다. '이 편'은 곧 바뀌는 값이라 옅게, '전체'는 자리를
    뜰지 말지를 정하는 값이라 또렷하게 둔다. */
@@ -1447,27 +1508,8 @@ li[data-severity="warning"] .finding-time { color: var(--warn); }
   background: var(--warn-soft); color: var(--warn); font-weight: var(--fw-semi);
   padding: 0 var(--s1); border-radius: 3px; box-shadow: inset 0 -2px 0 var(--warn);
 }
-li[data-severity="failed"] .finding-term {
+.finding-item[data-severity="failed"] .finding-term {
   background: var(--dngr-soft); color: var(--danger); box-shadow: inset 0 -2px 0 var(--danger);
 }
 
-/* 발췌는 걸린 낱말을 짚는 것이 목적이라 앞뒤를 자른다. 잘린 것이 궁금할 때가
-   있으므로 펼칠 수 있게 둔다. */
-.finding-line.full { display: block; -webkit-line-clamp: none; }
-.finding-more {
-  width: 22px; height: 22px; display: grid; place-items: center;
-  border: 0; border-radius: var(--r-sm); background: transparent;
-  color: var(--text-3); cursor: pointer; font-size: var(--fs-xs); line-height: 1;
-}
-.finding-more:hover { color: var(--text); background: var(--raised); }
-.finding-more[aria-expanded="true"] { color: var(--lime); }
 
-/* 확인 항목의 대부분은 결국 그 페이지를 다시 읽히는 것으로 끝난다. '확인' 바로
-   밑에 두어 두 갈래 — 넘어가기와 다시 만들기 — 가 나란히 서게 한다. */
-.finding-regenerate {
-  height: var(--h-sm); padding: 0 var(--s3); flex: none; white-space: nowrap;
-  border: 1px solid var(--lime-edge); border-radius: var(--r-sm);
-  background: transparent; color: var(--lime); cursor: pointer; font-size: var(--fs-xs);
-}
-.finding-regenerate:hover:not(:disabled) { background: var(--lime-soft); }
-.finding-regenerate:disabled { opacity: .4; cursor: default; border-color: var(--line); color: var(--text-4); }

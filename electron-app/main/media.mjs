@@ -98,6 +98,8 @@ export function createMediaService({
             // 확인 완료 표시는 결과에 적혀 있다. 다시 열어도 그대로 남아야 한다.
             value.clearedFindings = clearedFindingKeys(report);
             value.reviewTarget = report.target || null;
+            // 청취 승인도 결과에 적혀 있다. 검수 화면에서 바로 표시하려면 함께 온다.
+            value.review = report.review || null;
             value.reportPath = reportPath;
             break;
           }
@@ -114,6 +116,7 @@ export function createMediaService({
       videoUrl: kind === "video" ? pathToFileURL(value.path).href : null,
       pages: value.pages || [], voiceFindings: value.voiceFindings || [],
       clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null,
+      review: value.review || null,
     }));
   }
 

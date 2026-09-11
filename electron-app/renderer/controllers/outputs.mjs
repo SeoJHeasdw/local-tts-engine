@@ -1,5 +1,5 @@
 import { animateLayout } from "../motion.mjs";
-import { filterOutputItems, visibleVoiceFindings, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs } from "../view-utils.mjs";
+import { filterOutputItems, visibleVoiceFindings, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs, outputGroupKey, outputVersionLinks } from "../view-utils.mjs";
 
 export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, document = globalThis.document }) {
   let outputItems = [];
@@ -72,6 +72,8 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
       // 적고, 레슨으로 나눈 작업은 하나로 묶어 어디에 할 일이 남았는지 먼저
       // 읽히게 한다.
       const findingsOf = (item) => visibleVoiceFindings(item.voiceFindings, item.review?.clearedFindings);
+      // 고친 판이 쌓이면 어느 파일이 지금 쓸 것인지 이름만으로는 알 수 없다.
+      const versions = outputVersionLinks(outputItems);
 
       function buildRow(item, { compact = false } = {}) {
         const kind = outputKind(item);
@@ -101,18 +103,24 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
           </div>`;
 
         const title = row.querySelector("strong");
-        title.textContent = outputRowTitle(item, { compact });
+        title.textContent = outputRowTitle(item);
         if (item.fileName) {
           title.title = `${item.fileName} · 더블클릭해서 이름 바꾸기`;
           title.classList.add("renamable");
           title.addEventListener("dblclick", () => editOutputName(title, item, target));
         }
+        const newer = versions.get(item.key) || [];
         row.querySelector("small").textContent = [
           compact ? "" : outputLabel(item),
           formatDuration(item.durationMs),
           compact ? "" : formatDate(item.updatedAt),
           findings.length ? voiceFindingSummaryLine(findings) : "",
+          newer.length ? `이후 수정본 ${newer.length}개` : "",
         ].filter(Boolean).join(" · ");
+        if (newer.length) {
+          row.querySelector("small").title = `가장 최근 수정본: ${outputRowTitle(newer[0])}`;
+          row.classList.add("has-newer");
+        }
 
         const pill = row.querySelector(".state-pill");
         pill.textContent = state.label;
@@ -177,7 +185,7 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
         const title = document.createElement("strong");
         title.textContent = outputGroupTitle(group);
         const meta = document.createElement("small");
-        meta.textContent = `레슨 ${group.items.length}편 · ${formatDate(group.updatedAt)}`;
+        meta.textContent = `레슨 ${group.items.length}편 · ${formatDate(group.updatedAt)} · ${group.key}`;
         const state = document.createElement("span");
         state.className = `state-pill ${group.attention ? "attention" : "ready"}`;
         state.textContent = group.attention
@@ -231,10 +239,31 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
     }
   }
 
+  // 한 챕터를 열한 편으로 나눠 만들면 다듬기도 열한 번이다. 편을 옮길 때마다
+  // 결과 목록으로 돌아가 다음 줄을 찾는 일이 열 번 반복된다. 같은 작업에서 나온
+  // 영상들의 앞뒤를 알려 주어 그 걸음을 지운다.
+  function videoNeighbours(target) {
+    const name = String(target?.name || "");
+    const current = outputItems.find((item) => item.name === name && item.video);
+    const key = current ? outputGroupKey(current) : null;
+    if (!current || !key) return { previous: null, next: null, index: 0, total: 0 };
+    const siblings = outputItems
+      .filter((item) => item.video && outputGroupKey(item) === key)
+      .sort((left, right) => String(left.name).localeCompare(String(right.name)));
+    const index = siblings.findIndex((item) => item.name === name);
+    return {
+      previous: siblings[index - 1]?.target || null,
+      next: siblings[index + 1]?.target || null,
+      index: index + 1,
+      total: siblings.length,
+    };
+  }
+
   return {
     loadOutputs,
     renderOutputs,
     closeResultMenus,
+    videoNeighbours,
     get outputFilter() { return outputFilter; },
     set outputFilter(value) { outputFilter = value; },
   };

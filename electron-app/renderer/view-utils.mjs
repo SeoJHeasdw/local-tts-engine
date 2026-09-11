@@ -186,26 +186,6 @@ export function unitLabel({ index, total } = {}) {
   return `레슨 ${Number(index)}/${Number(total)}`;
 }
 
-// 챕터를 레슨으로 나눠 만들 때만 필요한 두 번째 시계. 편 개수로 나누면
-// 남은 편들이 가벼운지 무거운지를 반영하지 못한다. CH02 실측에서 편 평균으로는
-// 90분, 페이지 가중으로는 54분이 나왔고 실제는 뒤쪽이었다. 그래서 페이지를
-// 단위로 잡는다.
-export function chapterEtaLabel({
-  completedPages,
-  completedMs,
-  currentPages = 0,
-  currentElapsedMs = 0,
-  pendingPages = 0,
-} = {}) {
-  if (!(Number(completedPages) > 0) || !(Number(completedMs) > 0)) return "";
-  const perPage = Number(completedMs) / Number(completedPages);
-  // 진행 중인 편은 예상치에서 이미 지난 만큼을 뺀다. 예상보다 오래 걸리는
-  // 중이면 0으로 바닥을 치고, 남은 편들의 몫만 남는다.
-  const currentRemaining = Math.max(0, perPage * Number(currentPages) - Number(currentElapsedMs));
-  const label = formatRemaining(currentRemaining + perPage * Number(pendingPages));
-  return label ? `전체 약 ${label} 남음` : "";
-}
-
 // 확인 완료로 내린 항목은 다듬기에서만이 아니라 최근 결과에서도 사라져야 한다.
 // 한 화면에서는 처리했는데 다른 화면에는 그대로 남으면, 그 버튼이 무엇을 한
 // 것인지 알 수 없다.
@@ -222,7 +202,10 @@ export function visibleVoiceFindings(findings = [], clearedKeys = []) {
 // 한 챕터를 레슨으로 나눠 만들면 결과가 열여섯 줄로 평평하게 늘어선다. 그중
 // 어디에 아직 할 일이 남았는지는 열여섯 줄을 눈으로 세어야 알 수 있었다.
 // 이름이 이미 소속을 담고 있으므로(<작업>-ch02-l03) 그것으로 묶는다.
-const LESSON_UNIT_PATTERN = /^(.+)-(ch\d+-l\d+)$/;
+// 레슨 번호는 정수만이 아니다. 사이에 끼워 넣은 편은 덱에서 L01.5 로 불리고
+// 폴더 이름에는 `ch03-l01-5` 로 적힌다. 정수만 받으면 그 편만 챕터 묶음에서
+// 떨어져 나와 홀로 선다.
+const LESSON_UNIT_PATTERN = /^(.+)-(ch\d+)-(l\d+(?:-\d+)*)$/;
 
 export function outputGroupKey(item = {}) {
   const match = LESSON_UNIT_PATTERN.exec(String(item.name || ""));
@@ -231,7 +214,7 @@ export function outputGroupKey(item = {}) {
 
 export function outputUnitLabel(item = {}) {
   const match = LESSON_UNIT_PATTERN.exec(String(item.name || ""));
-  return match ? match[2].split("-").at(-1).toUpperCase() : null;
+  return match ? match[3].replace(/-/g, ".").toUpperCase() : null;
 }
 
 /**
@@ -251,6 +234,27 @@ export function outputState(item = {}, findings = []) {
   return { key: "ready", label: "확인할 곳 없음", tone: "ready" };
 }
 
+// 한 레슨의 결과가 원본 하나로 끝나지 않는다. 고친 판이 쌓이면 어느 파일이
+// 지금 쓸 것인지는 이름만 봐서는 알 수 없어, 사람이 따로 목록을 적어 두게 된다.
+// 수정본은 자기가 어느 영상에서 나왔는지 적고 있으므로 그 줄기를 읽어 준다.
+export function outputVersionLinks(items = []) {
+  const byPath = new Map(items.filter((item) => item.path).map((item) => [String(item.path), item]));
+  const links = new Map();
+  for (const item of items) {
+    for (const source of item.sources || []) {
+      const origin = byPath.get(String(source));
+      if (!origin || origin === item) continue;
+      const list = links.get(origin.key) || [];
+      list.push(item);
+      links.set(origin.key, list);
+    }
+  }
+  for (const list of links.values()) {
+    list.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+  }
+  return links;
+}
+
 export function groupOutputs(items = [], findingsOf = () => []) {
   const groups = new Map();
   const rows = [];
@@ -266,6 +270,11 @@ export function groupOutputs(items = [], findingsOf = () => []) {
     group.items.push(item);
     if (String(item.updatedAt || "") > String(group.updatedAt || "")) group.updatedAt = item.updatedAt;
   }
+  // 한 편만 남은 묶음은 묶음이 아니다. 머리글과 상태 배지를 두 줄 더 쓰면서
+  // 말하는 것이 그 한 줄과 같다.
+  for (const [index, row] of rows.entries()) {
+    if (row.type === "group" && row.items.length === 1) rows[index] = { type: "single", item: row.items[0] };
+  }
   for (const group of groups.values()) {
     group.items.sort((left, right) => String(left.name).localeCompare(String(right.name)));
     group.attention = group.items.filter((item) => outputState(item, findingsOf(item)).key !== "ready"
@@ -275,9 +284,8 @@ export function groupOutputs(items = [], findingsOf = () => []) {
   return rows;
 }
 
-// displayName 은 이미 "CH02 L04 · 그래서 어떻게 만들라는 건가" 처럼 스스로를
-// 다 말한다. 묶음 머리가 챕터를 적고 나면 행에서 챕터는 되풀이일 뿐이고, 편
-// 표시를 앞에 덧붙이면 L04 가 두 번 나온다. 한 번만 나누고 필요한 조각만 쓴다.
+// 묶음 머리글에는 챕터만 적는다. displayName 이 "CH02 L04 · 제목"처럼 스스로를
+// 다 말하므로 편 표시 앞까지가 곧 챕터다.
 export function splitOutputTitle(displayName = "", unitLabel = "") {
   const text = String(displayName || "").trim();
   const unit = String(unitLabel || "");
@@ -290,26 +298,12 @@ export function splitOutputTitle(displayName = "", unitLabel = "") {
   };
 }
 
-export function compactOutputLabel(item = {}) {
-  const unit = outputUnitLabel(item);
-  const { unit: found, title } = splitOutputTitle(item.displayName, unit);
-  if (!found) return item.displayName || item.name || "";
-  return title ? `${found} · ${title}` : found;
-}
-
-// 목록에 적히는 이름은 Finder에서 보게 될 이름과 같아야 한다. 확장자까지
-// 함께 적어야 그 줄에서 바로 고쳐 쓸 이름이 무엇인지 헷갈리지 않는다.
-// 묶음 안에서는 머리글이 이미 챕터를 말하므로 되풀이되는 앞부분만 덜어 낸다.
-export function outputRowTitle(item = {}, { compact = false } = {}) {
-  const fileName = String(item.fileName || "");
-  if (!fileName) return compact ? compactOutputLabel(item) : (item.displayName || item.name || "");
-  if (!compact) return fileName;
-  const dot = fileName.lastIndexOf(".");
-  const extension = dot > 0 ? fileName.slice(dot) : "";
-  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
-  const { unit, title } = splitOutputTitle(stem, outputUnitLabel(item));
-  if (!unit) return fileName;
-  return `${title ? `${unit} · ${title}` : unit}${extension}`;
+// 목록에 적히는 이름은 Finder 에서 보게 될 이름과 같아야 한다. 같은 이름이 이미
+// 있으면 발행이 "(2)"를 붙이므로 제목에서 되짚어 만든 이름은 실제 파일과 어긋난다.
+// 묶음 안이라고 앞부분을 덜어 내지도 않는다. 그 줄에서 바로 고쳐 쓸 이름이자
+// Finder 에서 찾을 이름이므로 확장자까지 그대로 적는다.
+export function outputRowTitle(item = {}) {
+  return String(item.fileName || item.displayName || item.name || "");
 }
 
 export function outputGroupTitle(group = {}) {
@@ -320,7 +314,7 @@ export function outputGroupTitle(group = {}) {
 
 // 확인 항목이 알려 줘야 하는 것은 대본 전체가 아니라 어느 낱말을 귀 기울여
 // 들어야 하는지다. 걸린 낱말만 뽑고, 그 낱말이 놓인 자리를 짧게 보여 준다.
-export function findingTerms(finding = {}) {
+function findingTerms(finding = {}) {
   return (finding.terms || []).map((item) => String(item?.term || "")).filter(Boolean);
 }
 

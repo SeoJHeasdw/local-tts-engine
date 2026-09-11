@@ -28,11 +28,14 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
     return elements.get(selector);
   };
   let jobListener;
+  let jobRunning = false;
   const api = {
     onJobEvent: callback => { jobListener = callback; },
     getStatus: async () => ({ catalog: { pages: [], lessons: [], totalPages: 0 }, capabilities: { editing: true } }),
     getSettings: async () => ({ modelId: 'qwen3-tts', adapterId: 'none', adapterScale: .6, voiceParallelism: 2, adapters: [], paths: {} }),
     listOutputs: async () => [],
+    // main 은 실행 중인 작업이 있으면 이어할 것이 없다고 답한다.
+    getResumable: async () => (jobRunning ? null : { name: 'ch03', title: 'CH03 전체', total: 11, done: 4, remaining: 7 }),
   };
   const globals = {
     window: { ttsStudio: api, scrollTo() {}, location: { search: '' } },
@@ -60,6 +63,15 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   assert.equal(typeof listeners.get('play'), 'function', '삭제된 편집 탭 호출이 공통 재생 연결을 막으면 안 된다');
   assert.doesNotMatch(query('#job-log').textContent, /초기화 오류/);
 
+  // 이어할 작업은 열었을 때 알려 주고, 새 작업을 시작하면 그 자리를 비운다.
+  // 그러지 않으면 11편 중 0편 완료 같은 옛 기록이 진행 중인 작업 위에 남는다.
+  assert.equal(query('#resume-banner').classList.contains('hidden'), false);
+  assert.match(query('#resume-detail').textContent, /11편 중 4편 완료/);
+  jobRunning = true;
+  jobListener({ type: 'started', options: { name: 'ch03-run', mode: 'chapter', chapterMode: 'lesson' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(query('#resume-banner').classList.contains('hidden'), true, '실행 중에는 이어하기 안내를 띄우지 않는다');
+
   // Exercise the actual event subscription across all production modes/qualities.
   for (const videoQuality of ['standard', 'high', 'ultra']) {
     for (const [mode, chapterMode] of [['lesson', 'single'], ['page', 'single'], ['chapter', 'single'], ['chapter', 'lesson']]) {
@@ -77,11 +89,20 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   Date.now = () => now;
   t.after(() => { Date.now = originalNow; });
   jobListener({ type: 'plan', units: Array.from({ length: 11 }, () => ({ pages: 10 })) });
-  jobListener({ type: 'unit', index: 1, total: 11 });
-  now += 10 * 60_000;
-  jobListener({ type: 'unit', index: 2, total: 11 });
-  now += 10 * 60_000;
+  // 실제 제작과 같은 순서로 두 편을 지나 보낸다. 편마다 목소리 → 촬영이고,
+  // 촬영 길이는 합성이 끝난 뒤 오는 음성 길이로 잰다.
+  for (const index of [1, 2]) {
+    jobListener({ type: 'unit', index, total: 11 });
+    jobListener({ type: 'stage', stage: 'voice', state: 'running' });
+    now += 4 * 60_000;
+    jobListener({ type: 'stage', stage: 'voice', state: 'done' });
+    jobListener({ type: 'unit-duration', durationMs: 5 * 60_000 });
+    jobListener({ type: 'stage', stage: 'capture', state: 'running' });
+    now += 6 * 60_000;
+    jobListener({ type: 'stage', stage: 'capture', state: 'done' });
+  }
   jobListener({ type: 'unit', index: 3, total: 11 });
+  jobListener({ type: 'stage', stage: 'voice', state: 'running' });
   jobListener({ type: 'voice-progress', done: 0, total: 20 });
   now += 60_000;
   jobListener({ type: 'voice-progress', done: 2, total: 20 });
@@ -99,8 +120,15 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   jobListener({ type: 'resumed' });
   assert.equal(query('#job-eta').textContent, beforePause, '정지한 30분을 생성 시간으로 세지 않는다');
 
+  // 촬영으로 넘어가도 시계가 꺼지지 않는다. 음성 길이만큼 실시간으로 도는
+  // 단계라, 남은 촬영 시간이 곧 이 편의 남은 시간이다.
+  jobListener({ type: 'stage', stage: 'voice', state: 'done' });
+  jobListener({ type: 'unit-duration', durationMs: 5 * 60_000 });
   jobListener({ type: 'stage', stage: 'capture', state: 'running' });
-  assert.equal(query('#job-eta').textContent, '이 편 남은 시간 계산 중', '음성 추정치를 촬영 완료 시각으로 표시하지 않는다');
+  now += 60_000;
+  timers.forEach(tick => tick());
+  assert.match(query('#job-eta').textContent, /이 편 약 \d+분/, '촬영 중에도 남은 시간을 말한다');
+  assert.equal(query('#job-eta').classList.contains('eta-calculating'), false);
   jobListener({ type: 'failed', message: '335페이지 B-3102: 읽기를 지정하세요.' });
   now += 60_000;
   timers.forEach(tick => tick());

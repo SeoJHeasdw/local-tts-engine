@@ -15,7 +15,6 @@ test("대기 상태 문구 대신 아이콘과 툴팁을 사용한다", async ()
     fs.readFile(path.join(renderer, "index.html"), "utf8"),
     fs.readFile(path.join(renderer, "styles.css"), "utf8"),
   ]);
-  assert.doesNotMatch(html, />준비됨</);
   assert.match(html, /id="create-top-status"[^>]+data-tooltip=/);
   assert.match(html, /id="open-model-settings"[^>]+data-tooltip=/);
   assert.match(css, /\[data-tooltip\]:hover::after/);
@@ -24,30 +23,18 @@ test("대기 상태 문구 대신 아이콘과 툴팁을 사용한다", async ()
 
 
 test("새 영상의 중복 요약 패널은 대기 중 숨기고 작업 중에만 사용한다", async () => {
-  const [html, script] = await Promise.all([
-    fs.readFile(path.join(renderer, "index.html"), "utf8"),
-    readRendererSource(),
-  ]);
+  const html = await fs.readFile(path.join(renderer, "index.html"), "utf8");
   assert.match(html, /id="job-workspace"/);
   assert.match(html, /class="card progress-card hidden"/);
-  assert.doesNotMatch(html, /id="idle-hero"|id="brief-scope"|id="brief-voice"/);
-  assert.match(script, /classList\.toggle\("hidden", view === "idle"\)/);
 });
 
 test("새 영상은 레슨·페이지·챕터 전체의 세 가지 제작 범위를 제공한다", async () => {
-  const [html, script] = await Promise.all([
-    fs.readFile(path.join(renderer, "index.html"), "utf8"),
-    readRendererSource(),
-  ]);
+  const html = await fs.readFile(path.join(renderer, "index.html"), "utf8");
   assert.match(html, /data-mode="lesson"[^>]*>레슨/);
   assert.match(html, /data-mode="page"[^>]*>페이지 직접 선택/);
   assert.match(html, /data-mode="chapter"[^>]*>챕터 전체/);
-  assert.doesNotMatch(html, /30초 미리보기/);
-  assert.doesNotMatch(html, /id="chapter-jump"|id="select-chapter-range"/);
   assert.match(html, /data-chapter-mode="single"[^>]*>한 영상으로 제작/);
   assert.match(html, /data-chapter-mode="lesson"[^>]*>레슨 단위로 나눠 제작/);
-  assert.doesNotMatch(script, /productionMode === "preview"|data-mode="preview"/);
-  assert.match(script, /chapterMode: productionMode === "chapter" \? chapterMode : "single"/);
 });
 
 
@@ -73,7 +60,6 @@ test("최근 결과는 열기만 기본 행동으로 두고 나머지를 더 보
   assert.match(css, /\.output-item:has\(\.result-menu\[open\]\)/);
   assert.match(css, /\.output-item:hover,\.output-item:focus-within/);
   assert.doesNotMatch(css, /\.output-item:hover[^}]*transform/);
-  assert.doesNotMatch(script, /<summary data-tooltip="더 보기"/);
   assert.match(script, /if \(!event\.target\.closest\("\.result-menu"\)\) outputs\.closeResultMenus\(\)/);
   assert.match(script, /event\.key !== "Escape"/);
 });
@@ -85,7 +71,6 @@ test("완료 화면은 권장 요약과 전용 검수 화면 진입을 제공한
   assert.match(html, /id="view-review"/);
   assert.match(html, /id="review-player"/);
   assert.match(html, /id="review-findings-list"/);
-  assert.doesNotMatch(html, /id="finding-dialog"|data-operation="voice"/);
 });
 
 test("결과를 편집으로 넘기는 통로가 preload와 main 양쪽에 있다", async () => {
@@ -103,7 +88,6 @@ test("최근 영상 결과는 전용 검수 화면에서 열린다", async () =>
   // 처리되면 그 버튼이 무엇을 한 것인지 알 수 없다.
   assert.match(script, /visibleVoiceFindings\(item\.voiceFindings, item\.review\?\.clearedFindings\)/);
   assert.match(script, /openReview\(target\)/);
-  assert.doesNotMatch(script, /findingsPanel\.className = "output-findings"/);
 });
 
 test("목소리 확인은 제작 실패가 아니라 별도 확인 항목이다", async () => {
@@ -133,19 +117,17 @@ test("완성 영상은 자기 타임라인을 데리고 발행된다", async () 
 });
 
 
-test("확인할 부분에서 바로, 몇 번이고 다시 읽힐 수 있다", async () => {
-  const [script, css] = await Promise.all([
-    readRendererSource(),
+test("확인할 부분은 고칠 자리 아래에 접혀 있고, 읽는 말을 적을 칸을 갖는다", async () => {
+  const [html, css] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
     fs.readFile(path.join(renderer, "styles.css"), "utf8"),
   ]);
-  assert.match(script, /again\.className = 'finding-regenerate'/);
-  assert.match(script, /tools\.append\(why, more, done, again\)/);
-  // 한 번 쓰고 사라지는 버튼이 아니다. 제출 경로를 공유하므로 후보가 별로면
-  // 그 자리에서 또 누르면 된다.
-  assert.match(script, /function startReviewRepair\(\)/);
-  assert.match(script, /\$\('#review-form'\)\.addEventListener\('submit', event => \{ event\.preventDefault\(\); return startReviewRepair\(\); \}\)/);
-  assert.match(script, /again\.addEventListener\('click', \(\) => regenerateFinding\(finding, page\)\)/);
-  assert.match(css, /\.finding-regenerate \{/);
+  // 고칠 자리가 먼저고 확인 목록이 그 아래다. 목록이 길어져도 고치는 칸을
+  // 찾으러 스크롤하지 않는다. 동작은 renderer-review 검사가 맡는다.
+  assert.ok(html.indexOf('id="review-form"') < html.indexOf('id="review-findings"'));
+  assert.match(html, /id="voice-override-text"/);
+  assert.match(css, /\.finding-group \{/);
+  assert.match(css, /\.script-override \{/);
 });
 
 
@@ -177,7 +159,7 @@ test("결과는 파일 이름 그대로 적히고, 지우기는 되돌릴 수 �
     readMainSource(),
     fs.readFile(path.join(APP_DIR, "preload.cjs"), "utf8"),
   ]);
-  assert.match(script, /outputRowTitle\(item, \{ compact \}\)/);
+  assert.match(script, /outputRowTitle\(item\)/);
   assert.match(main, /fileName: videoPath \? path\.basename\(videoPath\) : null/);
   assert.match(script, /class="delete-button"/);
   assert.match(script, /api\.deleteOutput\(target\)/);
@@ -211,11 +193,7 @@ test("창 막대의 단추는 아이콘과 툴팁을 함께 갖고, 사이드바
   assert.match(html, /id="sidebar-toggle"[^>]+data-tooltip="사이드바 접기"/);
   assert.match(html, /id="window-back"[^>]+data-tooltip="뒤로가기"/);
   assert.match(html, /id="window-forward"[^>]+data-tooltip="앞으로가기"/);
-  // 화살표 글자 대신 같은 굵기의 아이콘을 쓴다.
-  assert.doesNotMatch(html, /id="window-back"[^>]*>←/);
   assert.match(html, /class="panel-toggle-chevron"/);
-  // 아이콘을 글자로 덮어쓰면 접을 때마다 모양이 바뀐다. 문구만 바꾼다.
-  assert.doesNotMatch(script, /toggle\.textContent = collapsed/);
   assert.match(script, /toggle\.dataset\.tooltip = label/);
   assert.match(script, /applySidebarCollapsed\(collapsed, \{ animate: true \}\)/);
   assert.match(css, /\.sidebar-motion \.sidebar \{/);

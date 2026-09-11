@@ -159,6 +159,10 @@
                 <li data-stage="capture"><span>3</span><div><strong>영상 만들기</strong><small>슬라이드와 음성을 하나로 결합</small></div><b></b></li>
                 <li data-stage="verify"><span>4</span><div><strong>결과 확인</strong><small>완성 파일이 정상인지 확인</small></div><b></b></li>
               </ol>
+              <details class="job-units hidden" id="job-units">
+                <summary><strong id="job-units-title">레슨 진행</strong><small id="job-units-detail"></small></summary>
+                <ol id="job-units-list"></ol>
+              </details>
               <div class="job-controls">
                 <button class="secondary-small" id="pause-button" type="button">일시정지</button>
                 <button class="cancel-button" id="cancel-button" type="button">작업 중지</button>
@@ -222,19 +226,39 @@
         </section>
 
         <section class="page-view hidden" id="view-review">
-          <header class="topbar"><div><p class="eyebrow">확인이 필요한 곳만</p><h1>다듬기</h1><p class="lede">자동 검수가 걸러낸 곳을 듣고 고칩니다. 고른 교체는 모아 두었다가 한 번에 저장합니다.</p></div></header>
-          <section class="polish-strip hidden" id="polish-strip" aria-label="이 영상 상태">
-            <strong id="polish-strip-name"></strong>
-            <div class="polish-facts" id="polish-facts"></div>
-            <span class="polish-spark" id="polish-spark" aria-hidden="true"></span>
-          </section>
-          <div class="review-toolbar"><button type="button" class="secondary-small drop-target" id="pick-voice-video">검수할 영상 선택</button><strong id="voice-video-name">최근 결과에서 가져오거나 영상을 선택하세요.</strong><span id="review-version">원본 보관 · 새 버전으로 저장</span></div>
+          <header class="review-head">
+            <div class="review-file">
+              <h1>다듬기</h1>
+              <strong id="voice-video-name">최근 결과에서 가져오거나 영상을 선택하세요.</strong>
+              <span class="review-siblings hidden" id="review-siblings">
+                <button type="button" class="secondary-small" id="review-previous-video" aria-label="같은 작업의 앞 영상 열기">◀</button>
+                <span id="review-sibling-position"></span>
+                <button type="button" class="secondary-small" id="review-next-video" aria-label="같은 작업의 다음 영상 열기">▶</button>
+              </span>
+              <button type="button" class="secondary-small drop-target" id="pick-voice-video">영상 선택</button>
+            </div>
+            <div class="review-head-meta">
+              <div class="polish-facts" id="polish-facts"></div>
+              <button type="button" class="secondary-small hidden" id="review-approve">직접 듣고 확인함</button>
+              <span id="review-version">원본 보관 · 새 버전으로 저장</span>
+            </div>
+          </header>
+          <section class="card hidden" id="review-candidates-host"><h2>원본과 비교하고 후보 선택</h2><p id="review-candidate-scope"></p><div id="review-candidate-actions"><button type="button" class="secondary-small" id="review-candidate-original">이 후보의 원본 페이지 듣기</button></div></section>
+          <section class="card hidden" id="review-saved"><h2>수정본이 저장됐습니다</h2><p>새 버전에서 수정한 부분을 확인한 뒤 이어서 검수하세요.</p><button type="button" class="primary-small" id="review-continue">수정본에서 이어서 검수</button></section>
           <div class="review-layout">
             <section class="review-stage card">
               <video id="review-player" controls preload="metadata" aria-label="검수 영상"></video>
               <p id="review-player-status" role="status">영상을 선택하면 재생과 페이지 탐색이 열립니다.</p>
-              <div class="review-playback"><button type="button" class="secondary-small" id="review-back">5초 전</button><strong id="review-current-page">페이지 확인 전</strong><button type="button" class="primary-small" id="review-select-page" disabled>이 페이지 수정</button></div>
-              <div class="review-fine-controls"><button type="button" class="secondary-small" id="review-fine-back">0.01초 전</button><button type="button" class="secondary-small" id="review-fine-next">0.01초 뒤</button><label>재생 속도 <select id="review-speed" aria-label="검수 재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="0.75">0.75배</option><option value="1" selected>1배</option><option value="1.25">1.25배</option><option value="1.5">1.5배</option><option value="1.75">1.75배</option><option value="2">2배</option><option value="3">3배</option></select></label></div>
+              <div class="review-transport">
+                <div class="transport-seek">
+                  <button type="button" class="secondary-small" id="review-back">5초 전</button>
+                  <button type="button" class="secondary-small" id="review-fine-back" aria-label="0.01초 앞으로">−0.01초</button>
+                  <button type="button" class="secondary-small" id="review-fine-next" aria-label="0.01초 뒤로">+0.01초</button>
+                </div>
+                <strong id="review-current-page">페이지 확인 전</strong>
+                <label class="transport-speed">속도 <select id="review-speed" aria-label="검수 재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="0.75">0.75배</option><option value="1" selected>1배</option><option value="1.25">1.25배</option><option value="1.5">1.5배</option><option value="1.75">1.75배</option><option value="2">2배</option><option value="3">3배</option></select></label>
+                <button type="button" class="secondary-small" id="review-select-page" disabled>이 페이지 고르기</button>
+              </div>
               <section id="review-region-wave" class="region-wave hidden" aria-label="음성 구간 선택">
                 <div class="wave-tools"><span id="review-wave-window"></span><button type="button" id="review-wave-in">확대</button><button type="button" id="review-wave-out">축소</button><button type="button" id="review-wave-selection">선택 구간 맞춤</button><button type="button" id="review-wave-current">재생 위치로</button></div>
                 <div id="review-wave-track" class="wave-track">
@@ -244,7 +268,16 @@
                 </div>
                 <p id="review-wave-note">파형의 시작·끝 손잡이를 끌거나 시간을 입력하세요.</p>
               </section>
-              <div id="review-pages" class="review-pages" aria-label="영상 페이지 탐색"></div>
+              <div class="page-rail" aria-label="영상 페이지 탐색">
+                <div id="review-pages" class="review-pages"></div>
+                <div class="page-rail-jump">
+                  <button type="button" class="secondary-small" id="review-page-prev" aria-label="앞 페이지로">◀</button>
+                  <label>페이지 <input id="review-page-jump" type="number" min="1" inputmode="numeric" aria-label="이동할 페이지 번호"></label>
+                  <span id="review-page-total"></span>
+                  <button type="button" class="secondary-small" id="review-page-next" aria-label="다음 페이지로">▶</button>
+                  <span class="page-rail-legend" id="page-rail-legend"></span>
+                </div>
+              </div>
               <section class="polish-diff hidden" id="polish-diff" aria-label="원문과 받아쓰기 대조">
                 <div class="diff-row"><span>대본 원문</span><p id="polish-expected"></p></div>
                 <div class="diff-row"><span>받아쓰기</span><p id="polish-recognized"></p></div>
@@ -253,7 +286,6 @@
               <section class="review-transcript"><h3>현재 페이지 대본</h3><p id="review-script">페이지 타임라인이 있는 영상에서 대본을 볼 수 있습니다.</p></section>
             </section>
             <aside class="review-sidebar">
-              <section class="card review-findings"><h2>확인할 부분 <span id="review-finding-count">0</span></h2><p id="review-findings-note">자동 검수 결과는 참고용입니다. 아래 목록에 없어도 직접 수정할 수 있습니다.</p><ul id="review-findings-list"></ul></section>
               <form class="card" id="review-form">
                 <h2 id="review-selection-title">수정할 부분을 선택하세요</h2><p id="review-selection-reason">영상을 멈추고 ‘이 페이지 수정’을 누르세요.</p>
                 <div class="segmented" id="review-mode-tabs"><button type="button" data-repair-mode="regenerate" class="selected">페이지 재생성</button><button type="button" data-repair-mode="mute">짧은 소리 제거</button><button type="button" data-repair-mode="replace">구간 음성 교체</button></div>
@@ -261,6 +293,14 @@
                   <input id="voice-start-page" type="hidden" value="1"><input id="voice-end-page" type="hidden" value="1">
                   <p id="voice-page-meta">선택 페이지의 전체 음성을 새로 만듭니다.</p>
                   <button type="button" class="secondary-small" id="review-original">선택 페이지 원본 듣기</button>
+                  <details class="script-override" id="voice-script-override">
+                    <summary>읽는 말 바꾸기<span id="voice-override-badge" class="hidden">입력함</span></summary>
+                    <div>
+                      <label class="field full"><span>이 페이지를 이렇게 읽어 주세요</span><textarea id="voice-override-text" rows="4" maxlength="2000" placeholder="예) 주문 에이 이공구일의 환불을 요청했습니다."></textarea></label>
+                      <div class="script-override-actions"><button type="button" class="secondary-small" id="voice-override-fill">대본 그대로 가져오기</button><button type="button" class="secondary-small" id="voice-override-clear">지우기</button></div>
+                      <p id="voice-override-note">비워 두면 강의 대본 그대로 다시 읽습니다. 입력하면 자막·대본은 그대로 두고 읽는 말만 바꿉니다. 한국어와 영어를 함께 쓸 수 있습니다.</p>
+                    </div>
+                  </details>
                   <details class="advanced-options"><summary>후보·길이 설정</summary><div><label class="field"><span>비교할 후보 수</span><input id="voice-candidate-count" type="number" min="2" max="8" value="3"></label><label class="field"><span>길이가 달라질 때</span><select id="voice-duration-policy"><option value="match-audio">새 음성 길이에 화면 맞춤</option><option value="keep-video">화면 길이 유지</option></select></label><p>기존 길이보다 긴 음성은 자르지 않고 적용을 멈춥니다. 새 음성 길이에 화면 맞춤을 선택하세요.</p></div></details>
                 </div>
                 <div id="review-mute-panel" class="hidden">
@@ -284,21 +324,22 @@
                 <button class="primary-button full" id="start-review-button" type="submit" disabled><span id="start-review-label">새 목소리 후보 만들기</span><span>→</span></button>
                 <p class="review-save-note">후보를 듣고 선택한 뒤 새 버전으로 저장합니다. 원본은 보관됩니다.</p>
               </form>
+              <section class="card review-findings" id="review-findings">
+                <div class="findings-head"><h2>확인할 부분 <span id="review-finding-count">0</span></h2><button type="button" class="secondary-small" id="review-findings-expand" aria-expanded="false">모두 펼치기</button></div>
+                <p id="review-findings-note">자동 검수 결과는 참고용입니다. 아래 목록에 없어도 직접 수정할 수 있습니다.</p><ul id="review-findings-list"></ul>
+              </section>
             </aside>
           </div>
-          <section class="card hidden" id="review-candidates-host"><h2>원본과 비교하고 후보 선택</h2><p id="review-candidate-scope"></p><div id="review-candidate-actions"><button type="button" class="secondary-small" id="review-candidate-original">이 후보의 원본 페이지 듣기</button></div></section>
           <section class="polish-pending hidden" id="polish-pending" aria-live="polite">
-            <div class="polish-pending-copy">
-              <strong id="polish-pending-count">교체 대기 없음</strong>
-              <small>저장하기 전까지 원본 영상은 그대로입니다.</small>
-            </div>
-            <ul id="polish-pending-list"></ul>
+            <details class="polish-pending-copy" id="polish-pending-details">
+              <summary><strong id="polish-pending-count">교체 대기 없음</strong><small>저장하기 전까지 원본 영상은 그대로입니다. 눌러서 목록 보기</small></summary>
+              <ul id="polish-pending-list"></ul>
+            </details>
             <div class="polish-pending-actions">
               <button type="button" class="secondary-small" id="polish-discard">모두 취소</button>
               <button type="button" class="primary-small" id="polish-save">한 번에 저장</button>
             </div>
           </section>
-          <section class="card hidden" id="review-saved"><h2>수정본이 저장됐습니다</h2><p>새 버전에서 수정한 부분을 확인한 뒤 이어서 검수하세요.</p><button type="button" class="primary-small" id="review-continue">수정본에서 이어서 검수</button></section>
         </section>
 
         <section class="page-view hidden" id="view-edit">

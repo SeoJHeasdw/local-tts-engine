@@ -27,7 +27,7 @@ export const ADAPTER = path.join(ROOT, "artifacts/finetune-runs/2026-08-25/jaeho
 // person. Mirrors MAX_AUTOMATIC_ATTEMPTS in speech_quality.py.
 export const DEFAULT_QUALITY_ATTEMPTS = 4;
 
-export const DEFAULT_STUDIO_PATHS = Object.freeze(defaultStudioPaths(ROOT));
+const DEFAULT_STUDIO_PATHS = Object.freeze(defaultStudioPaths(ROOT));
 
 export const LEGACY_OUTPUT_PATHS = Object.freeze({
   ttsOutputRoot: path.join(ROOT, "artifacts/course-pilots"),

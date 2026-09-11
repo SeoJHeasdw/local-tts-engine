@@ -60,6 +60,51 @@ export function createVoicesService({
     };
   }
 
+  // 다시 읽히기만으로 풀리지 않는 자리가 있다. 사전에 없는 식별자나 낯선 약어는
+  // 몇 번을 다시 만들어도 같은 자리에서 같게 읽힌다. 그때는 읽을 말을 사람이
+  // 직접 적어 준다. 자막·대본은 그대로 두고 발음문만 이 문장으로 바꾸는 셈이라,
+  // 기존 발음문·자막 원문 분리와 같은 규칙 위에 선다.
+  async function generateSpokenText(options, outputDir) {
+    const studio = runtimePaths(options.paths);
+    const textPath = path.join(outputDir, "spoken-text.txt");
+    const audioPath = path.join(outputDir, "spoken.wav");
+    const metadataPath = path.join(outputDir, "spoken.json");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(textPath, `${options.overrideText}\n`, "utf8");
+    const args = [
+      "-m", "local_tts_engine.text_candidate",
+      "--model", options.modelId || "qwen3-tts",
+      "--text-file", textPath,
+      "--reference", studio.referenceAudioPath,
+      "--reference-text", studio.referenceTextPath,
+      "--output", audioPath,
+      "--metadata", metadataPath,
+      "--seed", String(options.seed),
+    ];
+    if (options.voiceMode !== "zero") {
+      args.push("--adapter", options.adapterPath || ADAPTER, "--adapter-scale", String(options.adapterScale));
+    }
+    await runProcess("voice", requireRuntimeTool("trainPython", "음성 생성 Python"), args);
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    const durationMs = Number(metadata.durationMs);
+    if (!(durationMs > 0)) throw new Error("입력한 말로 만든 음성의 길이를 읽지 못했습니다.");
+    return {
+      audioPath,
+      // 입력한 말은 자동 판독의 대조 원문이 없다. 판정을 지어내지 않고 사람이
+      // 직접 듣고 고르는 후보로만 둔다.
+      voiceFindings: [],
+      generatedVoice: {
+        metadataPath,
+        // 만든 음성 전체가 이 페이지의 음성이 된다. 잘라 낼 구간이 없다.
+        sourceStartMs: 0,
+        sourceEndMs: durationMs,
+        startPage: Number(options.startPage),
+        endPage: Number(options.endPage),
+        spokenText: options.overrideText,
+      },
+    };
+  }
+
   async function runVoiceCandidates(options, outputDir) {
     const video = chosenRecord(options.videoToken, "video");
     assertPageReplaceable(video, options);
@@ -78,8 +123,10 @@ export function createVoicesService({
       // Retain one take per visible candidate. A recorded repeated omission can
       // start with a split input instead of spending two new takes rediscovering
       // it. Python requires an exact full-text match before using these hints.
-      const generated = await generateReplacementVoice({ ...options, seed, qualityAttempts: 1,
-        recoveryFindings: video.voiceFindings || [] }, candidateDir);
+      const generated = options.overrideText
+        ? await generateSpokenText({ ...options, seed }, candidateDir)
+        : await generateReplacementVoice({ ...options, seed, qualityAttempts: 1,
+          recoveryFindings: video.voiceFindings || [] }, candidateDir);
       candidates.push({ index: index + 1, seed, ...generated });
       emit({ type: "voice-item-complete", completed: candidates.length, total: count, name: `후보 ${index + 1}` });
     }
@@ -91,7 +138,7 @@ export function createVoicesService({
     return candidates.map((item, index) => ({
       ...item,
       token: registered[index].token,
-      name: `목소리 후보 ${item.index}`,
+      name: `${options.overrideText ? "입력한 말" : "목소리 후보"} ${item.index}`,
       audioUrl: pathToFileURL(item.audioPath).href,
     }));
   }

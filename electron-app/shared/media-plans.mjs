@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export const PATCH_EPSILON = 0.001;
+const PATCH_EPSILON = 0.001;
 
 /**
  * Build one filter graph that swaps the voice under any number of pages.

@@ -147,9 +147,9 @@ export function reviewPages(timeline) {
   return pages;
 }
 
-export const SHIFTED_ENTRY_FIELDS = ["startMs", "endMs", "transitionAtMs", "speechStartMs", "speechEndMs"];
+const SHIFTED_ENTRY_FIELDS = ["startMs", "endMs", "transitionAtMs", "speechStartMs", "speechEndMs"];
 
-export function shiftTimelineEntry(entry, offsetMs) {
+function shiftTimelineEntry(entry, offsetMs) {
   const moved = { ...entry };
   for (const field of SHIFTED_ENTRY_FIELDS) {
     if (Number.isFinite(Number(entry[field]))) moved[field] = Math.round(Number(entry[field]) + offsetMs);

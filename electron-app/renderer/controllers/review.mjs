@@ -1,7 +1,7 @@
 import { parseRegionTime, formatRegionTime, regionWindow, regionIssue, regionImpact, timeAtFraction } from "../../shared/regions.mjs";
 import { findingStatus, voiceFindingReason, summarizeVoiceFindings, voiceFindingLabel, findingKeyOf, findingSeek, findingExcerpt } from "../view-utils.mjs";
 
-export function createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState, document = globalThis.document }) {
+export function createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState, neighbours = () => ({ previous: null, next: null, index: 0, total: 0 }), refreshOutputs = () => {}, document = globalThis.document }) {
   let reviewTarget = null;
   let reviewFindings = [];
   let reviewSelection = null;
@@ -16,6 +16,26 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   const reviewPlayer = $('#review-player');
   let reviewRangeEdited=false, reviewWaveWindow={start:0,end:10}, reviewWaveRequest=0;
   let regionPreviewRequest=0, regionPreviewBusy=false;
+
+  // 다시 읽히기만으로 풀리지 않는 자리를 위해 사람이 적어 주는 발음문이다.
+  // 자막·대본은 그대로 두고 읽는 말만 바꾼다.
+  function readOverrideText() {
+    return String($('#voice-override-text').value || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+  }
+
+  function setOverrideText(value, { open = false } = {}) {
+    $('#voice-override-text').value = value || '';
+    if (open) $('#voice-script-override').open = true;
+    updateOverrideState();
+  }
+
+  function updateOverrideState() {
+    const text = readOverrideText();
+    $('#voice-override-badge').classList.toggle('hidden', !text);
+    $('#voice-override-note').textContent = text
+      ? '이 말로 후보를 만듭니다. 자동 판독의 대조 원문이 없으므로 직접 듣고 고르세요.'
+      : '비워 두면 강의 대본 그대로 다시 읽습니다. 입력하면 자막·대본은 그대로 두고 읽는 말만 바꿉니다. 한국어와 영어를 함께 쓸 수 있습니다.';
+  }
 
   function readReviewRegion() {
     return {start:parseRegionTime($('#review-mute-start').value),end:parseRegionTime($('#review-mute-end').value),
@@ -102,6 +122,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
 
   function renderPendingFixes() {
     const fixes = pendingFixList();
+    paintRailFlags();
+    renderReviewFacts();
     const badge = $('#polish-count');
     badge.textContent = String(fixes.length);
     badge.classList.toggle('hidden', fixes.length === 0);
@@ -119,25 +141,21 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       drop.className = 'polish-drop';
       drop.textContent = '취소';
       drop.setAttribute('aria-label', `${fix.startPage}페이지 교체 취소`);
-      drop.addEventListener('click', () => { pendingFixes.delete(fix.startPage); renderPendingFixes(); });
+      drop.addEventListener('click', () => dropPendingFix(fix.startPage));
       item.append(label, detail, drop);
       return item;
     }));
   }
 
-  // The strip is not a mode. One lesson is a line; a chapter grows the same line
-  // into rows. What was produced decides, not a setting the user has to pick.
-  function renderPolishStrip(video) {
-    const strip = $('#polish-strip');
-    if (!video) { strip.classList.add('hidden'); return; }
-    const findings = video.voiceFindings || [];
-    const pages = video.pages || [];
-    strip.classList.remove('hidden');
-    $('#polish-strip-name').textContent = video.name || '';
-    const facts = [
-      ['페이지', String(pages.length || '—')],
-      ['확인 필요', String(findings.length)],
-    ];
+  // 한 줄로 이 영상의 남은 일을 말한다. 이름·상태를 여러 자리에 나눠 적으면
+  // 같은 사실을 세 번 읽게 되고, 정작 영상이 화면 아래로 밀린다.
+  function renderReviewFacts() {
+    const video = mediaState.voiceVideo;
+    const facts = video ? [
+      ['페이지', String((video.pages || []).length || '—')],
+      ['확인할 곳', String(visibleFindings().length)],
+      ...(pendingFixes.size ? [['교체 대기', String(pendingFixes.size)]] : []),
+    ] : [];
     $('#polish-facts').replaceChildren(...facts.map(([key, value]) => {
       const span = document.createElement('span');
       const label = document.createElement('i');
@@ -146,12 +164,6 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       strong.textContent = value;
       span.append(label, strong);
       return span;
-    }));
-    const flagged = new Set(findings.map((finding) => Number(finding.slideNumber)));
-    $('#polish-spark').replaceChildren(...pages.slice(0, 120).map((page) => {
-      const cell = document.createElement('i');
-      if (flagged.has(Number(page.number))) cell.className = 'flagged';
-      return cell;
     }));
   }
 
@@ -180,6 +192,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       label: name || '고른 목소리',
     });
     pendingCandidateContext = null;
+    autoOpened = false;
+    setOverrideText('');
+    $('#voice-script-override').open = false;
     $('#review-candidates-host').classList.add('hidden');
     // 교체를 담았다면 그 페이지는 처리된 것이므로 목록에서도 내린다.
     reviewFindings
@@ -206,8 +221,22 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     catch (error) { setEditBusy(false); showToast(error.message, 'error'); }
   }
 
+  // 담아 둔 교체를 취소하면 그 페이지의 확인 항목도 도로 올라와야 한다.
+  // 담을 때 '처리된 자리'로 내렸으니, 되돌릴 때 함께 되돌리지 않으면 남은 일이
+  // 목록에서 사라진 채로 남는다.
+  function dropPendingFix(startPage) {
+    pendingFixes.delete(Number(startPage));
+    for (const finding of reviewFindings) {
+      if (Number(finding.slideNumber) === Number(startPage)) clearedFindings.delete(findingKey(finding));
+    }
+    renderFindings();
+    renderPendingFixes();
+  }
+
   $('#polish-save').addEventListener('click', savePendingFixes);
-  $('#polish-discard').addEventListener('click', () => { pendingFixes.clear(); renderPendingFixes(); });
+  $('#polish-discard').addEventListener('click', () => {
+    for (const startPage of [...pendingFixes.keys()]) dropPendingFix(startPage);
+  });
 
 
   function renderCompleteVoiceFindings(findings = [], target = null) {
@@ -251,11 +280,34 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     return reviewFindings.filter((finding) => !clearedFindings.has(findingKey(finding)));
   }
 
+  // 확인할 곳이 여섯이면 여섯 줄이 한꺼번에 펼쳐져 사이드바를 가득 채웠고,
+  // 그 안에서 확인·재생성·사유·대본은 22픽셀 아이콘으로 밀려났다. 같은 페이지의
+  // 여러 지적은 결국 그 페이지를 한 번 다시 읽히는 한 가지 일이므로, 페이지로
+  // 묶어 접어 두고 펼친 자리에서만 버튼을 제대로 세운다.
+  let expandAll = false;
+  // 한 곳만 남았을 때는 펼쳐 둔다. 다만 목록을 다시 그릴 때마다 페이지를 새로
+  // 고르면 적어 둔 읽을 말이 지워지므로, 영상을 연 뒤 한 번만 한다.
+  let autoOpened = false;
+
+  function findingGroups(findings) {
+    const groups = new Map();
+    for (const finding of findings) {
+      const number = Number(finding.slideNumber);
+      const group = groups.get(number) || { number, findings: [] };
+      group.findings.push(finding);
+      groups.set(number, group);
+    }
+    return [...groups.values()].sort((left, right) => left.number - right.number);
+  }
+
   function renderFindings() {
     const remaining = visibleFindings();
     const cleared = reviewFindings.length - remaining.length;
+    const groups = findingGroups(remaining);
     $('#review-finding-count').textContent = String(remaining.length);
-    const rows = remaining.map(renderVoiceFindingRow);
+    const openFirst = !autoOpened && groups.length === 1;
+    if (openFirst) autoOpened = true;
+    const rows = groups.map((group, index) => renderFindingGroup(group, openFirst && index === 0));
     if (cleared > 0) {
       const note = document.createElement('li');
       note.className = 'findings-cleared';
@@ -271,15 +323,148 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       rows.push(note);
     }
     $('#review-findings-list').replaceChildren(...rows);
+    $('#review-findings-expand').classList.toggle('hidden', groups.length < 2);
+    $('#review-findings-expand').textContent = expandAll ? '모두 접기' : '모두 펼치기';
+    $('#review-findings-expand').setAttribute('aria-expanded', String(expandAll));
+    paintRailFlags();
+    renderReviewFacts();
     $('#review-findings-note').textContent = reviewFindings.length === 0
       ? '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
       : remaining.length === 0
         ? '확인할 항목을 모두 정리했습니다. 담아 둔 교체가 있으면 저장하세요.'
-        : '자동 검수 권장 구간입니다. 눌러서 직접 확인하세요.';
+        : `자동 검수 권장 ${remaining.length}곳 · ${groups.length}페이지입니다. 페이지를 펼쳐 듣고 확인하세요.${repeatedTermNote(remaining)}`;
+  }
+
+  $('#review-findings-expand').addEventListener('click', () => {
+    expandAll = !expandAll;
+    renderFindings();
+  });
+
+  // 같은 낱말이 여러 페이지에서 걸렸다면 그 페이지들을 하나씩 고치는 것보다
+  // 읽기 자체를 정하는 편이 빠르다. 사전 등록은 사용자가 정하는 일이므로
+  // 여기서는 그런 자리가 있다는 사실만 알린다.
+  function repeatedTermNote(findings) {
+    const pagesByTerm = new Map();
+    for (const finding of findings) {
+      for (const item of finding.terms || []) {
+        const term = String(item?.term || '').trim();
+        if (!term) continue;
+        const pages = pagesByTerm.get(term) || new Set();
+        pages.add(Number(finding.slideNumber));
+        pagesByTerm.set(term, pages);
+      }
+    }
+    const repeated = [...pagesByTerm.entries()]
+      .filter(([, pages]) => pages.size > 1)
+      .sort((left, right) => right[1].size - left[1].size);
+    if (!repeated.length) return '';
+    const [term, pages] = repeated[0];
+    const rest = repeated.length > 1 ? ` 외 ${repeated.length - 1}개 낱말도 마찬가지입니다.` : '';
+    return ` ‘${term}’이(가) ${pages.size}페이지에서 걸렸습니다. 읽는 말을 바꾸거나 제작 사전 등록을 검토하세요.${rest}`;
+  }
+
+  function pageOf(finding) {
+    return mediaState.voiceVideo?.pages?.find(page => page.number === Number(finding.slideNumber)) || null;
+  }
+
+  // 한 페이지의 지적들. 접힌 줄만 보고도 어느 페이지의 무슨 일인지 읽히도록
+  // 페이지·시각·판정만 요약에 둔다.
+  function renderFindingGroup(group, open = false) {
+    const row = document.createElement('li');
+    const worst = group.findings.some(finding => finding.severity !== 'warning') ? 'failed' : 'warning';
+    row.className = 'finding-group';
+    row.dataset.severity = worst;
+
+    const details = document.createElement('details');
+    details.open = expandAll || open;
+    const summary = document.createElement('summary');
+    const page = pageOf(group.findings[0]);
+    const at = findingSeek(group.findings[0], page);
+
+    const title = document.createElement('strong');
+    title.textContent = `${group.number}페이지`;
+    const count = document.createElement('span');
+    count.className = 'finding-count';
+    count.textContent = `${group.findings.length}곳`;
+    count.classList.toggle('hidden', group.findings.length < 2);
+    const time = document.createElement('span');
+    time.className = 'finding-time';
+    time.textContent = voiceFindingLabel(at);
+    const verdict = document.createElement('span');
+    verdict.className = 'finding-verdict';
+    verdict.textContent = worst === 'failed' ? '재생성 필요' : '청취 확인';
+    summary.append(title, count, verdict, time);
+
+    const body = document.createElement('div');
+    body.className = 'finding-body';
+    body.append(...group.findings.map(renderVoiceFindingRow));
+
+    // 버튼은 페이지 단위다. 같은 페이지의 지적 둘을 따로 재생성할 수는 없다.
+    const tools = document.createElement('div');
+    tools.className = 'finding-tools';
+    const done = document.createElement('button');
+    done.type = 'button'; done.className = 'finding-done';
+    done.textContent = group.findings.length > 1 ? '이 페이지 확인' : '확인';
+    done.title = '확인 완료로 표시';
+    done.setAttribute('aria-label', `${group.number}페이지 확인 완료로 표시`);
+    done.addEventListener('click', () => clearFindings(group.findings));
+    // 확인 항목의 대부분은 결국 그 페이지를 다시 읽히는 것으로 끝난다. 화면을
+    // 옮겨 페이지를 다시 고르는 두 걸음을 지우고 그 자리에 버튼을 둔다.
+    const again = document.createElement('button');
+    again.type = 'button'; again.className = 'finding-regenerate';
+    again.textContent = '재생성';
+    again.title = '이 페이지의 목소리를 대본 그대로 새로 만듭니다';
+    again.setAttribute('aria-label', `${group.number}페이지 목소리 재생성`);
+    again.disabled = !page;
+    again.addEventListener('click', () => regenerateFinding(group.findings[0], page));
+    // 다시 읽혀도 같은 자리에서 같게 읽히는 말이 있다. 그때는 읽을 말을 사람이
+    // 적는다. 기본은 여전히 재생성이고, 이 버튼은 그 입력칸을 여는 일만 한다.
+    const rewrite = document.createElement('button');
+    rewrite.type = 'button'; rewrite.className = 'finding-rewrite';
+    rewrite.textContent = '읽는 말 바꿔 재생성';
+    rewrite.title = '읽을 말을 직접 적어 이 페이지를 다시 만듭니다';
+    rewrite.setAttribute('aria-label', `${group.number}페이지 읽는 말 바꿔 재생성`);
+    rewrite.disabled = !page;
+    rewrite.addEventListener('click', () => rewriteFinding(group.findings[0], page));
+    tools.append(done, again, rewrite);
+    body.append(tools);
+
+    details.append(summary, body);
+    details.addEventListener('toggle', () => {
+      if (!details.open) return;
+      if (!expandAll) {
+        for (const other of $$('#review-findings-list details')) {
+          if (other !== details) other.open = false;
+        }
+      }
+      openFinding(group.findings[0], page, at);
+    });
+    row.append(details);
+    // 모두 펼치기는 보기만 넓히는 일이다. 펼친 마지막 페이지가 고칠 자리를
+    // 빼앗으면, 방금 고르던 페이지가 조용히 바뀐다.
+    if (open) openFinding(group.findings[0], page, at, { seek: false });
+    return row;
+  }
+
+  // 펼치는 것과 그 자리를 듣는 것은 한 동작이다. 펼쳐 놓고 다시 눌러야
+  // 들린다면 목록은 그냥 목차일 뿐이다.
+  function openFinding(finding, page, at, { seek = true } = {}) {
+    selectReviewPage(page, voiceFindingReason(finding));
+    showFindingDiff(finding);
+    if (!seek) return;
+    // 항목의 구간은 청크 전체다. 그대로 옮기면 문단 첫머리에 떨어져 문제가 된
+    // 낱말을 다시 찾아야 한다. 낱말 시각이 있으면 그 자리로 간다.
+    seekReview(at.startMs / 1000, at.endMs / 1000);
+    setReviewRegion(at.startMs / 1000, at.endMs / 1000);
+    if (reviewMode !== 'regenerate') showReviewWave((at.startMs + at.endMs) / 2000, (at.endMs - at.startMs) / 1000 + 2);
   }
 
   function clearFinding(finding) {
-    clearedFindings.add(findingKey(finding));
+    clearFindings([finding]);
+  }
+
+  function clearFindings(findings) {
+    for (const finding of findings) clearedFindings.add(findingKey(finding));
     renderFindings();
     persistClearedFindings();
   }
@@ -290,25 +475,20 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     persistClearedFindings();
   }
 
-  // 사유는 길고 대본 문장은 더 길다. 셋을 한 줄에 나란히 두면 문장이 잘리거나
-  // 줄이 무너지므로, 짧은 것(페이지·시각)만 윗줄에 두고 문장은 아래 한 줄을
-  // 통째로 쓴다. 사유는 아이콘 툴팁으로 접는다.
+  // 판정과 사유, 그리고 걸린 낱말이 있는 문장. 접혀 있던 것을 펼친 자리이므로
+  // 사유를 아이콘 뒤에 숨기지 않고 그대로 읽힌다.
   function renderVoiceFindingRow(finding) {
-    const row = document.createElement('li');
-    row.dataset.severity = finding.severity;
+    const item = document.createElement('article');
+    item.className = 'finding-item';
+    item.dataset.severity = finding.severity;
 
-    const button = document.createElement('button');
-    button.type = 'button'; button.className = 'voice-finding';
+    const status = document.createElement('p');
+    status.className = 'finding-status';
+    status.textContent = findingStatus(finding);
 
-    const head = document.createElement('div');
-    head.className = 'finding-head';
-    const title = document.createElement('strong'); title.textContent = `${finding.slideNumber}페이지`;
-    const time = document.createElement('span');
-    time.className = 'finding-time';
-    const page = mediaState.voiceVideo?.pages?.find(p => p.number === Number(finding.slideNumber));
-      const at = findingSeek(finding, page);
-    time.textContent = voiceFindingLabel(at);
-    head.append(title, time);
+    const why = document.createElement('p');
+    why.className = 'finding-why';
+    why.textContent = voiceFindingReason(finding);
 
     // 대본을 통째로 말면 어느 낱말을 들어야 하는지가 오히려 묻힌다. 걸린 낱말과
     // 그 앞뒤만 짧게 보여 준다.
@@ -328,67 +508,41 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     };
     paintExcerpt();
 
-    const status = document.createElement('p'); status.className = 'finding-status';
-    status.textContent = findingStatus(finding);
-    button.append(head, status, line);
-
-    const tools = document.createElement('div');
-    tools.className = 'finding-tools';
     // 발췌는 걸린 낱말을 짚으려고 앞뒤를 잘랐다. 잘린 데가 궁금할 때를 위해
-    // 펼칠 수 있게 둔다. 항목 버튼 안에 버튼을 넣을 수는 없으므로 옆에 세운다.
+    // 펼칠 수 있게 둔다.
     const full = String(finding.expectedText || '').trim();
     const more = document.createElement('button');
     more.type = 'button';
     more.className = 'finding-more';
-    more.textContent = '⋯';
+    more.textContent = '대본 전체 보기';
     more.setAttribute('aria-expanded', 'false');
-    more.title = '대본 전체 보기';
-    more.setAttribute('aria-label', `${finding.slideNumber}페이지 대본 전체 보기`);
     more.disabled = !full;
     more.addEventListener('click', () => {
       const open = more.getAttribute('aria-expanded') !== 'true';
       more.setAttribute('aria-expanded', String(open));
-      more.title = open ? '발췌만 보기' : '대본 전체 보기';
+      more.textContent = open ? '발췌만 보기' : '대본 전체 보기';
       line.classList.toggle('full', open);
       if (open) { line.replaceChildren(); line.textContent = full; }
       else paintExcerpt();
     });
-    const why = document.createElement('span');
-    why.className = 'finding-why';
-    why.setAttribute('tabindex', '0');
-    why.setAttribute('role', 'note');
-    // 툴팁과 스크린리더가 같은 문구를 읽도록 한 값에서 낸다.
-    why.dataset.tooltip = voiceFindingReason(finding);
-    why.setAttribute('aria-label', `확인 사유: ${voiceFindingReason(finding)}`);
-    why.textContent = 'ⓘ';
-    const done = document.createElement('button');
-    done.type = 'button'; done.className = 'finding-done';
-    done.textContent = '확인';
-    done.title = '확인 완료로 표시';
-    done.setAttribute('aria-label', `${finding.slideNumber}페이지 확인 완료로 표시`);
-    done.addEventListener('click', () => clearFinding(finding));
-    // 확인 항목의 대부분은 결국 그 페이지를 다시 읽히는 것으로 끝난다. 화면을
-    // 옮겨 페이지를 다시 고르는 두 걸음을 지우고 그 자리에 버튼을 둔다.
-    const again = document.createElement('button');
-    again.type = 'button'; again.className = 'finding-regenerate';
-    again.textContent = '재생성';
-    again.title = '이 페이지의 목소리를 새로 만듭니다';
-    again.setAttribute('aria-label', `${finding.slideNumber}페이지 목소리 재생성`);
-    again.disabled = !page;
-    again.addEventListener('click', () => regenerateFinding(finding, page));
-    tools.append(why, more, done, again);
 
-    row.append(button, tools);
-    button.addEventListener('click', () => {
-      selectReviewPage(page, voiceFindingReason(finding));
-      showFindingDiff(finding);
-      // 항목의 구간은 청크 전체다. 그대로 옮기면 문단 첫머리에 떨어져 문제가 된
-      // 낱말을 다시 찾아야 한다. 낱말 시각이 있으면 그 자리로 간다.
-      seekReview(at.startMs / 1000, at.endMs / 1000);
-      setReviewRegion(at.startMs/1000,at.endMs/1000);
-      if(reviewMode!=='regenerate')showReviewWave((at.startMs+at.endMs)/2000,(at.endMs-at.startMs)/1000+2);
+    const listen = document.createElement('button');
+    listen.type = 'button';
+    listen.className = 'finding-listen';
+    listen.textContent = '이 자리 듣기';
+    const page = pageOf(finding);
+    const at = findingSeek(finding, page);
+    listen.setAttribute('aria-label', `${finding.slideNumber}페이지 ${voiceFindingLabel(at)} 듣기`);
+    listen.addEventListener('click', () => {
+      openFinding(finding, page, at);
+      playReviewRange(at.startMs / 1000, at.endMs / 1000);
     });
-    return row;
+
+    const actions = document.createElement('div');
+    actions.className = 'finding-item-actions';
+    actions.append(listen, more);
+    item.append(status, why, line, actions);
+    return item;
   }
 
   async function openReview(target, finding = null) {
@@ -405,6 +559,78 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       return true;
     } catch (error) { showToast(error.message, 'error'); return false; }
   }
+
+  // 듣고 확인하는 자리와 확인했다고 적는 자리가 다르면, 열한 편을 볼 때마다
+  // 결과 목록으로 돌아가 같은 줄을 다시 찾아야 한다. 보던 자리에서 적는다.
+  function renderApproval() {
+    const target = mediaState.voiceVideo?.reviewTarget;
+    const approved = mediaState.voiceVideo?.review?.status === 'approved';
+    $('#review-approve').classList.toggle('hidden', !target);
+    $('#review-approve').textContent = approved ? '청취 승인 취소' : '직접 듣고 확인함';
+    $('#review-approve').disabled = reviewBusy;
+    $('#review-approve').title = approved
+      ? '이 결과의 청취 승인을 취소합니다.'
+      : '직접 들어 확인한 결과로 표시합니다. 자동 검사와는 별개입니다.';
+  }
+
+  $('#review-approve').addEventListener('click', async () => {
+    const video = mediaState.voiceVideo;
+    const target = video?.reviewTarget;
+    if (!target || reviewBusy) return;
+    const approved = video.review?.status === 'approved';
+    try {
+      video.review = await api.setOutputReview(target, approved ? 'pending' : 'approved');
+      renderApproval();
+      refreshOutputs();
+      showToast(approved ? '청취 승인을 취소했습니다.' : '직접 들은 결과로 표시했습니다.');
+    } catch (error) { showToast(error.message, 'error'); }
+  });
+
+  // 한 챕터를 열한 편으로 나눠 만들면 다듬기도 열한 번이다. 편을 옮길 때마다
+  // 결과 목록으로 돌아가지 않도록 같은 작업의 앞뒤 영상을 여기서 연다.
+  function renderSiblingNavigation() {
+    const around = (reviewTarget ? neighbours(reviewTarget) : null) || {};
+    const total = Number(around.total) || 0;
+    $('#review-siblings').classList.toggle('hidden', total < 2);
+    $('#review-sibling-position').textContent = total > 1 ? `${around.index}/${total}편` : '';
+    $('#review-previous-video').disabled = !around.previous || reviewBusy;
+    $('#review-next-video').disabled = !around.next || reviewBusy;
+    return around;
+  }
+
+  for (const [id, key] of [['review-previous-video', 'previous'], ['review-next-video', 'next']]) {
+    $('#' + id).addEventListener('click', () => {
+      const around = reviewTarget ? neighbours(reviewTarget) : null;
+      const target = around?.[key];
+      if (target) openReview(target);
+    });
+  }
+
+  // 다듬기는 같은 손짓을 하루에 수백 번 되풀이한다. 5초 앞으로 가려고 매번
+  // 버튼을 겨누지 않도록 손이 자판을 떠나지 않는 길을 함께 둔다. 글자를 치는
+  // 중이거나 대화상자가 열려 있으면 자판은 그쪽 것이다.
+  const SHORTCUT_SKIP_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'SUMMARY', 'A']);
+
+  function reviewShortcut(event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if ($('#view-review')?.classList?.contains('hidden')) return;
+    if (document.querySelector?.('dialog[open]')) return;
+    const target = event.target;
+    if (target?.isContentEditable || SHORTCUT_SKIP_TAGS.has(target?.tagName)) return;
+    const step = (seconds) => seekReview(Math.max(0, reviewPlayer.currentTime + seconds));
+    if (event.key === ' ') {
+      event.preventDefault();
+      if (reviewPlayer.paused) reviewPlayer.play().catch(() => {});
+      else reviewPlayer.pause();
+    } else if (event.key === 'ArrowLeft') { event.preventDefault(); step(-5); }
+    else if (event.key === 'ArrowRight') { event.preventDefault(); step(5); }
+    else if (event.key === ',') { event.preventDefault(); step(-0.01); }
+    else if (event.key === '.') { event.preventDefault(); step(0.01); }
+    else if (event.key === '[') { event.preventDefault(); movePage(-1); }
+    else if (event.key === ']') { event.preventDefault(); movePage(1); }
+  }
+
+  document.addEventListener?.('keydown', reviewShortcut);
 
   // 검수 중인 파일도 이름은 그 자리에서 고친다. 결과 목록을 거치지 않고 고른
   // 영상이어도 이름은 그 파일에 붙은 것이므로 같은 방법으로 바꿀 수 있다.
@@ -433,53 +659,156 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#region-audio-preview').classList.add('hidden');
     $('#region-audio-name').textContent = 'WAV·M4A·MP3 파일을 선택하세요.';
     pendingCandidateContext = null;
+    autoOpened = false;
+    setOverrideText('');
+    $('#voice-script-override').open = false;
     $('#review-candidates-host').classList.add('hidden');
     $('#review-saved').classList.add('hidden');
     pendingFixes.clear();
     renderPendingFixes();
     $('#polish-diff').classList.add('hidden');
-    renderPolishStrip(video);
     paintReviewFileName(video.name);
     reviewPlayer.src = video.videoUrl;
     reviewFindings = video.voiceFindings || [];
     clearedFindings.clear();
     for (const key of video.clearedFindings || []) clearedFindings.add(String(key));
+    renderPageRail(video);
+    $('#review-selection-title').textContent = '고칠 페이지를 고르세요';
+    $('#review-selection-reason').textContent = '확인할 부분에서 고르거나, 영상 아래 페이지 막대에서 누르세요.';
+    $('#review-player-status').textContent = video.pages?.length
+      ? '재생 중에도 페이지를 선택해 수정할 수 있습니다. 스페이스 재생·멈춤, ← → 5초, , . 0.01초, [ ] 페이지 이동.'
+      : '페이지 정보가 없어 재생성은 사용할 수 없습니다. 구간 무음 처리는 가능합니다.';
+    // 한 곳만 남은 목록은 펼친 채로 그 페이지를 골라 둔다. 기본 문구를 세운
+    // 뒤에 그려야 고른 페이지가 다시 '선택하세요'로 덮이지 않는다.
     renderFindings();
-    $('#review-pages').replaceChildren(...(video.pages || []).map(page => {
-      const button = document.createElement('button'); button.type = 'button';
-      button.textContent = `${page.number}p`; button.dataset.page = page.number;
-      button.title = `${formatDuration(page.startMs)} · ${page.text.slice(0, 70)}`;
-      button.addEventListener('click', () => { selectReviewPage(page); seekReview(page.startMs / 1000); });
-      return button;
-    }));
-    $('#review-selection-title').textContent = '수정할 부분을 선택하세요';
-    $('#review-selection-reason').textContent = '영상을 멈추고 ‘이 페이지 수정’을 누르세요.';
-    $('#review-player-status').textContent = video.pages?.length ? '재생 중에도 페이지를 선택해 수정할 수 있습니다.' : '페이지 정보가 없어 재생성은 사용할 수 없습니다. 구간 무음 처리는 가능합니다.';
+    renderSiblingNavigation();
+    renderApproval();
     updateReviewPosition(); updateReviewAction();
   }
+
+  // 100칸이 넘는 페이지를 버튼 이름으로 늘어놓으면 목록이 화면 한 판을 먹고,
+  // 정작 고르려는 페이지는 눈으로 세어야 찾힌다. 한 칸이 한 페이지인 막대로
+  // 두고, 확인할 곳만 색으로 세운다. 정확한 이동은 옆의 번호 입력이 맡는다.
+  const RAIL_LABEL_LIMIT = 26;
+
+  const railCells = new Map();
+  let railCurrent = null;
+  let positionPage = null;
+
+  function renderPageRail(video) {
+    const pages = video?.pages || [];
+    const dense = pages.length > RAIL_LABEL_LIMIT;
+    railCells.clear();
+    railCurrent = null;
+    $('#review-pages').classList.toggle('dense', dense);
+    $('#review-pages').replaceChildren(...pages.map(page => {
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.dataset.page = page.number;
+      if (!dense) cell.textContent = String(page.number);
+      cell.title = `${page.number}페이지 · ${formatDuration(page.startMs)} · ${String(page.text || '').slice(0, 70)}`;
+      cell.setAttribute('aria-label', `${page.number}페이지 · ${formatDuration(page.startMs)}`);
+      cell.addEventListener('click', () => { selectReviewPage(page); seekReview(page.startMs / 1000); });
+      railCells.set(page.number, cell);
+      return cell;
+    }));
+    const first = pages[0]?.number;
+    const last = pages.at(-1)?.number;
+    $('#review-page-total').textContent = pages.length ? `${first}–${last}` : '';
+    $('#review-page-jump').min = String(first ?? 1);
+    $('#review-page-jump').max = String(last ?? 1);
+    $('#review-page-jump').disabled = !pages.length;
+    for (const id of ['review-page-prev', 'review-page-next']) $('#' + id).disabled = !pages.length;
+    positionPage = null;
+    paintRailFlags();
+  }
+
+  function paintRailFlags() {
+    const flagged = new Map();
+    for (const finding of visibleFindings()) {
+      const number = Number(finding.slideNumber);
+      if (finding.severity !== 'warning' || !flagged.has(number)) {
+        flagged.set(number, finding.severity === 'warning' ? 'warning' : 'failed');
+      }
+    }
+    const fixed = new Set([...pendingFixes.keys()].map(Number));
+    let failed = 0, warned = 0;
+    for (const cell of $$('#review-pages button')) {
+      const number = Number(cell.dataset.page);
+      const severity = flagged.get(number);
+      cell.classList.toggle('flagged', severity === 'failed');
+      cell.classList.toggle('advised', severity === 'warning');
+      cell.classList.toggle('queued', fixed.has(number));
+      if (severity === 'failed') failed += 1;
+      if (severity === 'warning') warned += 1;
+    }
+    const legend = [failed ? `재생성 필요 ${failed}` : '', warned ? `청취 확인 ${warned}` : '',
+      fixed.size ? `교체 대기 ${fixed.size}` : ''].filter(Boolean);
+    $('#page-rail-legend').textContent = legend.join(' · ');
+  }
+
+  function movePage(step) {
+    const pages = mediaState.voiceVideo?.pages || [];
+    if (!pages.length) return;
+    const current = currentReviewPage();
+    const index = current ? pages.indexOf(current) : -1;
+    const next = pages[Math.max(0, Math.min(pages.length - 1, (index < 0 ? 0 : index) + step))];
+    if (next) { selectReviewPage(next); seekReview(next.startMs / 1000); }
+  }
+
+  $('#review-page-prev').addEventListener('click', () => movePage(-1));
+  $('#review-page-next').addEventListener('click', () => movePage(1));
+  $('#review-page-jump').addEventListener('change', () => {
+    const pages = mediaState.voiceVideo?.pages || [];
+    const wanted = Number($('#review-page-jump').value);
+    const page = pages.find(item => Number(item.number) === wanted);
+    if (!page) { updateReviewPosition(); return; }
+    selectReviewPage(page);
+    seekReview(page.startMs / 1000);
+  });
 
   function currentReviewPage() {
     const pages = mediaState.voiceVideo?.pages || [];
     const ms = reviewPlayer.currentTime * 1000;
     return pages.find((page, index) => ms >= (index ? page.startMs : 0) && ms < (pages[index + 1]?.startMs ?? Infinity)) || null;
   }
+  // 재생 중에는 초당 네 번 불린다. 시각만 매번 바뀌므로 페이지가 실제로 넘어간
+  // 때에만 막대·대본·번호를 손댄다. 매번 백 칸을 훑으면 재생이 그만큼 무거워진다.
+  function markRailCurrent(page) {
+    const next = page ? railCells.get(page.number) || null : null;
+    if (railCurrent === next) return;
+    if (railCurrent) { railCurrent.classList.remove('current'); railCurrent.setAttribute('aria-current', 'false'); }
+    if (next) { next.classList.add('current'); next.setAttribute('aria-current', 'true'); }
+    railCurrent = next;
+  }
+
   function updateReviewPosition() {
     const page = currentReviewPage();
     $('#review-current-page').textContent = page ? `${page.number}페이지 · ${Math.floor(reviewPlayer.currentTime / 60)}:${(reviewPlayer.currentTime % 60).toFixed(2).padStart(5, '0')}` : '페이지 정보 없음';
-    $('#review-script').textContent = page?.text || '페이지 타임라인이 없는 영상입니다.';
     $('#review-select-page').disabled = reviewBusy || !page;
-    $$('#review-pages button').forEach(button => button.setAttribute('aria-current', String(Number(button.dataset.page) === page?.number)));
+    if (page?.number !== positionPage) {
+      positionPage = page?.number;
+      $('#review-script').textContent = page?.text || '페이지 타임라인이 없는 영상입니다.';
+      markRailCurrent(page);
+      // 입력 중인 숫자를 빼앗지 않는다.
+      if (page && document.activeElement !== $('#review-page-jump')) $('#review-page-jump').value = String(page.number);
+    }
     if(reviewMode!=='regenerate')drawReviewWaveSelection();
   }
   function selectReviewPage(page, reason = '') {
     if (!page || reviewBusy) return;
+    // 적어 둔 읽을 말은 그 페이지의 것이다. 다른 페이지로 옮기면 지운다.
+    if (reviewSelection && reviewSelection.number !== page.number) setOverrideText('');
     reviewPlayer.pause(); reviewSelection = page;
     $('#voice-start-page').value = $('#voice-end-page').value = String(page.number);
-    $('#review-selection-title').textContent = `${page.number}페이지 수정`;
+    $('#review-selection-title').textContent = `${page.number}페이지 고치기`;
     $('#review-selection-reason').textContent = reason || `${formatDuration(page.startMs)}–${formatDuration(page.endMs)} · 직접 선택한 페이지`;
     updateVoicePageMeta(); updateReviewAction();
   }
   function updateReviewAction() {
+    // 작업이 도는 동안에는 승인·편 이동도 함께 잠근다.
+    renderApproval();
+    renderSiblingNavigation();
     const r=readReviewRegion(),problem=reviewMode==='regenerate'?'':regionIssue(r);
     $('#review-region-error').textContent=problem;
     $('#review-region-duration').textContent=Number.isFinite(r.end-r.start)&&r.end>r.start?`선택 길이 ${(r.end-r.start).toFixed(3)}초`:'';
@@ -492,7 +821,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-result-play').textContent=reviewMode==='mute'?'무음 처리 후 듣기':'교체 후 앞뒤 듣기';
     $('#review-range-page').disabled=!mediaState.voiceVideo?.pages?.length||reviewBusy;
     $('#review-original').disabled = !reviewSelection || reviewBusy;
-    $('#start-review-label').textContent = reviewMode === 'mute' ? '선택 구간을 무음 처리한 새 버전 저장' : reviewMode === 'replace' ? '선택 구간의 음성을 교체한 새 버전 저장' : '새 목소리 후보 만들기';
+    $('#start-review-label').textContent = reviewMode === 'mute' ? '선택 구간을 무음 처리한 새 버전 저장'
+      : reviewMode === 'replace' ? '선택 구간의 음성을 교체한 새 버전 저장'
+        : readOverrideText() ? '입력한 말로 후보 만들기' : '새 목소리 후보 만들기';
     $('#review-form .review-save-note').textContent = reviewMode !== 'regenerate'
       ? '원본을 보관하고 수정본을 새 버전으로 저장합니다.' : '후보를 듣고 선택한 뒤 새 버전으로 저장합니다. 원본은 보관됩니다.';
   }
@@ -598,7 +929,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     const payload = reviewMode !== 'regenerate'
       ? {operation:reviewMode === 'replace' ? 'replace-region' : 'mute-region', name, videoToken:mediaState.voiceVideo.token, audioToken:regionAudio?.token, muteStart:region.start, muteEnd:region.end, durationPolicy:region.fit}
       : {operation:'voice-candidates', name, videoToken:mediaState.voiceVideo.token, audioSource:'generate', originalStartMs:reviewSelection.startMs, originalEndMs:reviewSelection.endMs, sourceDisplayName:mediaState.voiceVideo.name, startPage:reviewSelection.number, endPage:reviewSelection.number,
-        candidateCount:Number($('#voice-candidate-count').value), durationPolicy:$('#voice-duration-policy').value};
+        candidateCount:Number($('#voice-candidate-count').value), durationPolicy:$('#voice-duration-policy').value, overrideText:readOverrideText()};
     reviewResumeMs = reviewMode !== 'regenerate' ? Math.max(0, payload.muteStart * 1000 - 1000) : reviewSelection.startMs;
     pendingCandidateContext = {...payload};
     $("#review-candidates-host").classList.add("hidden");
@@ -615,8 +946,30 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     if (reviewBusy) { showToast('앞선 작업이 끝난 뒤에 다시 눌러 주세요.'); return; }
     if (reviewMode !== 'regenerate') setReviewMode('regenerate');
     selectReviewPage(page, voiceFindingReason(finding));
+    seekReview(page.startMs / 1000);
     startReviewRepair();
   }
+
+  // 몇 번을 다시 만들어도 같게 읽히는 자리가 있다. 이 버튼은 생성을 걸지 않고
+  // 읽을 말을 적는 칸을 대본으로 채워 연다. 고쳐 적은 뒤 사람이 시작한다.
+  function rewriteFinding(finding, page) {
+    if (!page) { showToast('이 항목은 페이지 정보가 없어 재생성할 수 없습니다.', 'error'); return; }
+    if (reviewBusy) { showToast('앞선 작업이 끝난 뒤에 다시 눌러 주세요.'); return; }
+    if (reviewMode !== 'regenerate') setReviewMode('regenerate');
+    selectReviewPage(page, voiceFindingReason(finding));
+    seekReview(page.startMs / 1000);
+    setOverrideText(readOverrideText() || page.text || '', { open: true });
+    updateReviewAction();
+    $('#voice-override-text').focus?.();
+  }
+
+  $('#voice-override-text').addEventListener('input', () => { updateOverrideState(); updateReviewAction(); });
+  $('#voice-override-fill').addEventListener('click', () => {
+    if (!reviewSelection) { showToast('먼저 수정할 페이지를 선택해 주세요.'); return; }
+    setOverrideText(reviewSelection.text || '', { open: true });
+    updateReviewAction();
+  });
+  $('#voice-override-clear').addEventListener('click', () => { setOverrideText(''); updateReviewAction(); });
   $('#review-candidate-original').addEventListener('click', () => {
     if (pendingCandidateContext) playReviewRange(pendingCandidateContext.originalStartMs / 1000, pendingCandidateContext.originalEndMs / 1000);
   });
@@ -650,7 +1003,14 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     queueSelectedCandidate,
     selectReviewPage,
     currentReviewPage,
+    renderApproval,
+    reviewShortcut,
+    renderSiblingNavigation,
     renderVoiceFindingRow,
+    renderFindingGroup,
+    renderFindings,
+    readOverrideText,
+    setOverrideText,
     savePendingFixes,
     visibleFindings,
     clearFinding,
