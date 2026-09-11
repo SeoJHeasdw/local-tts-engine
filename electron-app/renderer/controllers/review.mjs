@@ -122,6 +122,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
 
   function renderPendingFixes() {
     const fixes = pendingFixList();
+    paintRailFlags();
+    renderReviewFacts();
     const badge = $('#polish-count');
     badge.textContent = String(fixes.length);
     badge.classList.toggle('hidden', fixes.length === 0);
@@ -145,19 +147,15 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     }));
   }
 
-  // The strip is not a mode. One lesson is a line; a chapter grows the same line
-  // into rows. What was produced decides, not a setting the user has to pick.
-  function renderPolishStrip(video) {
-    const strip = $('#polish-strip');
-    if (!video) { strip.classList.add('hidden'); return; }
-    const findings = video.voiceFindings || [];
-    const pages = video.pages || [];
-    strip.classList.remove('hidden');
-    $('#polish-strip-name').textContent = video.name || '';
-    const facts = [
-      ['페이지', String(pages.length || '—')],
-      ['확인 필요', String(findings.length)],
-    ];
+  // 한 줄로 이 영상의 남은 일을 말한다. 이름·상태를 여러 자리에 나눠 적으면
+  // 같은 사실을 세 번 읽게 되고, 정작 영상이 화면 아래로 밀린다.
+  function renderReviewFacts() {
+    const video = mediaState.voiceVideo;
+    const facts = video ? [
+      ['페이지', String((video.pages || []).length || '—')],
+      ['확인할 곳', String(visibleFindings().length)],
+      ...(pendingFixes.size ? [['교체 대기', String(pendingFixes.size)]] : []),
+    ] : [];
     $('#polish-facts').replaceChildren(...facts.map(([key, value]) => {
       const span = document.createElement('span');
       const label = document.createElement('i');
@@ -166,12 +164,6 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       strong.textContent = value;
       span.append(label, strong);
       return span;
-    }));
-    const flagged = new Set(findings.map((finding) => Number(finding.slideNumber)));
-    $('#polish-spark').replaceChildren(...pages.slice(0, 120).map((page) => {
-      const cell = document.createElement('i');
-      if (flagged.has(Number(page.number))) cell.className = 'flagged';
-      return cell;
     }));
   }
 
@@ -320,6 +312,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-findings-expand').classList.toggle('hidden', groups.length < 2);
     $('#review-findings-expand').textContent = expandAll ? '모두 접기' : '모두 펼치기';
     $('#review-findings-expand').setAttribute('aria-expanded', String(expandAll));
+    paintRailFlags();
+    renderReviewFacts();
     $('#review-findings-note').textContent = reviewFindings.length === 0
       ? '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
       : remaining.length === 0
@@ -409,7 +403,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       openFinding(group.findings[0], page, at);
     });
     row.append(details);
-    if (details.open) openFinding(group.findings[0], page, at, { seek: false });
+    // 모두 펼치기는 보기만 넓히는 일이다. 펼친 마지막 페이지가 고칠 자리를
+    // 빼앗으면, 방금 고르던 페이지가 조용히 바뀐다.
+    if (open) openFinding(group.findings[0], page, at, { seek: false });
     return row;
   }
 
@@ -562,27 +558,93 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     pendingFixes.clear();
     renderPendingFixes();
     $('#polish-diff').classList.add('hidden');
-    renderPolishStrip(video);
     paintReviewFileName(video.name);
     reviewPlayer.src = video.videoUrl;
     reviewFindings = video.voiceFindings || [];
     clearedFindings.clear();
     for (const key of video.clearedFindings || []) clearedFindings.add(String(key));
-    $('#review-pages').replaceChildren(...(video.pages || []).map(page => {
-      const button = document.createElement('button'); button.type = 'button';
-      button.textContent = `${page.number}p`; button.dataset.page = page.number;
-      button.title = `${formatDuration(page.startMs)} · ${page.text.slice(0, 70)}`;
-      button.addEventListener('click', () => { selectReviewPage(page); seekReview(page.startMs / 1000); });
-      return button;
-    }));
-    $('#review-selection-title').textContent = '수정할 부분을 선택하세요';
-    $('#review-selection-reason').textContent = '영상을 멈추고 ‘이 페이지 수정’을 누르세요.';
+    renderPageRail(video);
+    $('#review-selection-title').textContent = '고칠 페이지를 고르세요';
+    $('#review-selection-reason').textContent = '확인할 부분에서 고르거나, 영상 아래 페이지 막대에서 누르세요.';
     $('#review-player-status').textContent = video.pages?.length ? '재생 중에도 페이지를 선택해 수정할 수 있습니다.' : '페이지 정보가 없어 재생성은 사용할 수 없습니다. 구간 무음 처리는 가능합니다.';
     // 한 곳만 남은 목록은 펼친 채로 그 페이지를 골라 둔다. 기본 문구를 세운
     // 뒤에 그려야 고른 페이지가 다시 '선택하세요'로 덮이지 않는다.
     renderFindings();
     updateReviewPosition(); updateReviewAction();
   }
+
+  // 100칸이 넘는 페이지를 버튼 이름으로 늘어놓으면 목록이 화면 한 판을 먹고,
+  // 정작 고르려는 페이지는 눈으로 세어야 찾힌다. 한 칸이 한 페이지인 막대로
+  // 두고, 확인할 곳만 색으로 세운다. 정확한 이동은 옆의 번호 입력이 맡는다.
+  const RAIL_LABEL_LIMIT = 26;
+
+  function renderPageRail(video) {
+    const pages = video?.pages || [];
+    const dense = pages.length > RAIL_LABEL_LIMIT;
+    $('#review-pages').classList.toggle('dense', dense);
+    $('#review-pages').replaceChildren(...pages.map(page => {
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.dataset.page = page.number;
+      if (!dense) cell.textContent = String(page.number);
+      cell.title = `${page.number}페이지 · ${formatDuration(page.startMs)} · ${String(page.text || '').slice(0, 70)}`;
+      cell.setAttribute('aria-label', `${page.number}페이지 · ${formatDuration(page.startMs)}`);
+      cell.addEventListener('click', () => { selectReviewPage(page); seekReview(page.startMs / 1000); });
+      return cell;
+    }));
+    const first = pages[0]?.number;
+    const last = pages.at(-1)?.number;
+    $('#review-page-total').textContent = pages.length ? `${first}–${last}` : '';
+    $('#review-page-jump').min = String(first ?? 1);
+    $('#review-page-jump').max = String(last ?? 1);
+    $('#review-page-jump').disabled = !pages.length;
+    for (const id of ['review-page-prev', 'review-page-next']) $('#' + id).disabled = !pages.length;
+    paintRailFlags();
+  }
+
+  function paintRailFlags() {
+    const flagged = new Map();
+    for (const finding of visibleFindings()) {
+      const number = Number(finding.slideNumber);
+      if (finding.severity !== 'warning' || !flagged.has(number)) {
+        flagged.set(number, finding.severity === 'warning' ? 'warning' : 'failed');
+      }
+    }
+    const fixed = new Set([...pendingFixes.keys()].map(Number));
+    let failed = 0, warned = 0;
+    for (const cell of $$('#review-pages button')) {
+      const number = Number(cell.dataset.page);
+      const severity = flagged.get(number);
+      cell.classList.toggle('flagged', severity === 'failed');
+      cell.classList.toggle('advised', severity === 'warning');
+      cell.classList.toggle('queued', fixed.has(number));
+      if (severity === 'failed') failed += 1;
+      if (severity === 'warning') warned += 1;
+    }
+    const legend = [failed ? `재생성 필요 ${failed}` : '', warned ? `청취 확인 ${warned}` : '',
+      fixed.size ? `교체 대기 ${fixed.size}` : ''].filter(Boolean);
+    $('#page-rail-legend').textContent = legend.join(' · ');
+  }
+
+  function movePage(step) {
+    const pages = mediaState.voiceVideo?.pages || [];
+    if (!pages.length) return;
+    const current = currentReviewPage();
+    const index = current ? pages.indexOf(current) : -1;
+    const next = pages[Math.max(0, Math.min(pages.length - 1, (index < 0 ? 0 : index) + step))];
+    if (next) { selectReviewPage(next); seekReview(next.startMs / 1000); }
+  }
+
+  $('#review-page-prev').addEventListener('click', () => movePage(-1));
+  $('#review-page-next').addEventListener('click', () => movePage(1));
+  $('#review-page-jump').addEventListener('change', () => {
+    const pages = mediaState.voiceVideo?.pages || [];
+    const wanted = Number($('#review-page-jump').value);
+    const page = pages.find(item => Number(item.number) === wanted);
+    if (!page) { updateReviewPosition(); return; }
+    selectReviewPage(page);
+    seekReview(page.startMs / 1000);
+  });
 
   function currentReviewPage() {
     const pages = mediaState.voiceVideo?.pages || [];
@@ -594,7 +656,13 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-current-page').textContent = page ? `${page.number}페이지 · ${Math.floor(reviewPlayer.currentTime / 60)}:${(reviewPlayer.currentTime % 60).toFixed(2).padStart(5, '0')}` : '페이지 정보 없음';
     $('#review-script').textContent = page?.text || '페이지 타임라인이 없는 영상입니다.';
     $('#review-select-page').disabled = reviewBusy || !page;
-    $$('#review-pages button').forEach(button => button.setAttribute('aria-current', String(Number(button.dataset.page) === page?.number)));
+    for (const cell of $$('#review-pages button')) {
+      const current = Number(cell.dataset.page) === page?.number;
+      cell.setAttribute('aria-current', String(current));
+      cell.classList.toggle('current', current);
+    }
+    // 입력 중인 숫자를 빼앗지 않는다.
+    if (page && document.activeElement !== $('#review-page-jump')) $('#review-page-jump').value = String(page.number);
     if(reviewMode!=='regenerate')drawReviewWaveSelection();
   }
   function selectReviewPage(page, reason = '') {
@@ -603,7 +671,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     if (reviewSelection && reviewSelection.number !== page.number) setOverrideText('');
     reviewPlayer.pause(); reviewSelection = page;
     $('#voice-start-page').value = $('#voice-end-page').value = String(page.number);
-    $('#review-selection-title').textContent = `${page.number}페이지 수정`;
+    $('#review-selection-title').textContent = `${page.number}페이지 고치기`;
     $('#review-selection-reason').textContent = reason || `${formatDuration(page.startMs)}–${formatDuration(page.endMs)} · 직접 선택한 페이지`;
     updateVoicePageMeta(); updateReviewAction();
   }

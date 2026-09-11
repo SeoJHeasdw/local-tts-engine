@@ -11,7 +11,10 @@ function fixture() {
   const elements = new Map();
   const element = () => ({ value:'', textContent:'', disabled:false, currentTime:0, readyState:2, dataset:{}, listeners:{}, children:[], attributes:{},style:{},
     setPointerCapture(){},getBoundingClientRect(){return {left:0,width:1000};},
-    classList:{add(){},remove(){},toggle(){}}, append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},
+    classList:(()=>{const names=new Set();return {add:(...values)=>values.forEach(v=>names.add(v)),
+      remove:(...values)=>values.forEach(v=>names.delete(v)),contains:v=>names.has(v),
+      toggle(v,force=!names.has(v)){force?names.add(v):names.delete(v);return force;}};})(),
+    append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},
     setAttribute(k,v){this.attributes[k]=v;},getAttribute(k){return this.attributes[k];},removeAttribute(k){delete this.attributes[k];},
     pause(){this.paused=true;}, async play(){this.paused=false;}, click(){},
     addEventListener(name, callback){this.listeners[name]=callback;},
@@ -20,7 +23,8 @@ function fixture() {
   const modes = ['regenerate','mute','replace'].map(mode=>Object.assign(element(),{dataset:{repairMode:mode}}));
   const calls = [];
   const saved = [];
-  const context = { $, $$:key=>key==='#review-mode-tabs button'?modes:[],
+  const context = { $, $$:key=>key==='#review-mode-tabs button'?modes
+      :key==='#review-pages button'?$('#review-pages').children:[],
     document:{createElement:element}, mediaState:{voiceVideo:null, latestEditTarget:null},
     api:{startEdit:async payload=>calls.push(payload), setClearedFindings:async(target,keys)=>saved.push({target,keys})}, setEditBusy(){}, showToast(){},
     findingKeyOf, findingExcerpt, findingSeek, findingStatus,
@@ -423,4 +427,42 @@ test('적어 둔 읽는 말은 그 페이지에만 쓰인다', async () => {
   $('#review-form').listeners.submit({preventDefault(){}});
   await Promise.resolve();
   assert.equal(calls.at(-1).overrideText,'');
+});
+
+test('페이지 막대는 확인할 곳과 교체 대기를 색으로 세운다', () => {
+  // 백 칸이 넘는 페이지에서 어디가 걸렸는지는 이름표가 아니라 색으로 읽힌다.
+  const {context,$}=fixture();
+  const cells=$('#review-pages').children;
+  assert.equal(cells.length,2);
+  assert.equal(cells[0].classList.contains('flagged'),true,'재생성 필요는 붉게 선다');
+  assert.equal(cells[1].classList.contains('advised'),true,'청취 확인은 다른 색으로 선다');
+  assert.match($('#page-rail-legend').textContent,/재생성 필요 1 · 청취 확인 1/);
+
+  context.testReview.pendingFixes.set(1,{startPage:1,endPage:1,audioToken:'a',label:'고른 목소리'});
+  context.testReview.renderPendingFixes();
+
+  assert.equal(cells[0].classList.contains('queued'),true,'담아 둔 교체는 처리된 자리로 표시한다');
+  assert.match($('#polish-facts').children.at(-1).children[0].textContent,/교체 대기/);
+});
+
+test('모두 펼치기는 보기만 넓히고 고칠 자리를 바꾸지 않는다', () => {
+  const {context,$,page1}=fixture();
+  context.testReview.selectReviewPage(page1);
+  assert.equal($('#review-selection-title').textContent,'1페이지 고치기');
+
+  $('#review-findings-expand').listeners.click();
+
+  assert.equal(context.testReview.selection().number,1,'펼친 마지막 페이지가 고칠 자리를 빼앗지 않는다');
+  assert.equal($('#review-findings-expand').textContent,'모두 접기');
+});
+
+test('페이지 이동은 번호로도, 앞뒤 버튼으로도 같은 자리를 고른다', () => {
+  const {context,$,page2}=fixture();
+  $('#review-page-jump').value='2';
+  $('#review-page-jump').listeners.change();
+  assert.equal(context.testReview.selection().number,2);
+  assert.equal($('#review-player').currentTime,page2.startMs/1000);
+
+  $('#review-page-prev').listeners.click();
+  assert.equal(context.testReview.selection().number,1);
 });
