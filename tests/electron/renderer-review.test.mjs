@@ -542,3 +542,28 @@ test('다듬기 자판 길은 글자를 치는 중에는 끼어들지 않는다'
   context.testReview.reviewShortcut(key('ArrowRight',{tagName:'TEXTAREA'}));
   assert.equal($('#review-player').currentTime,20);
 });
+
+test('보던 자리에서 청취 승인을 적고, 결과 목록도 함께 갱신한다', async () => {
+  // 듣는 자리와 확인했다고 적는 자리가 다르면 열한 편마다 목록으로 돌아간다.
+  const {context,$}=fixture();
+  const saved=[];
+  let refreshed=0;
+  const review=createReviewController({...context,
+    api:{...context.api,setOutputReview:async(target,status)=>{saved.push({target,status});return {status};}},
+    refreshOutputs:()=>{refreshed++;}});
+  review.setReviewVideo({token:'v',name:'v.mp4',videoUrl:'',pages:[],voiceFindings:[],
+    reviewTarget:{root:'render',name:'ch03-l02'},review:{status:'pending'}},{root:'render',name:'ch03-l02'});
+
+  assert.equal($('#review-approve').classList.contains('hidden'),false);
+  assert.equal($('#review-approve').textContent,'직접 듣고 확인함');
+
+  await $('#review-approve').listeners.click();
+
+  assert.deepEqual(saved.at(-1),{target:{root:'render',name:'ch03-l02'},status:'approved'});
+  assert.equal($('#review-approve').textContent,'청취 승인 취소');
+  assert.equal(refreshed,1,'결과 목록의 같은 줄도 같은 상태가 된다');
+
+  // 직접 고른 파일에는 적을 결과가 없다.
+  review.setReviewVideo({token:'f',name:'file.mp4',videoUrl:'',pages:[],voiceFindings:[]});
+  assert.equal($('#review-approve').classList.contains('hidden'),true);
+});

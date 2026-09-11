@@ -1,7 +1,7 @@
 import { parseRegionTime, formatRegionTime, regionWindow, regionIssue, regionImpact, timeAtFraction } from "../../shared/regions.mjs";
 import { findingStatus, voiceFindingReason, summarizeVoiceFindings, voiceFindingLabel, findingKeyOf, findingSeek, findingExcerpt } from "../view-utils.mjs";
 
-export function createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState, neighbours = () => ({ previous: null, next: null, index: 0, total: 0 }), document = globalThis.document }) {
+export function createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState, neighbours = () => ({ previous: null, next: null, index: 0, total: 0 }), refreshOutputs = () => {}, document = globalThis.document }) {
   let reviewTarget = null;
   let reviewFindings = [];
   let reviewSelection = null;
@@ -560,6 +560,32 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     } catch (error) { showToast(error.message, 'error'); return false; }
   }
 
+  // 듣고 확인하는 자리와 확인했다고 적는 자리가 다르면, 열한 편을 볼 때마다
+  // 결과 목록으로 돌아가 같은 줄을 다시 찾아야 한다. 보던 자리에서 적는다.
+  function renderApproval() {
+    const target = mediaState.voiceVideo?.reviewTarget;
+    const approved = mediaState.voiceVideo?.review?.status === 'approved';
+    $('#review-approve').classList.toggle('hidden', !target);
+    $('#review-approve').textContent = approved ? '청취 승인 취소' : '직접 듣고 확인함';
+    $('#review-approve').disabled = reviewBusy;
+    $('#review-approve').title = approved
+      ? '이 결과의 청취 승인을 취소합니다.'
+      : '직접 들어 확인한 결과로 표시합니다. 자동 검사와는 별개입니다.';
+  }
+
+  $('#review-approve').addEventListener('click', async () => {
+    const video = mediaState.voiceVideo;
+    const target = video?.reviewTarget;
+    if (!target || reviewBusy) return;
+    const approved = video.review?.status === 'approved';
+    try {
+      video.review = await api.setOutputReview(target, approved ? 'pending' : 'approved');
+      renderApproval();
+      refreshOutputs();
+      showToast(approved ? '청취 승인을 취소했습니다.' : '직접 들은 결과로 표시했습니다.');
+    } catch (error) { showToast(error.message, 'error'); }
+  });
+
   // 한 챕터를 열한 편으로 나눠 만들면 다듬기도 열한 번이다. 편을 옮길 때마다
   // 결과 목록으로 돌아가지 않도록 같은 작업의 앞뒤 영상을 여기서 연다.
   function renderSiblingNavigation() {
@@ -656,6 +682,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     // 뒤에 그려야 고른 페이지가 다시 '선택하세요'로 덮이지 않는다.
     renderFindings();
     renderSiblingNavigation();
+    renderApproval();
     updateReviewPosition(); updateReviewAction();
   }
 
@@ -973,6 +1000,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     queueSelectedCandidate,
     selectReviewPage,
     currentReviewPage,
+    renderApproval,
     reviewShortcut,
     renderSiblingNavigation,
     renderVoiceFindingRow,
