@@ -426,9 +426,10 @@ async function refreshResumable() {
       ? "일시정지된 작업이 있습니다"
       : pending.failed ? "실패한 레슨을 다시 제작할 수 있습니다"
       : "이어서 만들 작업이 있습니다";
+    const when = pending.startedAt ? `${formatDate(pending.startedAt)} 시작 · ` : "";
     $("#resume-detail").textContent = pending.total > 1
-      ? `${pending.title} · ${pending.total}편 중 ${pending.done}편 완료 · ${pending.remaining}편 남음`
-      : `${pending.title} · 처음부터 다시 만듭니다`;
+      ? `${when}${pending.title} · ${pending.total}편 중 ${pending.done}편 완료 · 남은 ${pending.remaining}편을 이어서 만듭니다`
+      : `${when}${pending.title} · 처음부터 다시 만듭니다`;
   } catch { $("#resume-banner").classList.add("hidden"); }
 }
 
@@ -825,6 +826,9 @@ function renderJobEvent(event) {
   }
   if (event.type === "started") {
     creationState = "running";
+    // 실행 중에는 이어할 것이 없다. 다시 묻지 않으면 시작 전에 떠 있던 옛
+    // 기록이 진행 중인 작업 위에 그대로 남는다.
+    refreshResumable();
     latestTarget = { root: "render", name: event.options.name };
     $("#open-latest").textContent = "영상 열기";
     $("#job-log").textContent = "";

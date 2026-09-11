@@ -28,11 +28,14 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
     return elements.get(selector);
   };
   let jobListener;
+  let jobRunning = false;
   const api = {
     onJobEvent: callback => { jobListener = callback; },
     getStatus: async () => ({ catalog: { pages: [], lessons: [], totalPages: 0 }, capabilities: { editing: true } }),
     getSettings: async () => ({ modelId: 'qwen3-tts', adapterId: 'none', adapterScale: .6, voiceParallelism: 2, adapters: [], paths: {} }),
     listOutputs: async () => [],
+    // main 은 실행 중인 작업이 있으면 이어할 것이 없다고 답한다.
+    getResumable: async () => (jobRunning ? null : { name: 'ch03', title: 'CH03 전체', total: 11, done: 4, remaining: 7 }),
   };
   const globals = {
     window: { ttsStudio: api, scrollTo() {}, location: { search: '' } },
@@ -59,6 +62,15 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   assert.equal(typeof jobListener, 'function');
   assert.equal(typeof listeners.get('play'), 'function', '삭제된 편집 탭 호출이 공통 재생 연결을 막으면 안 된다');
   assert.doesNotMatch(query('#job-log').textContent, /초기화 오류/);
+
+  // 이어할 작업은 열었을 때 알려 주고, 새 작업을 시작하면 그 자리를 비운다.
+  // 그러지 않으면 11편 중 0편 완료 같은 옛 기록이 진행 중인 작업 위에 남는다.
+  assert.equal(query('#resume-banner').classList.contains('hidden'), false);
+  assert.match(query('#resume-detail').textContent, /11편 중 4편 완료/);
+  jobRunning = true;
+  jobListener({ type: 'started', options: { name: 'ch03-run', mode: 'chapter', chapterMode: 'lesson' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(query('#resume-banner').classList.contains('hidden'), true, '실행 중에는 이어하기 안내를 띄우지 않는다');
 
   // Exercise the actual event subscription across all production modes/qualities.
   for (const videoQuality of ['standard', 'high', 'ultra']) {
