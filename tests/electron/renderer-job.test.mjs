@@ -11,9 +11,11 @@ function fixture(cancel = async () => false) {
   const nodes = new Map();
   const element = () => {
     const classes = new Set();
-    return { textContent: "", disabled: false, open: false,
+    return { textContent: "", disabled: false, open: false, dataset: {}, children: [],
       classList: { add: v => classes.add(v), remove: v => classes.delete(v), contains: v => classes.has(v),
         toggle: (v, enabled) => enabled ? classes.add(v) : classes.delete(v) },
+      append(...items) { this.children.push(...items); },
+      replaceChildren(...items) { this.children = items; },
       setAttribute() {}, removeAttribute() {}, querySelectorAll: () => [], closest() { return this; } };
   };
   const $ = selector => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); };
@@ -25,6 +27,7 @@ function fixture(cancel = async () => false) {
     formatDuration: ms => `${ms}ms`, suggestedName: () => 'next', updateProductionBrief() {},
     updateStages: stage => { $("#current-stage").textContent = stage; },
     createJobPace, etaLabel, unitLabel, completionFindings, completionSummary, setInterval: () => 0, Date,
+    document: { createElement: element },
   });
   vm.runInContext('let creationState="idle", latestTarget=null;\n'
     + source.slice(source.indexOf("function setBusy("), source.indexOf("function setJobState("))
@@ -233,4 +236,29 @@ test('촬영 정지 예약을 실제 정지로 표시하거나 경과 시간에�
   assert.equal($('#pause-button').textContent, '정지 예약 취소');
   ui.renderJobEvent({ type: 'resumed' });
   assert.equal(ui.pace().snapshot().voice.startedAt, startedAt);
+});
+
+test('챕터를 나눠 만들면 어느 편이 끝났고 어느 편이 실패했는지 줄로 남는다', () => {
+  // 세 시간짜리 작업에서 '레슨 7/11'만으로는 무엇이 남았는지 알 수 없다.
+  const { $, ui } = fixture();
+  ui.renderJobEvent({ type: 'started', options: { name: 'ch03', mode: 'chapter', chapterMode: 'lesson' } });
+  assert.equal($('#job-units').classList.contains('hidden'), true, '한 편짜리에는 목록이 없다');
+
+  ui.renderJobEvent({ type: 'plan', units: [
+    { title: 'L01', pages: 10, completed: true }, { title: 'L02', pages: 10 }, { title: 'L03', pages: 10 },
+  ] });
+  ui.renderJobEvent({ type: 'unit', index: 2, total: 3, title: 'L02' });
+
+  assert.equal($('#job-units').classList.contains('hidden'), false);
+  assert.deepEqual($('#job-units-list').children.map(row => row.dataset.state), ['skipped', 'running', 'pending']);
+  assert.match($('#job-units-detail').textContent, /3편 중 1편 완료 · 2편 남음/);
+
+  ui.renderJobEvent({ type: 'unit-failed', index: 2, title: 'L02', failedCount: 1 });
+  ui.renderJobEvent({ type: 'unit', index: 3, total: 3, title: 'L03' });
+
+  assert.deepEqual($('#job-units-list').children.map(row => row.dataset.state), ['skipped', 'failed', 'running']);
+  assert.match($('#job-units-detail').textContent, /1편 실패/);
+
+  ui.renderJobEvent({ type: 'complete', report: { durationMs: 1000, summary: { ok: true }, target: { name: 'ch03' }, units: [], voiceFindings: [] } });
+  assert.deepEqual($('#job-units-list').children.map(row => row.dataset.state), ['skipped', 'failed', 'done']);
 });

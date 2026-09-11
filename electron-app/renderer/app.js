@@ -911,6 +911,8 @@ function renderJobEvent(event) {
     outputs.loadOutputs();
   } else if (event.type === "complete" || event.type === "partial-complete") {
     refreshResumable();
+    // 이번 실행의 실측을 닫아 둔다. 다음 실행의 첫 편은 이 값으로 시작한다.
+    pace.finish();
     const report = event.report;
     const failedCount = report.failedUnits?.length || 0;
     creationState = failedCount ? (report.units?.length ? 'partial' : 'failed') : "done";
@@ -966,7 +968,41 @@ function resetBatchProgress() {
   $("#batch-eta").textContent = "";
 }
 
+// 세 시간짜리 챕터에서 '레슨 7/11'만으로는 어느 편이 끝났고 어느 편이 실패했는지
+// 알 수 없다. 편마다 한 줄을 두되 접어 두고, 요약만 늘 보이게 한다.
+const UNIT_STATE_LABELS = { done: "완료", running: "제작 중", failed: "실패", skipped: "이미 완성", pending: "대기" };
+let jobUnitsSignature = "";
+
+function renderJobUnits() {
+  const units = pace.snapshot().units;
+  $("#job-units").classList.toggle("hidden", units.length < 2);
+  const signature = units.map((unit) => unit.state).join("");
+  if (!units.length || signature === jobUnitsSignature) return;
+  jobUnitsSignature = signature;
+  const counted = (state) => units.filter((unit) => unit.state === state).length;
+  const done = counted("done") + counted("skipped");
+  const failed = counted("failed");
+  $("#job-units-detail").textContent = [
+    `${units.length}편 중 ${done}편 완료`,
+    failed ? `${failed}편 실패` : "",
+    `${units.length - done - failed}편 남음`,
+  ].filter(Boolean).join(" · ");
+  $("#job-units-list").replaceChildren(...units.map((unit, index) => {
+    const row = document.createElement("li");
+    row.dataset.state = unit.state;
+    const number = document.createElement("b");
+    number.textContent = String(index + 1);
+    const title = document.createElement("span");
+    title.textContent = unit.title || `${index + 1}편`;
+    const state = document.createElement("i");
+    state.textContent = UNIT_STATE_LABELS[unit.state] || "";
+    row.append(number, title, state);
+    return row;
+  }));
+}
+
 function renderJobPace() {
+  renderJobUnits();
   const unit = pace.currentUnit ? unitLabel(pace.currentUnit) : "";
   $("#job-unit").textContent = unit;
   $("#job-unit").classList.toggle("hidden", !unit);
@@ -984,6 +1020,9 @@ function renderEta(element, label, calculating) {
 
 function resetJobPace(options = {}) {
   pace.start(options);
+  jobUnitsSignature = "";
+  $("#job-units").classList.add("hidden");
+  $("#job-units-list").replaceChildren();
   $("#job-failure-note").textContent = "";
   $("#job-failure-note").classList.add("hidden");
   $("#pause-button").textContent = "일시정지";

@@ -1321,6 +1321,32 @@ button:disabled { cursor: not-allowed; }
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 
+/* 어느 편이 끝났고 어느 편이 실패했는지는 접어 두고 요약만 늘 보인다. */
+.job-units { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well); }
+.job-units > summary {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  min-height: 38px; padding: 0 var(--s3); cursor: pointer; list-style: none;
+}
+.job-units > summary::-webkit-details-marker { display: none; }
+.job-units > summary strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.job-units > summary small { color: var(--text-3); font-size: var(--fs-xs); }
+#job-units-list {
+  display: grid; gap: var(--s1); margin: 0; padding: var(--s2) var(--s3) var(--s3);
+  max-height: 210px; overflow: auto; list-style: none;
+}
+#job-units-list li {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: var(--s2);
+  padding: var(--s1) var(--s2); border-radius: var(--r-sm); font-size: var(--fs-xs);
+}
+#job-units-list b { color: var(--text-4); font: var(--fs-micro) var(--mono); }
+#job-units-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+#job-units-list i { font-style: normal; color: var(--text-3); font-size: var(--fs-micro); }
+#job-units-list li[data-state="running"] { background: var(--lime-soft); }
+#job-units-list li[data-state="running"] i, #job-units-list li[data-state="running"] span { color: var(--lime); }
+#job-units-list li[data-state="done"] i, #job-units-list li[data-state="skipped"] i { color: var(--text-3); }
+#job-units-list li[data-state="failed"] { background: var(--dngr-soft); }
+#job-units-list li[data-state="failed"] i, #job-units-list li[data-state="failed"] span { color: var(--danger); }
+
 /* 두 시계는 위계가 다르다. '이 편'은 곧 바뀌는 값이라 옅게, '전체'는 자리를
    뜰지 말지를 정하는 값이라 또렷하게 둔다. */
 .job-total-eta {

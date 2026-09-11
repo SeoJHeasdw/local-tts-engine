@@ -124,6 +124,8 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
   // 돌았다면 두 번의 합이 그 편의 촬영 시간이므로, 비율은 편 단위로만 더한다.
   function closeUnit() {
     closeStage();
+    const current = unit ? units[unit.index - 1] : null;
+    if (current?.state === "running") current.state = unit.failed ? "failed" : "done";
     if (unitStartedAt && unitPages > 0 && !unit?.failed) {
       samples.units.ms += since(unitStartedAt);
       samples.units.pages += unitPages;
@@ -320,7 +322,8 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
     // 검사와 화면 상태 확인용. 계산에 쓰는 값은 여기서만 읽는다.
     snapshot() {
       return {
-        deliverable, units, unit, unitPages, unitDurationMs, paused: Boolean(pausedAt),
+        deliverable, unit, unitPages, unitDurationMs, paused: Boolean(pausedAt),
+        units: units.map((item) => ({ ...item })),
         stage: stage ? { ...stage } : null,
         voice: voice ? { ...voice } : null,
         unitRemainingMs: unitRemainingMs(),
@@ -350,11 +353,14 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
         title: item.title,
         pages: Math.max(1, Number(item.pages) || 1),
         completed: Boolean(item.completed),
+        // 이미 완성돼 건너뛰는 편과 아직 손대지 않은 편은 다른 일이다.
+        state: item.completed ? "skipped" : "pending",
       }));
     },
     startUnit(next = {}) {
       closeUnit();
       unit = { index: Number(next.index), total: Number(next.total), failed: false };
+      if (units[unit.index - 1]) units[unit.index - 1].state = "running";
       unitPages = Math.max(0, Number(units[unit.index - 1]?.pages) || 0);
       unitStartedAt = now();
     },
@@ -395,6 +401,7 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
     },
     unitFailed() {
       if (unit) unit.failed = true;
+      if (unit && units[unit.index - 1]) units[unit.index - 1].state = "failed";
       closeStage();
       unitStartedAt = null;
       voice = null;
@@ -406,6 +413,12 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
       if (!pausedAt) return;
       shift(now() - pausedAt);
       pausedAt = null;
+    },
+    // 마지막 편은 다음 편이 없어 닫히지 않는다. 한 편짜리 작업은 편 이벤트가
+    // 아예 없다. 끝난 자리에서 한 번 닫아야 그 실측이 다음 실행의 시작값이 된다.
+    finish() {
+      closeUnit();
+      stage = null;
     },
     // 맥이 잠든 동안에는 제작도 멈춰 있다. 그 시간을 경과로 세면 남은 시간이
     // 자고 일어난 만큼 부풀어, 남은 편들의 몫까지 함께 늘어난다.

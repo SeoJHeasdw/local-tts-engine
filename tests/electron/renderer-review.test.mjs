@@ -466,3 +466,20 @@ test('페이지 이동은 번호로도, 앞뒤 버튼으로도 같은 자리를 
   $('#review-page-prev').listeners.click();
   assert.equal(context.testReview.selection().number,1);
 });
+
+test('담아 둔 교체를 취소하면 그 페이지의 확인 항목이 도로 올라온다', async () => {
+  // 담을 때 처리된 자리로 내렸으니, 되돌릴 때 함께 올리지 않으면 남은 일이
+  // 목록에서 사라진 채로 남는다.
+  const {context,$}=fixture();
+  context.testReview.selectReviewPage({number:1,slideId:'a',startMs:1300,endMs:33000,text:'첫 페이지'});
+  await $('#review-form').listeners.submit({preventDefault(){}});
+  context.testReview.queue('token','고른 목소리 1');
+  assert.equal(context.testReview.visible().length,1);
+  assert.equal($('#review-finding-count').textContent,'1');
+
+  $('#polish-discard').listeners.click();
+
+  assert.equal(context.testReview.pending().size,0);
+  assert.equal(context.testReview.visible().length,2,'취소한 페이지의 확인 항목이 돌아온다');
+  assert.equal($('#review-finding-count').textContent,'2');
+});

@@ -305,3 +305,27 @@ test("이번 실행의 실측이 지난 기록보다 무겁다", () => {
   // 실제로 20페이지를 35분에 끝냈다. 기록의 20분짜리 값에 끌려가지 않는다.
   assert.ok(perPage > minutes(1.2), `${perPage / 60_000}분/페이지`);
 });
+
+test("한 편짜리 작업의 실측도 다음 실행에 남는다", () => {
+  // 한 편짜리는 편 이벤트가 없어 닫히는 자리가 없었다. 그러면 가장 흔한
+  // 작업에서 아무것도 배우지 못한다.
+  const clock = fakeClock();
+  const saved = {};
+  const store = { read: () => saved.value ?? {}, write: (value) => { saved.value = value; } };
+  const pace = createJobPace({ now: clock.now, store });
+  pace.start({ mode: "lesson", deliverable: "video", startPage: 1, endPage: 20, videoQuality: "high" });
+  pace.stage("voice", "running");
+  clock.advance(minutes(8));
+  pace.stage("voice", "done");
+  pace.unitDuration(minutes(16));
+  pace.stage("capture", "running");
+  clock.advance(minutes(17));
+  pace.stage("capture", "done");
+  clock.advance(minutes(1));
+
+  pace.finish();
+
+  assert.ok(saved.value?.high?.units?.pages > 0, "편 전체 속도가 남는다");
+  const ratio = saved.value.high.capture.ms / saved.value.high.capture.durationMs;
+  assert.ok(ratio > 1 && ratio < 1.2, `촬영 비율 ${ratio}`);
+});

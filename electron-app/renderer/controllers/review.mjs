@@ -141,7 +141,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       drop.className = 'polish-drop';
       drop.textContent = '취소';
       drop.setAttribute('aria-label', `${fix.startPage}페이지 교체 취소`);
-      drop.addEventListener('click', () => { pendingFixes.delete(fix.startPage); renderPendingFixes(); });
+      drop.addEventListener('click', () => dropPendingFix(fix.startPage));
       item.append(label, detail, drop);
       return item;
     }));
@@ -221,8 +221,22 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     catch (error) { setEditBusy(false); showToast(error.message, 'error'); }
   }
 
+  // 담아 둔 교체를 취소하면 그 페이지의 확인 항목도 도로 올라와야 한다.
+  // 담을 때 '처리된 자리'로 내렸으니, 되돌릴 때 함께 되돌리지 않으면 남은 일이
+  // 목록에서 사라진 채로 남는다.
+  function dropPendingFix(startPage) {
+    pendingFixes.delete(Number(startPage));
+    for (const finding of reviewFindings) {
+      if (Number(finding.slideNumber) === Number(startPage)) clearedFindings.delete(findingKey(finding));
+    }
+    renderFindings();
+    renderPendingFixes();
+  }
+
   $('#polish-save').addEventListener('click', savePendingFixes);
-  $('#polish-discard').addEventListener('click', () => { pendingFixes.clear(); renderPendingFixes(); });
+  $('#polish-discard').addEventListener('click', () => {
+    for (const startPage of [...pendingFixes.keys()]) dropPendingFix(startPage);
+  });
 
 
   function renderCompleteVoiceFindings(findings = [], target = null) {
@@ -578,9 +592,15 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   // 두고, 확인할 곳만 색으로 세운다. 정확한 이동은 옆의 번호 입력이 맡는다.
   const RAIL_LABEL_LIMIT = 26;
 
+  const railCells = new Map();
+  let railCurrent = null;
+  let positionPage = null;
+
   function renderPageRail(video) {
     const pages = video?.pages || [];
     const dense = pages.length > RAIL_LABEL_LIMIT;
+    railCells.clear();
+    railCurrent = null;
     $('#review-pages').classList.toggle('dense', dense);
     $('#review-pages').replaceChildren(...pages.map(page => {
       const cell = document.createElement('button');
@@ -590,6 +610,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       cell.title = `${page.number}페이지 · ${formatDuration(page.startMs)} · ${String(page.text || '').slice(0, 70)}`;
       cell.setAttribute('aria-label', `${page.number}페이지 · ${formatDuration(page.startMs)}`);
       cell.addEventListener('click', () => { selectReviewPage(page); seekReview(page.startMs / 1000); });
+      railCells.set(page.number, cell);
       return cell;
     }));
     const first = pages[0]?.number;
@@ -599,6 +620,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-page-jump').max = String(last ?? 1);
     $('#review-page-jump').disabled = !pages.length;
     for (const id of ['review-page-prev', 'review-page-next']) $('#' + id).disabled = !pages.length;
+    positionPage = null;
     paintRailFlags();
   }
 
@@ -651,18 +673,27 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     const ms = reviewPlayer.currentTime * 1000;
     return pages.find((page, index) => ms >= (index ? page.startMs : 0) && ms < (pages[index + 1]?.startMs ?? Infinity)) || null;
   }
+  // 재생 중에는 초당 네 번 불린다. 시각만 매번 바뀌므로 페이지가 실제로 넘어간
+  // 때에만 막대·대본·번호를 손댄다. 매번 백 칸을 훑으면 재생이 그만큼 무거워진다.
+  function markRailCurrent(page) {
+    const next = page ? railCells.get(page.number) || null : null;
+    if (railCurrent === next) return;
+    if (railCurrent) { railCurrent.classList.remove('current'); railCurrent.setAttribute('aria-current', 'false'); }
+    if (next) { next.classList.add('current'); next.setAttribute('aria-current', 'true'); }
+    railCurrent = next;
+  }
+
   function updateReviewPosition() {
     const page = currentReviewPage();
     $('#review-current-page').textContent = page ? `${page.number}페이지 · ${Math.floor(reviewPlayer.currentTime / 60)}:${(reviewPlayer.currentTime % 60).toFixed(2).padStart(5, '0')}` : '페이지 정보 없음';
-    $('#review-script').textContent = page?.text || '페이지 타임라인이 없는 영상입니다.';
     $('#review-select-page').disabled = reviewBusy || !page;
-    for (const cell of $$('#review-pages button')) {
-      const current = Number(cell.dataset.page) === page?.number;
-      cell.setAttribute('aria-current', String(current));
-      cell.classList.toggle('current', current);
+    if (page?.number !== positionPage) {
+      positionPage = page?.number;
+      $('#review-script').textContent = page?.text || '페이지 타임라인이 없는 영상입니다.';
+      markRailCurrent(page);
+      // 입력 중인 숫자를 빼앗지 않는다.
+      if (page && document.activeElement !== $('#review-page-jump')) $('#review-page-jump').value = String(page.number);
     }
-    // 입력 중인 숫자를 빼앗지 않는다.
-    if (page && document.activeElement !== $('#review-page-jump')) $('#review-page-jump').value = String(page.number);
     if(reviewMode!=='regenerate')drawReviewWaveSelection();
   }
   function selectReviewPage(page, reason = '') {
@@ -813,6 +844,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     if (reviewBusy) { showToast('앞선 작업이 끝난 뒤에 다시 눌러 주세요.'); return; }
     if (reviewMode !== 'regenerate') setReviewMode('regenerate');
     selectReviewPage(page, voiceFindingReason(finding));
+    seekReview(page.startMs / 1000);
     startReviewRepair();
   }
 
@@ -823,6 +855,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     if (reviewBusy) { showToast('앞선 작업이 끝난 뒤에 다시 눌러 주세요.'); return; }
     if (reviewMode !== 'regenerate') setReviewMode('regenerate');
     selectReviewPage(page, voiceFindingReason(finding));
+    seekReview(page.startMs / 1000);
     setOverrideText(readOverrideText() || page.text || '', { open: true });
     updateReviewAction();
     $('#voice-override-text').focus?.();
