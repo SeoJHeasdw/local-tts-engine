@@ -1,5 +1,5 @@
 import { animateLayout } from "../motion.mjs";
-import { filterOutputItems, visibleVoiceFindings, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs } from "../view-utils.mjs";
+import { filterOutputItems, visibleVoiceFindings, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs, outputGroupKey } from "../view-utils.mjs";
 
 export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, document = globalThis.document }) {
   let outputItems = [];
@@ -231,10 +231,31 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
     }
   }
 
+  // 한 챕터를 열한 편으로 나눠 만들면 다듬기도 열한 번이다. 편을 옮길 때마다
+  // 결과 목록으로 돌아가 다음 줄을 찾는 일이 열 번 반복된다. 같은 작업에서 나온
+  // 영상들의 앞뒤를 알려 주어 그 걸음을 지운다.
+  function videoNeighbours(target) {
+    const name = String(target?.name || "");
+    const current = outputItems.find((item) => item.name === name && item.video);
+    const key = current ? outputGroupKey(current) : null;
+    if (!current || !key) return { previous: null, next: null, index: 0, total: 0 };
+    const siblings = outputItems
+      .filter((item) => item.video && outputGroupKey(item) === key)
+      .sort((left, right) => String(left.name).localeCompare(String(right.name)));
+    const index = siblings.findIndex((item) => item.name === name);
+    return {
+      previous: siblings[index - 1]?.target || null,
+      next: siblings[index + 1]?.target || null,
+      index: index + 1,
+      total: siblings.length,
+    };
+  }
+
   return {
     loadOutputs,
     renderOutputs,
     closeResultMenus,
+    videoNeighbours,
     get outputFilter() { return outputFilter; },
     set outputFilter(value) { outputFilter = value; },
   };

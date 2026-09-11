@@ -1,7 +1,7 @@
 import { parseRegionTime, formatRegionTime, regionWindow, regionIssue, regionImpact, timeAtFraction } from "../../shared/regions.mjs";
 import { findingStatus, voiceFindingReason, summarizeVoiceFindings, voiceFindingLabel, findingKeyOf, findingSeek, findingExcerpt } from "../view-utils.mjs";
 
-export function createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState, document = globalThis.document }) {
+export function createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState, neighbours = () => ({ previous: null, next: null, index: 0, total: 0 }), document = globalThis.document }) {
   let reviewTarget = null;
   let reviewFindings = [];
   let reviewSelection = null;
@@ -332,13 +332,36 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       ? '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
       : remaining.length === 0
         ? '확인할 항목을 모두 정리했습니다. 담아 둔 교체가 있으면 저장하세요.'
-        : `자동 검수 권장 ${remaining.length}곳 · ${groups.length}페이지입니다. 페이지를 펼쳐 듣고 확인하세요.`;
+        : `자동 검수 권장 ${remaining.length}곳 · ${groups.length}페이지입니다. 페이지를 펼쳐 듣고 확인하세요.${repeatedTermNote(remaining)}`;
   }
 
   $('#review-findings-expand').addEventListener('click', () => {
     expandAll = !expandAll;
     renderFindings();
   });
+
+  // 같은 낱말이 여러 페이지에서 걸렸다면 그 페이지들을 하나씩 고치는 것보다
+  // 읽기 자체를 정하는 편이 빠르다. 사전 등록은 사용자가 정하는 일이므로
+  // 여기서는 그런 자리가 있다는 사실만 알린다.
+  function repeatedTermNote(findings) {
+    const pagesByTerm = new Map();
+    for (const finding of findings) {
+      for (const item of finding.terms || []) {
+        const term = String(item?.term || '').trim();
+        if (!term) continue;
+        const pages = pagesByTerm.get(term) || new Set();
+        pages.add(Number(finding.slideNumber));
+        pagesByTerm.set(term, pages);
+      }
+    }
+    const repeated = [...pagesByTerm.entries()]
+      .filter(([, pages]) => pages.size > 1)
+      .sort((left, right) => right[1].size - left[1].size);
+    if (!repeated.length) return '';
+    const [term, pages] = repeated[0];
+    const rest = repeated.length > 1 ? ` 외 ${repeated.length - 1}개 낱말도 마찬가지입니다.` : '';
+    return ` ‘${term}’이(가) ${pages.size}페이지에서 걸렸습니다. 읽는 말을 바꾸거나 제작 사전 등록을 검토하세요.${rest}`;
+  }
 
   function pageOf(finding) {
     return mediaState.voiceVideo?.pages?.find(page => page.number === Number(finding.slideNumber)) || null;
@@ -537,6 +560,26 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     } catch (error) { showToast(error.message, 'error'); return false; }
   }
 
+  // 한 챕터를 열한 편으로 나눠 만들면 다듬기도 열한 번이다. 편을 옮길 때마다
+  // 결과 목록으로 돌아가지 않도록 같은 작업의 앞뒤 영상을 여기서 연다.
+  function renderSiblingNavigation() {
+    const around = (reviewTarget ? neighbours(reviewTarget) : null) || {};
+    const total = Number(around.total) || 0;
+    $('#review-siblings').classList.toggle('hidden', total < 2);
+    $('#review-sibling-position').textContent = total > 1 ? `${around.index}/${total}편` : '';
+    $('#review-previous-video').disabled = !around.previous || reviewBusy;
+    $('#review-next-video').disabled = !around.next || reviewBusy;
+    return around;
+  }
+
+  for (const [id, key] of [['review-previous-video', 'previous'], ['review-next-video', 'next']]) {
+    $('#' + id).addEventListener('click', () => {
+      const around = reviewTarget ? neighbours(reviewTarget) : null;
+      const target = around?.[key];
+      if (target) openReview(target);
+    });
+  }
+
   // 검수 중인 파일도 이름은 그 자리에서 고친다. 결과 목록을 거치지 않고 고른
   // 영상이어도 이름은 그 파일에 붙은 것이므로 같은 방법으로 바꿀 수 있다.
   function paintReviewFileName(name) {
@@ -584,6 +627,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     // 한 곳만 남은 목록은 펼친 채로 그 페이지를 골라 둔다. 기본 문구를 세운
     // 뒤에 그려야 고른 페이지가 다시 '선택하세요'로 덮이지 않는다.
     renderFindings();
+    renderSiblingNavigation();
     updateReviewPosition(); updateReviewAction();
   }
 
@@ -901,6 +945,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     queueSelectedCandidate,
     selectReviewPage,
     currentReviewPage,
+    renderSiblingNavigation,
     renderVoiceFindingRow,
     renderFindingGroup,
     renderFindings,

@@ -382,7 +382,9 @@ function formatDuration(ms) {
   return `${minutes}:${seconds}`;
 }
 
-const review = createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState });
+// outputs 는 아래에서 만들어지지만, 이 함수는 화면을 열 때 불린다.
+const review = createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState,
+  neighbours: (target) => outputs.videoNeighbours(target) });
 
 function formatDate(value) {
   if (!value) return "";

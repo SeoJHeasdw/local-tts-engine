@@ -483,3 +483,41 @@ test('담아 둔 교체를 취소하면 그 페이지의 확인 항목이 도로
   assert.equal(context.testReview.visible().length,2,'취소한 페이지의 확인 항목이 돌아온다');
   assert.equal($('#review-finding-count').textContent,'2');
 });
+
+test('같은 작업에서 나온 영상은 다듬기에서 앞뒤로 넘어간다', async () => {
+  // 한 챕터를 열한 편으로 나눠 만들면 다듬기도 열한 번이다. 편마다 결과
+  // 목록으로 돌아가면 그 걸음이 열 번 반복된다.
+  const {context,$}=fixture();
+  const opened=[];
+  context.api.adoptResultVideo=async target=>{opened.push(target);return {token:target.name,name:`${target.name}.mp4`,videoUrl:'',pages:[],voiceFindings:[]};};
+  const around={previous:{root:'render',name:'ch03-l01'},next:{root:'render',name:'ch03-l03'},index:2,total:11};
+  const review=createReviewController({...context,neighbours:()=>around});
+  review.setReviewVideo({token:'l02',name:'L02.mp4',videoUrl:'',pages:[],voiceFindings:[]},{root:'render',name:'ch03-l02'});
+
+  assert.equal($('#review-siblings').classList.contains('hidden'),false);
+  assert.equal($('#review-sibling-position').textContent,'2/11편');
+  assert.equal($('#review-next-video').disabled,false);
+
+  await $('#review-next-video').listeners.click();
+  assert.deepEqual(opened.at(-1),{root:'render',name:'ch03-l03'});
+
+  // 앞뒤가 없는 한 편짜리 결과에서는 자리를 차지하지 않는다.
+  const alone=createReviewController({...context,neighbours:()=>({previous:null,next:null,index:0,total:0})});
+  alone.setReviewVideo({token:'solo',name:'solo.mp4',videoUrl:'',pages:[],voiceFindings:[]},{root:'render',name:'solo'});
+  assert.equal($('#review-siblings').classList.contains('hidden'),true);
+});
+
+test('같은 낱말이 여러 페이지에서 걸리면 한 번에 알린다', () => {
+  // 한 낱말 때문에 다섯 페이지를 하나씩 고치는 일은 읽기를 정하는 편이 빠르다.
+  const {context,$}=fixture();
+  const term={term:'A2091',heard:'이공사일의'};
+  context.testReview.setReviewVideo({token:'repeat',name:'repeat.mp4',videoUrl:'',pages:[],
+    voiceFindings:[
+      {slideNumber:326,startMs:1,endMs:2,severity:'failed',terms:[term],reasons:['지정한 읽기와 다름']},
+      {slideNumber:330,startMs:3,endMs:4,severity:'failed',terms:[term],reasons:['지정한 읽기와 다름']},
+      {slideNumber:334,startMs:5,endMs:6,severity:'warning',reasons:['점수 미달']},
+    ]});
+
+  assert.match($('#review-findings-note').textContent,/‘A2091’이\(가\) 2페이지에서 걸렸습니다/);
+  assert.match($('#review-findings-note').textContent,/사전 등록을 검토/);
+});
