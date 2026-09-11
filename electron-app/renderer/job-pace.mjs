@@ -37,7 +37,34 @@ function stagePlan(deliverable) {
   return STAGE_PLANS[deliverable] || STAGE_PLANS.video;
 }
 
-export function createJobPace({ now = () => Date.now() } = {}) {
+// 첫 편은 잴 것이 없어 시계가 늦게 선다. 그런데 같은 기기·같은 화질이면 페이지당
+// 음성 길이도, 촬영 시간 대 음성 길이의 비율도 실행마다 크게 다르지 않다. 지난
+// 실행에서 잰 값을 시작값으로 두되, 이번 실행의 실측이 곧 이기도록 무게를 줄여
+// 넣는다. 화질이 다르면 촬영 비용이 달라지므로 화질별로 따로 기억한다.
+const RATE_STORE_KEY = "job-pace-rates-v1";
+const PRIOR_PAGES = 20;
+const PRIOR_DURATION_MS = 20 * 60_000;
+
+function browserStore() {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) return null;
+    return {
+      read: () => JSON.parse(storage.getItem(RATE_STORE_KEY) || "{}"),
+      write: (value) => storage.setItem(RATE_STORE_KEY, JSON.stringify(value)),
+    };
+  } catch { return null; }
+}
+
+function cappedRate(sample, limitKey, limit) {
+  const weight = Number(sample?.[limitKey]);
+  const total = Number(sample?.ms ?? sample?.durationMs);
+  if (!(weight > 0) || !(total > 0)) return null;
+  const scale = Math.min(1, limit / weight);
+  return { ...sample, [limitKey]: weight * scale, [sample.ms === undefined ? "durationMs" : "ms"]: total * scale };
+}
+
+export function createJobPace({ now = () => Date.now(), store = browserStore() } = {}) {
   let deliverable = "video";
   let forcedSplit = false;
   let units = [];
@@ -50,6 +77,7 @@ export function createJobPace({ now = () => Date.now() } = {}) {
   let voice = null;
   let pausedAt = null;
   let samples = freshSamples();
+  let rateKey = "standard";
 
   function freshSamples() {
     return {
@@ -108,6 +136,42 @@ export function createJobPace({ now = () => Date.now() } = {}) {
     unitDurationMs = 0;
     unitCaptureMs = 0;
     voice = null;
+    savePriors();
+  }
+
+  function loadPriors(quality) {
+    rateKey = String(quality || "standard");
+    if (!store) return;
+    let saved = null;
+    try { saved = store.read()?.[rateKey]; } catch { saved = null; }
+    if (!saved) return;
+    for (const [name, sample] of Object.entries(saved.stages || {})) {
+      const capped = cappedRate(sample, "pages", PRIOR_PAGES);
+      if (capped) samples.stages.set(name, { ms: capped.ms, pages: capped.pages });
+    }
+    const capture = cappedRate(saved.capture, "durationMs", PRIOR_DURATION_MS);
+    if (capture) samples.capture = { ms: capture.ms, durationMs: capture.durationMs };
+    const audio = cappedRate(saved.audio, "pages", PRIOR_PAGES);
+    if (audio) samples.audio = { durationMs: audio.durationMs, pages: audio.pages };
+    const units = cappedRate(saved.units, "pages", PRIOR_PAGES);
+    if (units) samples.units = { ms: units.ms, pages: units.pages };
+  }
+
+  function savePriors() {
+    if (!store) return;
+    try {
+      const all = store.read() || {};
+      all[rateKey] = {
+        stages: Object.fromEntries([...samples.stages].map(([name, sample]) => {
+          const capped = cappedRate(sample, "pages", PRIOR_PAGES);
+          return [name, capped ? { ms: capped.ms, pages: capped.pages } : sample];
+        })),
+        capture: cappedRate(samples.capture, "durationMs", PRIOR_DURATION_MS) || samples.capture,
+        audio: cappedRate(samples.audio, "pages", PRIOR_PAGES) || samples.audio,
+        units: cappedRate(samples.units, "pages", PRIOR_PAGES) || samples.units,
+      };
+      store.write(all);
+    } catch { /* 기록을 남기지 못해도 이번 실행의 계산은 그대로 이어간다. */ }
   }
 
   function ratePerPage(name) {
@@ -278,6 +342,7 @@ export function createJobPace({ now = () => Date.now() } = {}) {
       voice = null;
       pausedAt = null;
       samples = freshSamples();
+      loadPriors(options.videoQuality);
       if (!forcedSplit && unitPages > 0) unitStartedAt = now();
     },
     plan(planned = []) {

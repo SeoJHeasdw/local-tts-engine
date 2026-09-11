@@ -254,3 +254,54 @@ test("실패한 편의 소요는 남은 편의 속도로 쓰지 않는다", () =
 
   assert.equal(pace.snapshot().msPerPage, healthy, "2분 만에 끝난 실패가 속도를 흔들지 않는다");
 });
+
+test("지난 실행에서 잰 속도로 첫 편부터 남은 시간을 말한다", () => {
+  // 실행마다 첫 편은 잴 것이 없어 시계가 늦게 섰다. 같은 기기·같은 화질이면
+  // 페이지당 음성 길이도 촬영 비율도 크게 다르지 않으니 시작값으로 쓴다.
+  const clock = fakeClock();
+  const saved = {};
+  const store = { read: () => saved.value ?? {}, write: (value) => { saved.value = value; } };
+  const first = createJobPace({ now: clock.now, store });
+  first.start({ ...CHAPTER, videoQuality: "high" });
+  first.plan([{ title: "L01", pages: 20 }, { title: "L02", pages: 20 }]);
+  runUnit(first, clock, { index: 1, total: 2, voiceMs: minutes(10), durationMs: minutes(18), captureMs: minutes(19) });
+  first.startUnit({ index: 2, total: 2 });
+
+  assert.ok(saved.value?.high, "화질별로 남긴다");
+
+  // 같은 화질로 새 작업을 시작하면 첫 편의 촬영 몫을 바로 잡는다.
+  const next = createJobPace({ now: clock.now, store });
+  next.start({ ...CHAPTER, videoQuality: "high" });
+  next.plan([{ title: "L01", pages: 20 }, { title: "L02", pages: 20 }]);
+  next.startUnit({ index: 1, total: 2 });
+  next.stage("voice", "running");
+
+  const remaining = next.snapshot().chapterRemainingMs;
+  assert.ok(remaining > minutes(45) && remaining < minutes(75), `${remaining / 60_000}분`);
+
+  // 다른 화질의 기록을 끌어다 쓰지 않는다. 촬영 비용이 다르다.
+  const ultra = createJobPace({ now: clock.now, store });
+  ultra.start({ ...CHAPTER, videoQuality: "ultra" });
+  ultra.plan([{ title: "L01", pages: 20 }, { title: "L02", pages: 20 }]);
+  ultra.startUnit({ index: 1, total: 2 });
+  ultra.stage("voice", "running");
+  assert.equal(ultra.snapshot().chapterRemainingMs, null);
+});
+
+test("이번 실행의 실측이 지난 기록보다 무겁다", () => {
+  // 시작값은 어디까지나 시작값이다. 오늘 기기가 느리면 오늘 잰 값이 이겨야 한다.
+  const clock = fakeClock();
+  const saved = { value: { standard: { stages: {}, capture: { ms: minutes(10), durationMs: minutes(10) },
+    audio: { durationMs: minutes(200), pages: 20 }, units: { ms: minutes(20), pages: 20 } } } };
+  const store = { read: () => saved.value, write: (value) => { saved.value = value; } };
+  const pace = createJobPace({ now: clock.now, store });
+  pace.start({ ...CHAPTER, videoQuality: "standard" });
+  pace.plan([{ title: "L01", pages: 20 }, { title: "L02", pages: 20 }]);
+  runUnit(pace, clock, { index: 1, total: 2, voiceMs: minutes(10), durationMs: minutes(18), captureMs: minutes(19) });
+  pace.startUnit({ index: 2, total: 2 });
+  pace.stage("voice", "running");
+
+  const perPage = pace.snapshot().msPerPage;
+  // 실제로 20페이지를 35분에 끝냈다. 기록의 20분짜리 값에 끌려가지 않는다.
+  assert.ok(perPage > minutes(1.2), `${perPage / 60_000}분/페이지`);
+});
