@@ -7,8 +7,11 @@ import { spawn } from "node:child_process";
 export function createRuntimeService({
   fs = nativeFs,
   state,
+  // 모든 작업 사건이 지나는 길목이다. 잠 막기·완료 알림이 여기에 붙는다.
+  onEvent = () => {},
 }) {
   function emit(payload) {
+    onEvent(payload);
     if (payload.type === "log") {
       (payload.stream === "stderr" ? process.stderr : process.stdout).write(payload.text);
     }

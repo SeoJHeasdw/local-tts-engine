@@ -15,6 +15,7 @@ import {
   outputUnitLabel,
   etaLabel,
   formatCountdown,
+  shortPath,
   formatRemaining,
   unitLabel,
   filterOutputItems,
@@ -176,6 +177,21 @@ test("남은 시간 시계는 초를 내림해 세고 한 시간을 넘으면 �
   assert.equal(formatCountdown(9_500), "0:09");
   assert.equal(formatCountdown(0), "0:00");
   assert.equal(formatCountdown(-5_000), "0:00");
+});
+
+// 설정의 경로 칸은 좁다. 앞에서 자르면 참조 음성과 참조 전사문이 같은 글자로
+// 보여, 어느 칸을 고치는 중인지 알 수 없다.
+test("경로는 끝에서부터 줄여 파일 이름을 먼저 지킨다", () => {
+  assert.equal(shortPath("/a/b/artifacts/benchmarks/2026-08-23/reference.wav"), "…/2026-08-23/reference.wav");
+  assert.equal(shortPath("/a/b/artifacts/benchmarks/2026-08-23/reference.txt"), "…/2026-08-23/reference.txt");
+  assert.notEqual(
+    shortPath("/x/y/benchmarks/2026-08-23/reference.wav"),
+    shortPath("/x/y/benchmarks/2026-08-23/reference.txt"),
+  );
+  // 다 들어가면 그대로 둔다. 줄이지 않은 것을 줄인 것처럼 보이면 안 된다.
+  assert.equal(shortPath("output"), "output");
+  assert.equal(shortPath(""), "");
+  assert.match(shortPath("/Users/me/Desktop/vswrk/edu/local-tts-engine/output"), /^…\/.*\/output$/);
 });
 
 test("레슨 단위 진행은 여러 편일 때만 표시한다", () => {

@@ -4,12 +4,46 @@ import { createReviewController } from "./controllers/review.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
-import { buildChapterRanges, createViewHistory, completionFindings, completionSummary, etaLabel, summarizePageRange, summarizeVoiceFindings, unitLabel, voiceFindingReason } from "./view-utils.mjs";
+import { buildChapterRanges, createViewHistory, completionFindings, completionSummary, etaLabel, shortPath, summarizePageRange, summarizeVoiceFindings, unitLabel, voiceFindingReason } from "./view-utils.mjs";
 import { createJobPace } from "./job-pace.mjs";
 
 const api = window.ttsStudio;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+
+// 화면 테마. 고른 것은 '시스템·다크·라이트' 셋이지만 화면에 붙는 값은 늘
+// 다크 아니면 라이트 하나다. 그래야 CSS 가 같은 팔레트를 두 벌 갖지 않는다.
+// 이 기기에만 남기면 되는 취향이라 localStorage 에 둔다 — 첫 그림 전에 읽어야
+// 어두운 화면이 한 번 번쩍이지 않으므로 설정 파일을 기다릴 수도 없다.
+const THEME_KEY = "voiceStudio.theme";
+const THEME_MODES = new Set(["system", "dark", "light"]);
+const darkQuery = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
+let themeMode = "system";
+
+function applyTheme(mode, { remember = false } = {}) {
+  themeMode = THEME_MODES.has(mode) ? mode : "system";
+  const resolved = themeMode === "system" ? (darkQuery?.matches === false ? "light" : "dark") : themeMode;
+  document.documentElement.dataset.theme = resolved;
+  for (const button of $$("#theme-choice button")) {
+    const selected = button.dataset.themeMode === themeMode;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  }
+  // 맥이 다크일 때 '시스템'과 '다크'는 같은 화면이 된다. 화면이 그 까닭을 말해
+  // 주지 않으면, 눌러도 아무 일도 일어나지 않는 고장난 단추로 보인다.
+  const painted = resolved === "dark" ? "다크" : "라이트";
+  const hint = $("#theme-hint");
+  if (hint) {
+    hint.textContent = themeMode === "system"
+      ? `맥 설정을 따라갑니다. 지금 맥이 ${painted}라서 ${painted}로 보입니다.`
+      : `맥 설정과 상관없이 늘 ${painted}입니다.`;
+  }
+  if (remember) { try { localStorage.setItem(THEME_KEY, themeMode); } catch {} }
+}
+
+try { applyTheme(localStorage.getItem(THEME_KEY)); } catch { applyTheme("system"); }
+// 시스템을 따라가기로 했으면 맥 설정이 바뀌는 순간 함께 바뀐다.
+darkQuery?.addEventListener?.("change", () => { if (themeMode === "system") applyTheme(themeMode); });
 
 const stageNames = {
   starting: "준비 중",
@@ -174,10 +208,6 @@ function updateCourseNavigator(start, end) {
   $("#scope-chapter-stat").textContent = summary.chapterLabel;
   $("#scope-page-stat").textContent = `${summary.pageCount}페이지`;
   $("#scope-step-stat").textContent = `${summary.stepCount}스텝`;
-}
-
-function fileName(value) {
-  return String(value || "").split("/").filter(Boolean).at(-1) || "경로 미설정";
 }
 
 function voiceProfileLabel() {
@@ -818,6 +848,8 @@ function renderSettings(settings) {
   adapterSelect.disabled = settings.modelId !== "qwen3-tts";
   $("#global-scale").value = String(settings.adapterScale);
   $("#global-parallelism").value = String(settings.voiceParallelism);
+  $("#prevent-sleep").checked = settings.preventSleep !== false;
+  $("#notify-finish").checked = settings.notifyOnFinish !== false;
   $("#global-scale-field").classList.toggle("hidden", settings.modelId !== "qwen3-tts" || settings.adapterId === "none");
   paintGlobalRange();
   const selectedAdapter = settings.adapters?.find((item) => item.id === settings.adapterId) || null;
@@ -828,11 +860,8 @@ function renderSettings(settings) {
   $("#sidebar-adapter").textContent = selectedAdapter
     ? `${selectedAdapter.label} · ${Number(settings.adapterScale).toFixed(2)}`
     : settings.modelId === "chatterbox-v3" ? "Chatterbox V3" : "Qwen3 기본 복제";
-  for (const [key, value] of Object.entries(settings.paths || {})) {
-    const input = $(`#path-${key}`);
-    if (input) input.value = value;
-  }
-  $("#output-root-name").textContent = fileName(settings.paths?.outputRoot || "output");
+  for (const [key, value] of Object.entries(settings.paths || {})) setPathField(key, value);
+  renderVoiceCommit();
   updateVoicePageMeta();
   updateProductionBrief();
   updateVoiceDesign();
@@ -871,10 +900,136 @@ async function openModelSettings() {
   renderSettings(await api.getSettings());
   $("#finetune-name").value = `jaeho-ko-r16-${dateStamp()}`.toLowerCase();
   $("#finetune-panel").classList.add("hidden");
+  $("#finetune-error").classList.add("hidden");
   $("#open-finetune-panel").setAttribute("aria-expanded", "false");
-  $(".advanced-engine-settings").open = false;
-  $(".advanced-paths").open = false;
+  showSettingsSection("general");
+  settingsStatus();
   $("#model-settings-dialog").showModal();
+}
+
+// 경로는 길고, 궁금한 것은 앞이 아니라 끝이다. 글자 방향을 뒤집거나 칸을
+// 끝까지 밀어 두는 재주는 잴 폭이 없을 때(창이 닫혀 있을 때) 어긋나 칸을 아예
+// 비워 버린다. 보여 줄 글자를 우리가 직접 줄이면 재는 일이 없다. 참값은
+// data-path 에 두고 저장은 거기서만 읽는다.
+function setPathField(key, value) {
+  const input = $(`#path-${key}`);
+  if (!input) return;
+  input.dataset.path = value;
+  input.value = shortPath(value);
+  input.title = value;
+}
+
+function pathSettings() {
+  return Object.fromEntries($$("[id^='path-']")
+    .map((input) => [input.id.slice("path-".length), input.dataset.path ?? input.value]));
+}
+
+// 구역은 왼쪽에서 고른다. 한 화면에 전부 쌓아 두면 자주 쓰는 경로 하나를
+// 바꾸려고 모델 설정까지 스크롤로 지나가야 한다.
+function showSettingsSection(name) {
+  for (const button of $$("#settings-rail button")) {
+    const selected = button.dataset.settingsSection === name;
+    button.classList.toggle("selected", selected);
+    if (selected) button.setAttribute("aria-current", "true");
+    else button.removeAttribute("aria-current");
+  }
+  for (const panel of $$("[data-settings-panel]")) {
+    panel.classList.toggle("hidden", panel.dataset.settingsPanel !== name);
+  }
+}
+
+$$("#settings-rail button").forEach((button) => {
+  button.addEventListener("click", () => showSettingsSection(button.dataset.settingsSection));
+});
+
+// 설정은 바꾸는 즉시 저장한다. 저장 버튼을 누르지 않고 닫아 조용히 날아가는
+// 일이 없어야 한다. 다만 제작 목소리만은 전체 강의의 목소리를 정하는 값이라
+// 한 번 더 묻는다 — 그 값은 여기서 편집만 하고, 적용은 따로 누른다.
+const SETTINGS_HINT = "바꾸는 즉시 저장됩니다. 제작 목소리만 적용을 한 번 더 확인합니다.";
+let settingsStatusTimer = null;
+
+function settingsStatus(message = "", tone = "") {
+  const element = $("#settings-status");
+  element.textContent = message || SETTINGS_HINT;
+  element.classList.toggle("saved", tone === "saved");
+  element.classList.toggle("failed", tone === "failed");
+  if (settingsStatusTimer) clearTimeout(settingsStatusTimer);
+  if (message && tone === "saved") {
+    settingsStatusTimer = setTimeout(() => settingsStatus(), 2400);
+  }
+}
+
+function voiceDraft() {
+  return {
+    modelId: $("#global-model").value,
+    adapterId: $("#global-adapter").value,
+    adapterScale: Number($("#global-scale").value),
+  };
+}
+
+function voiceDirty() {
+  if (!appSettings) return false;
+  const draft = voiceDraft();
+  return draft.modelId !== appSettings.modelId
+    || draft.adapterId !== appSettings.adapterId
+    || Math.abs(draft.adapterScale - Number(appSettings.adapterScale)) > 0.0005;
+}
+
+function voiceLabel({ modelId, adapterId, adapterScale }) {
+  if (modelId !== "qwen3-tts") return "Chatterbox V3";
+  const adapter = appSettings?.adapters?.find((item) => item.id === adapterId);
+  return adapter ? `${adapter.label} · ${Number(adapterScale).toFixed(2)}` : "Qwen3 기본 복제";
+}
+
+function renderVoiceCommit() {
+  const dirty = voiceDirty();
+  $("#voice-commit").classList.toggle("hidden", !dirty);
+  // 적용을 기다리는 줄이 섰으면 안내 문구는 물러난다. 둘을 함께 띄우면 지금
+  // 할 일이 무엇인지가 흐려진다.
+  $("#settings-status").classList.toggle("hidden", dirty);
+  if (!dirty) return;
+  $("#voice-commit-diff").textContent = `${voiceLabel(appSettings)} → ${voiceLabel(voiceDraft())}`;
+}
+
+// 저장은 늘 전체를 보낸다. 목소리를 아직 적용하지 않았다면 편집 중인 값이
+// 아니라 저장돼 있던 값을 그대로 다시 보내야, 경로 하나를 바꾼 것이 목소리까지
+// 함께 바꿔 버리지 않는다.
+async function persistSettings({ includeVoice = false, label = "" } = {}) {
+  if (!appSettings) return false;
+  const draft = voiceDraft();
+  const voice = includeVoice ? draft : {
+    modelId: appSettings.modelId,
+    adapterId: appSettings.adapterId,
+    adapterScale: Number(appSettings.adapterScale),
+  };
+  try {
+    const saved = await api.saveSettings({
+      ...voice,
+      voiceParallelism: Number($("#global-parallelism").value),
+      preventSleep: $("#prevent-sleep").checked,
+      notifyOnFinish: $("#notify-finish").checked,
+      paths: pathSettings(),
+    });
+    renderSettings(saved);
+    // 화면을 저장값으로 다시 그렸으니, 아직 적용하지 않은 편집은 되돌려 세운다.
+    if (!includeVoice) applyVoiceDraft(draft);
+    settingsStatus(`${label || "설정"} 저장됨`, "saved");
+    return true;
+  } catch (error) {
+    settingsStatus(`저장하지 못했습니다. ${error.message}`, "failed");
+    return false;
+  }
+}
+
+function applyVoiceDraft({ modelId, adapterId, adapterScale }) {
+  $("#global-model").value = modelId;
+  $("#global-adapter").disabled = modelId !== "qwen3-tts";
+  $("#global-adapter").value = adapterId;
+  $("#global-scale").value = String(adapterScale);
+  $("#global-scale-field").classList.toggle("hidden", modelId !== "qwen3-tts" || adapterId === "none");
+  paintGlobalRange();
+  updateProfileGuard();
+  renderVoiceCommit();
 }
 
 function handleTrainingEvent(event) {
@@ -1393,6 +1548,15 @@ $("#apply-voice-candidate").addEventListener("click", async () => {
 });
 $("#close-edit-dialog").addEventListener("click", () => $("#edit-job-dialog").close());
 $("#open-model-settings").addEventListener("click", openModelSettings);
+// 적용하지 않고 닫은 목소리 편집은 저장되지 않는다. 조용히 사라지면 다음에
+// 열었을 때 왜 그대로인지 알 수 없으므로, 버렸다는 사실을 말하고 되돌려 둔다.
+$("#model-settings-dialog").addEventListener("close", () => {
+  if (!voiceDirty()) return;
+  applyVoiceDraft({
+    modelId: appSettings.modelId, adapterId: appSettings.adapterId, adapterScale: Number(appSettings.adapterScale),
+  });
+  showToast("적용하지 않은 제작 목소리 변경은 버렸습니다.", "error");
+});
 $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => $(`#${button.dataset.closeDialog}`).close()));
 $("#global-adapter").addEventListener("change", () => {
   $("#global-scale-field").classList.toggle("hidden", $("#global-adapter").value === "none");
@@ -1407,30 +1571,33 @@ $("#global-model").addEventListener("change", () => {
 $("#global-scale").addEventListener("input", () => {
   paintGlobalRange();
   updateProfileGuard();
+  renderVoiceCommit();
 });
 $("#restore-production-profile").addEventListener("click", restoreProductionProfile);
-$("#save-model-settings").addEventListener("click", async () => {
-  const settings = await api.saveSettings({
-    modelId: $("#global-model").value,
-    adapterId: $("#global-adapter").value,
-    adapterScale: Number($("#global-scale").value),
-    voiceParallelism: Number($("#global-parallelism").value),
-    paths: Object.fromEntries(
-      $$("[id^='path-']").map((input) => [input.id.slice("path-".length), input.value]),
-    ),
-  });
-  renderSettings(settings);
-  $("#model-settings-dialog").close();
-});
+$("#global-parallelism").addEventListener("change", () => persistSettings({ label: "동시에 만들 후보" }));
+$("#prevent-sleep").addEventListener("change", () => persistSettings({ label: "잠자기 방지" }));
+$("#notify-finish").addEventListener("change", () => persistSettings({ label: "완료 알림" }));
+$$("#theme-choice button").forEach((button) => button.addEventListener("click", () => {
+  applyTheme(button.dataset.themeMode, { remember: true });
+  settingsStatus("화면 테마 저장됨", "saved");
+}));
+$("#voice-commit-apply").addEventListener("click", () => persistSettings({ includeVoice: true, label: "제작 목소리" }));
+$("#voice-commit-cancel").addEventListener("click", () => applyVoiceDraft({
+  modelId: appSettings.modelId, adapterId: appSettings.adapterId, adapterScale: Number(appSettings.adapterScale),
+}));
+const SETTINGS_PATH_LABELS = {
+  outputRoot: "결과물 폴더", sourceProjectRoot: "강의 소스", voiceLibraryRoot: "내 목소리 원본",
+  referenceAudioPath: "참조 음성", referenceTextPath: "참조 전사문",
+};
 $$('[data-pick-path]').forEach((button) => button.addEventListener("click", async () => {
-  const value = await api.pickLocation(button.dataset.pickPath);
-  if (value) {
-    $(`#path-${button.dataset.pickPath}`).value = value;
-    if (button.dataset.pickPath === "outputRoot") $("#output-root-name").textContent = fileName(value);
-  }
+  const key = button.dataset.pickPath;
+  const value = await api.pickLocation(key);
+  if (!value) return;
+  setPathField(key, value);
+  await persistSettings({ label: SETTINGS_PATH_LABELS[key] || "경로" });
 }));
 $("#open-finetune-panel").addEventListener("click", () => {
-  animateLayout($("#finetune-panel").closest(".settings-column"), () => {
+  animateLayout($("#finetune-panel").closest(".settings-panel"), () => {
     $("#finetune-panel").classList.toggle("hidden");
     $("#open-finetune-panel").setAttribute("aria-expanded", String(!$("#finetune-panel").classList.contains("hidden")));
   });
@@ -1445,8 +1612,10 @@ $("#start-finetune").addEventListener("click", async () => {
   } catch (error) {
     $("#edit-job-dialog").close();
     await openModelSettings();
+    showSettingsSection("training");
     $("#finetune-panel").classList.remove("hidden");
-    $("#finetune-panel > p").textContent = error.message;
+    $("#finetune-error").classList.remove("hidden");
+    $("#finetune-error").textContent = error.message;
   }
 });
 

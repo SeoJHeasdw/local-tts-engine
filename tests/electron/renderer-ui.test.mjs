@@ -117,6 +117,95 @@ test("완성 영상은 자기 타임라인을 데리고 발행된다", async () 
 });
 
 
+// 테마는 첫 그림 전에 정해져야 한다. 설정 파일을 기다리면 어두운 화면이 한 번
+// 번쩍인다. 그래서 이 값만은 localStorage 로 읽고 화면에는 늘 다크·라이트 중
+// 하나를 박아 둔다 — CSS 가 같은 팔레트를 두 벌 갖지 않게.
+test("테마는 첫 그림 전에 정해지고 화면에는 하나만 박힌다", async () => {
+  const [html, css, script] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+    readRendererSource(),
+  ]);
+  for (const mode of ["system", "dark", "light"]) {
+    assert.match(html, new RegExp(`data-theme-mode="${mode}"`), mode);
+  }
+  assert.match(css, /:root\[data-theme="light"\] \{/);
+  assert.match(css, /:root\[data-theme="light"\][\s\S]*?color-scheme: light/);
+  assert.match(script, /document\.documentElement\.dataset\.theme = resolved;/);
+  assert.match(script, /localStorage\.getItem\(THEME_KEY\)/);
+  // 시스템을 고르면 맥 설정이 바뀌는 순간 따라간다.
+  assert.match(script, /darkQuery\?\.addEventListener\?\.\("change"/);
+  // 맥이 다크일 때 '시스템'과 '다크'는 같은 화면이 된다. 까닭을 말해 주지 않으면
+  // 눌러도 아무 일도 일어나지 않는 고장난 단추로 보인다.
+  assert.match(html, /id="theme-hint"/);
+  assert.match(script, /지금 맥이 \$\{painted\}라서 \$\{painted\}로 보입니다/);
+  assert.match(script, /맥 설정과 상관없이 늘 \$\{painted\}입니다/);
+  // 밝은 쪽에서 보이지 않거나 뒤집혀 보이던 토큰 밖 색은 걷어 냈다.
+  assert.doesNotMatch(css, /rgba\(255, 255, 255, \.08\)/);
+  assert.doesNotMatch(css, /rgba\(107, 114, 102/);
+});
+
+// 일곱 시간짜리 제작이 도는 동안 맥이 잠들면 제작도 멈춘다. 두 시간 뒤에 끝나는
+// 작업을 계속 들여다볼 수도 없다. 동작은 attention 검사가 맡는다.
+test("자리를 비울 수 있게 하는 두 설정이 화면과 저장에 함께 있다", async () => {
+  const [html, script, main] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    readRendererSource(),
+    readMainSource(),
+  ]);
+  assert.match(html, /class="switch" id="prevent-sleep"[^>]*role="switch"/);
+  assert.match(html, /class="switch" id="notify-finish"[^>]*role="switch"/);
+  assert.match(script, /preventSleep: \$\("#prevent-sleep"\)\.checked,/);
+  assert.match(script, /notifyOnFinish: \$\("#notify-finish"\)\.checked,/);
+  // 기본은 켜 둔다. 일곱 시간짜리 작업에서 꺼져 있어 좋을 까닭이 없다.
+  assert.match(main, /preventSleep: stored\.preventSleep !== false,/);
+  assert.match(main, /notifyOnFinish: stored\.notifyOnFinish !== false,/);
+  // Electron 객체는 실행 진입점에서만 주입한다.
+  const entry = await fs.readFile(path.join(APP_DIR, "main.mjs"), "utf8");
+  assert.match(entry, /Notification, powerMonitor, powerSaveBlocker/);
+});
+
+// 설정은 두 기둥에 나눠 담겨 있어 양이 다른 쪽이 통째로 비었고, 결과물 폴더
+// 카드 안에 또 카드가 있어 무엇이 무엇에 속하는지가 테두리로만 남았다. 구역은
+// 왼쪽에서 고르고 오른쪽은 '이름과 설명 / 손잡이' 한 줄의 되풀이로 둔다.
+test("설정은 구역 레일과 한 줄 한 설정으로 서고, 옛 두 기둥 구조가 남지 않는다", async () => {
+  const [html, css] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+  ]);
+  for (const section of ["general", "voice", "training"]) {
+    assert.match(html, new RegExp(`data-settings-section="${section}"`), section);
+    assert.match(html, new RegExp(`data-settings-panel="${section}"`), section);
+  }
+  assert.match(css, /\.settings-shell \{[^}]*grid-template-columns: 168px/);
+  assert.match(css, /\.setting-row \+ \.setting-row \{ border-top/);
+  // 열자마자 포커스가 '닫기'에 걸리면 가장 먼저 눈에 띄는 것이 나가는 문이 된다.
+  assert.match(html, /data-settings-section="general"[^>]*autofocus/);
+  // 카드 안 카드와 접힘 더미는 걷어 냈다.
+  assert.doesNotMatch(html, /settings-layout|settings-column|output-destination|settings-disclosure/);
+  assert.doesNotMatch(css, /\.settings-layout|\.settings-column|\.output-destination/);
+});
+
+// 저장 버튼을 누르지 않고 닫아 조용히 날아가는 일이 없어야 한다. 다만 제작
+// 목소리는 전체 강의의 목소리를 정하는 값이라 적용을 한 번 더 확인한다.
+test("설정은 즉시 저장하고, 제작 목소리만 적용을 따로 받는다", async () => {
+  const [html, script] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    readRendererSource(),
+  ]);
+  assert.doesNotMatch(html, /id="save-model-settings"/, "저장 버튼은 사라졌다");
+  assert.match(script, /\$\("#global-parallelism"\)\.addEventListener\("change", \(\) => persistSettings\(/);
+  assert.match(script, /await persistSettings\(\{ label: SETTINGS_PATH_LABELS\[key\]/);
+  // 경로 하나를 바꾼 것이 아직 적용하지 않은 목소리까지 함께 바꾸면 안 된다.
+  assert.match(script, /const voice = includeVoice \? draft : \{/);
+  assert.match(script, /modelId: appSettings\.modelId,/);
+  assert.match(script, /if \(!includeVoice\) applyVoiceDraft\(draft\);/);
+  // 적용은 따로 누른다. 누르지 않고 닫으면 버렸다고 말한다.
+  assert.match(script, /\$\("#voice-commit-apply"\)\.addEventListener\("click", \(\) => persistSettings\(\{ includeVoice: true/);
+  assert.match(script, /적용하지 않은 제작 목소리 변경은 버렸습니다/);
+  assert.match(html, /id="voice-commit-diff"/);
+});
+
 // 두 시계는 '이 편'과 '전체'다. 5초마다 '약 12분'이 '약 11분'으로 바뀌면 멈춰
 // 있는 것처럼 보인다. 매초 다시 그려 한 자리씩 줄어드는 것을 보여 준다.
 test("남은 시간 두 시계는 1초마다 줄어든다", async () => {

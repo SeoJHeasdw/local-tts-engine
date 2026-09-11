@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 // Static UI/IPC contracts inspect source, while behavior tests import services.
 export async function readMainSource() {
   const modules = ['files', 'media', 'voices', 'production', 'editing/compose',
-    'editing/pages', 'editing/regions', 'outputs', 'ipc', 'window', 'application'];
+    'editing/pages', 'editing/regions', 'outputs', 'ipc', 'window', 'application',
+    'settings', 'attention'];
   return (await Promise.all(modules.map(name => fs.readFile(
     new URL(`../../../electron-app/main/${name}.mjs`, import.meta.url), 'utf8',
   )))).join('\n');

@@ -40,6 +40,10 @@ export function createSettingsService({
       adapterId: modelId === "qwen3-tts" && stored.adapterId !== "none" ? selected?.id || "none" : "none",
       adapterScale: Math.min(1, Math.max(0.1, Number(stored.adapterScale ?? 0.6))),
       voiceParallelism: Math.min(2, Math.max(1, Math.round(Number(stored.voiceParallelism ?? 2)))),
+      // 자리를 비운 사이에도 제작이 이어지도록 하는 두 값이다. 기본은 켜 둔다 —
+      // 일곱 시간짜리 작업에서 이것이 꺼져 있어 좋을 까닭이 없다.
+      preventSleep: stored.preventSleep !== false,
+      notifyOnFinish: stored.notifyOnFinish !== false,
       paths: normalizeStudioPaths(stored.paths),
       adapters,
     };
@@ -56,6 +60,8 @@ export function createSettingsService({
       adapterId: modelId === "qwen3-tts" ? adapterId : "none",
       adapterScale: Math.min(1, Math.max(0.1, Number(raw.adapterScale ?? current.adapterScale))),
       voiceParallelism: Math.min(2, Math.max(1, Math.round(Number(raw.voiceParallelism ?? current.voiceParallelism)))),
+      preventSleep: Boolean(raw.preventSleep ?? current.preventSleep),
+      notifyOnFinish: Boolean(raw.notifyOnFinish ?? current.notifyOnFinish),
       paths: normalizeStudioPaths(raw.paths || current.paths),
     };
     for (const key of ["voiceLibraryRoot", "outputRoot", "ttsOutputRoot", "voiceOutputRoot", "captionOutputRoot", "videoOutputRoot", "editOutputRoot"]) {

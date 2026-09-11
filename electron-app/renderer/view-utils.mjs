@@ -160,6 +160,24 @@ export function createViewHistory(initial = 'new') {
 // 1초마다 한 자리씩 줄어드는 시계라야 얼마나 남았는지가 눈으로 읽히고, 자리를
 // 떠도 되는지 판단이 선다. 값 자체는 여전히 추정이라 초를 올림하지 않고
 // 내림해 둔다 — 12:00에서 11:59로 내려가야 줄어드는 것으로 보인다.
+// 설정의 경로 칸은 좁고, 궁금한 것은 앞이 아니라 끝이다. 앞에서 몇 토막을 잘라
+// 두면 'benchmarks/2026-08-23/r…' 처럼 정작 서로 다른 부분인 파일 이름이 먼저
+// 잘려, 참조 음성과 참조 전사문이 같은 글자로 보인다. 끝에서부터 담는다.
+const PATH_BUDGET = 28;
+
+export function shortPath(value) {
+  const text = String(value || "");
+  const parts = text.split("/").filter(Boolean);
+  if (!parts.length) return text;
+  let shown = [parts.at(-1)];
+  for (let index = parts.length - 2; index >= 0; index -= 1) {
+    const wider = [parts[index], ...shown];
+    if (wider.join("/").length > PATH_BUDGET) break;
+    shown = wider;
+  }
+  return shown.length === parts.length ? text : `…/${shown.join("/")}`;
+}
+
 export function formatCountdown(ms) {
   const seconds = Math.max(0, Math.floor(Number(ms) / 1000));
   if (!Number.isFinite(seconds)) return "";

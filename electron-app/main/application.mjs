@@ -10,19 +10,30 @@ import { createEditingRegionsService } from "./editing/regions.mjs";
 import { createEditingService } from "./editing.mjs";
 import { createOutputsService } from "./outputs.mjs";
 import { createIpcService } from "./ipc.mjs";
+import { createAttentionService } from "./attention.mjs";
 import { createWindowService } from "./window.mjs";
 import { ROOT } from "./paths.mjs";
 import { resolveRuntimeTools } from "./runtime-config.mjs";
 import { resumeJobProcesses, stopJobProcesses } from "./job-process.mjs";
 
 // Electron objects enter here; services can also run in Node-based integration tests.
-export function createStudio({ app, BrowserWindow, ipcMain, dialog, shell, powerMonitor = null }) {
+export function createStudio({
+  app, BrowserWindow, ipcMain, dialog, shell,
+  powerMonitor = null, powerSaveBlocker = null, Notification = null,
+}) {
   const state = { activeJob: null, mainWindow: null, catalogCache: null, catalogCacheRoot: null, runtimeTools: {} };
   const { readAppSettings, saveAppSettings, applyVoiceSettings } = createSettingsService({
     state,
   });
+  // 작업 사건은 모두 emit 하나를 지난다. 잠 막기와 완료 알림은 그 길목에서
+  // 함께 판단한다 — 시작·끝을 따로 세어 두면 어느 한쪽에서 새기 쉽다.
+  let attention = null;
   const { emit, jobSnapshot, requireRuntimeTool, assertRuntime, runProcess, runUtility } = createRuntimeService({
     state,
+    onEvent: (payload) => { attention?.watch(payload); },
+  });
+  attention = createAttentionService({
+    powerSaveBlocker, Notification, readAppSettings, state,
   });
   const { loadCatalog } = createCatalogService({
     requireRuntimeTool, runProcess, runUtility, state,
@@ -96,11 +107,12 @@ export function createStudio({ app, BrowserWindow, ipcMain, dialog, shell, power
   }
 
   function stop() {
+    attention.release();
     if (state.activeJob?.paused) resumeJobProcesses(state.activeJob);
     stopJobProcesses(state.activeJob);
   }
 
-  return { start, stop, createWindow, cleanupReviewPreviews, state };
+  return { start, stop, createWindow, cleanupReviewPreviews, attention, state };
 }
 
 export function startStudio(electron) {
