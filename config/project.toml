@@ -18,18 +18,18 @@ narration_runner = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/tools/nar
 narration_config = "/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent/deck/narration.config.json"
 
 [voice_source]
-raw_root = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/data/private/voice"
-clean_master_root = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/data/private/voice/training/pvc/master-wav"
-clean_preview_root = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/data/private/voice/training/pvc/upload-mp3"
-manifest = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/data/private/voice/training/pvc/manifest.json"
-pilot_reference = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/data/private/voice/ch01/pilot/master-48k-mono.wav"
+raw_root = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/data/private/voice"
+clean_master_root = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/data/private/voice/training/pvc/master-wav"
+clean_preview_root = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/data/private/voice/training/pvc/upload-mp3"
+manifest = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/data/private/voice/training/pvc/manifest.json"
+pilot_reference = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/data/private/voice/ch01/pilot/master-48k-mono.wav"
 clean_duration_seconds = 3200.247
 
 [studio_outputs]
-tts_root = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/artifacts/course-pilots"
-text_voice_root = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/artifacts/voice-candidates"
-captions_root = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/artifacts/production/captions"
-videos_root = "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/artifacts/production/videos"
+tts_root = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/artifacts/course-pilots"
+text_voice_root = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/artifacts/voice-candidates"
+captions_root = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/artifacts/production/captions"
+videos_root = "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/artifacts/production/videos"
 
 [pilot]
 source_preset = "ch01-intro"

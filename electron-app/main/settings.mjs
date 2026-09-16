@@ -77,7 +77,7 @@ export function createSettingsService({
     await fs.mkdir(path.dirname(APP_SETTINGS_PATH), { recursive: true });
     const storedSettings = {
       ...settings,
-      paths: Object.fromEntries(["sourceProjectRoot", "voiceLibraryRoot", "outputRoot", "referenceAudioPath", "referenceTextPath"]
+      paths: Object.fromEntries(["sourceProjectRoot", "voiceLibraryRoot", "outputRoot", "referenceAudioPath", "referenceTextPath", "savedRoot"]
         .map((key) => [key, settings.paths[key]])),
     };
     await fs.writeFile(APP_SETTINGS_PATH, `${JSON.stringify(storedSettings, null, 2)}\n`, "utf8");

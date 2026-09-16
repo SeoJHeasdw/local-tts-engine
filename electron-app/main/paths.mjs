@@ -37,14 +37,31 @@ export const LEGACY_OUTPUT_PATHS = Object.freeze({
   editOutputRoot: path.join(ROOT, "artifacts/video-edits"),
 });
 
+// sourceProjectRoot는 프로젝트 바깥(예: 형제 폴더의 강의 저장소)을 가리키는 값이라
+// 우리 프로젝트가 옮겨졌다고 같이 옮겨졌다고 볼 근거가 없다. 나머지 네 개는 전부
+// 프로젝트 폴더 자신의 하위 경로가 기본값이라, 프로젝트째로 옮겨지면 같이 옮겨진
+// 것으로 봐도 된다.
+const OWN_PROJECT_PATH_KEYS = ["voiceLibraryRoot", "outputRoot", "referenceAudioPath", "referenceTextPath"];
+
+// 설정을 저장할 때 그 시점의 프로젝트 루트를 savedRoot로 같이 적어 둔다. 다음 실행에서
+// 프로젝트 루트가 달라져 있으면(폴더째로 옮겨진 것) 그때 각 값이 "저장 당시 루트 기준
+// 기본값 그대로"였는지를 본다. 손대지 않은 기본값이었다면 지금 루트 기준으로 다시
+// 따라가게 하고, 사용자가 직접 다른 곳으로 바꿔 둔 값이라면 root가 바뀌어도 그대로
+// 존중한다 — 그 값이 지금 당장 디스크에 있는지 여부로 판단하지 않는다 (예: 잠깐
+// 마운트가 빠진 외장 드라이브 경로를 실수로 기본값으로 되돌리지 않기 위해).
 export function normalizeStudioPaths(raw = {}) {
+  const savedRoot = typeof raw?.savedRoot === "string" && raw.savedRoot ? raw.savedRoot : ROOT;
+  const priorDefaults = savedRoot === ROOT ? DEFAULT_STUDIO_PATHS : defaultStudioPaths(savedRoot);
   const inputs = Object.fromEntries(
     Object.entries(DEFAULT_STUDIO_PATHS).map(([key, fallback]) => {
-      const value = String(raw?.[key] || fallback).trim();
-      return [key, path.resolve(value || fallback)];
+      const value = String(raw?.[key] || "").trim();
+      if (!value) return [key, fallback];
+      const resolved = path.resolve(value);
+      const isUntouchedDefault = OWN_PROJECT_PATH_KEYS.includes(key) && resolved === priorDefaults[key];
+      return [key, isUntouchedDefault ? fallback : resolved];
     }),
   );
-  return { ...inputs, ...outputPathsForRoot(inputs.outputRoot) };
+  return { ...inputs, savedRoot: ROOT, ...outputPathsForRoot(inputs.outputRoot) };
 }
 
 export function runtimePaths(raw = {}) {

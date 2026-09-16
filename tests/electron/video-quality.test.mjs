@@ -8,10 +8,18 @@ import { pathToFileURL } from 'node:url';
 import { VIDEO_QUALITIES, videoQuality, captureVideoFileName, videoFrameRate } from '../../electron-app/shared/video-quality.mjs';
 import { normalizeOptions } from '../../electron-app/shared/options.mjs';
 import { createProductionService } from '../../electron-app/main/production.mjs';
-import { dateFolder, runtimePaths } from '../../electron-app/main/paths.mjs';
+import { APP_SETTINGS_PATH, dateFolder, runtimePaths } from '../../electron-app/main/paths.mjs';
+
+// sourceProjectRoot의 기본값은 "옆 폴더에 udemy-agent가 있다"는 추측이라, 강의
+// 저장소가 다른 자리에 있으면 틀린다. 실제 앱처럼 저장된 설정을 따라가야 어느
+// 환경에서도 진짜 강의 저장소 위치를 찾는다.
+async function configuredDeckRoot() {
+  const stored = await fs.readFile(APP_SETTINGS_PATH, 'utf8').then(JSON.parse).catch(() => ({}));
+  return runtimePaths(stored.paths).deckRoot;
+}
 
 test('앱의 화질 선택은 CLI의 ID·해상도·프레임률 계약과 일치한다', async () => {
-  const { deckRoot } = runtimePaths();
+  const deckRoot = await configuredDeckRoot();
   const { CAPTURE_PROFILES } = await import(pathToFileURL(path.join(deckRoot, 'tools/capture-quality.mjs')));
   for (const [id, quality] of Object.entries(VIDEO_QUALITIES)) {
     const profile = CAPTURE_PROFILES[id];
@@ -97,7 +105,7 @@ test('선택한 화질·자막 파일이 없으면 예전 MP4로 대체하지 �
 });
 
 test('앱과 CLI가 같은 파일명을 사용하고 마지막 음성 프레임을 덮는다', async () => {
-  const { deckRoot } = runtimePaths();
+  const deckRoot = await configuredDeckRoot();
   const cli = await import(pathToFileURL(path.join(deckRoot, 'tools/capture-quality.mjs')));
   for (const quality of Object.keys(VIDEO_QUALITIES)) for (const captions of [false, true]) {
     assert.equal(captureVideoFileName('lesson', { videoQuality: quality, burnCaptions: captions }),

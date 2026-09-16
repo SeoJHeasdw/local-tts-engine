@@ -26,7 +26,7 @@ import soundfile as sf
 
 
 DEFAULT_MASTER_DIR = Path(
-    "/Users/jaehoseo/Desktop/vswrk/edu/local-tts-engine/data/private/voice/training/pvc/master-wav"
+    "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/data/private/voice/training/pvc/master-wav"
 )
 DEFAULT_REFERENCE = Path("artifacts/benchmarks/2026-08-23/reference.wav")
 DEFAULT_ASR_MODEL = "mlx-community/Qwen3-ASR-0.6B-8bit"
