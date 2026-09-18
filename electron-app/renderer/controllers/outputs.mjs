@@ -9,7 +9,8 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
   function outputLabel(item) {
     if (item.root === "voice") return "텍스트 목소리";
     if (item.root === "edit") {
-      return { merge: "합친 영상", trim: "자른 영상", voice: "목소리 교체", "voice-page": "페이지 목소리 교체", "voice-batch": "목소리 교체" }[item.operation] || "편집 영상";
+      return { merge: "합친 영상", trim: "자른 영상", voice: "목소리 교체", "voice-page": "페이지 목소리 교체", "voice-batch": "목소리 교체",
+        "record-display": "화면 녹화" }[item.operation] || "편집 영상";
     }
     if (item.root === "pilot") return "강의 음성";
     return item.video ? "완성 강의 영상" : "강의 자막·음성";

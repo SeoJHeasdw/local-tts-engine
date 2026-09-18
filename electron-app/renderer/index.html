@@ -23,6 +23,7 @@
 
         <nav id="main-nav" aria-label="주 메뉴">
           <button class="nav-item active" type="button" data-view="new" aria-current="page"><span>◉</span><b>새 영상</b></button>
+          <button class="nav-item" type="button" data-view="record"><span>●</span><b>화면 녹화</b></button>
           <button class="nav-item" type="button" data-view="voice"><span>♪</span><b>목소리 만들기</b></button>
           <button class="nav-item" type="button" data-view="review"><span>◆</span><b>다듬기</b><em id="polish-count" class="hidden">0</em></button>
           <button class="nav-item" type="button" data-view="edit"><span>✂</span><b>영상 편집</b></button>
@@ -191,6 +192,67 @@
             </details>
           </section>
         </section>
+        </section>
+
+        <section class="page-view hidden" id="view-record">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">화면 녹화</p>
+              <h1>디스플레이 녹화</h1>
+              <p class="lede">고른 화면 하나를 원래 해상도 그대로 녹화합니다. 내레이션은 다듬기에서 붙입니다.</p>
+            </div>
+            <div class="top-status" id="record-top-status" tabindex="0" data-tooltip="녹화할 화면을 고르세요" aria-label="녹화할 화면을 고르세요"><span class="pulse"></span><span class="sr-only">대기</span></div>
+          </header>
+
+          <section class="record-workspace" id="record-workspace">
+            <form class="card record-card" id="record-form">
+              <div class="card-heading">
+                <div><h2>어느 화면을 녹화할까요?</h2></div>
+                <button type="button" class="secondary-small" id="refresh-displays">다시 찾기</button>
+              </div>
+              <div class="display-list" id="display-list" role="radiogroup" aria-label="녹화할 화면"></div>
+              <label class="check-row full"><input id="record-audio" type="checkbox"><span><strong>음성 포함</strong><small>끄면 무음 트랙을 넣습니다. 매번 꺼진 채로 시작합니다.</small></span></label>
+              <label class="field full hidden" id="record-audio-field"><span>입력 장치</span><select id="record-audio-device" aria-describedby="record-audio-hint"></select><small id="record-audio-hint"></small></label>
+              <details class="advanced-options full">
+                <summary><span>세부 설정</span><small>결과 이름</small></summary>
+                <div>
+                  <label class="field full"><span>결과 이름</span><input id="record-name" autocomplete="off" spellcheck="false" required><small>영문 소문자·숫자·하이픈. 자동으로 정해집니다.</small></label>
+                </div>
+              </details>
+              <button class="primary-button full" id="record-start" type="submit" disabled><span>녹화 시작</span><span aria-hidden="true">●</span></button>
+            </form>
+
+            <section class="card record-live hidden" id="record-live" aria-live="polite">
+              <div class="record-clock">
+                <span class="record-dot" aria-hidden="true"></span>
+                <strong id="record-elapsed">0:00</strong>
+                <small id="record-phase">녹화할 화면을 준비하고 있습니다</small>
+              </div>
+              <p class="record-warning hidden" id="record-warning" role="status"></p>
+              <div class="job-controls">
+                <button class="primary-small" id="record-stop" type="button" disabled>정지하고 저장</button>
+                <button class="cancel-button" id="record-cancel" type="button">취소</button>
+              </div>
+            </section>
+
+            <section class="card complete-panel record-done hidden" id="record-done">
+              <div class="complete-icon" id="record-done-icon">✓</div>
+              <h3 id="record-done-title">녹화를 저장했습니다</h3>
+              <p id="record-done-summary"></p>
+              <p class="record-done-warnings hidden" id="record-done-warnings"></p>
+              <div class="complete-actions">
+                <button type="button" class="primary-small" id="record-review">다듬기에서 내레이션 넣기</button>
+                <button type="button" class="secondary-small" id="record-open">영상 열기</button>
+                <button type="button" class="secondary-small" id="record-reveal">Finder에서 보기</button>
+                <button type="button" class="secondary-small" id="record-again">새 녹화</button>
+              </div>
+            </section>
+
+            <details class="log-panel">
+              <summary>상세 기록</summary>
+              <pre id="record-log"></pre>
+            </details>
+          </section>
         </section>
 
         <section class="page-view hidden" id="view-voice">

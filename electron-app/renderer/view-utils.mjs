@@ -264,6 +264,8 @@ export function outputState(item = {}, findings = []) {
     return { key: "attention", label: `확인 ${findings.length}곳`, tone: "attention" };
   }
   if (item.review?.status === "approved") return { key: "approved", label: "청취 승인", tone: "approved" };
+  // 완료했지만 일부 프레임이 빠진 녹화 같은 결과. 성공으로 뭉개지 않고 확인할 곳으로 둔다.
+  if (item.warnings?.length) return { key: "attention", label: `경고 ${item.warnings.length}건`, tone: "attention" };
   return { key: "ready", label: "확인할 곳 없음", tone: "ready" };
 }
 

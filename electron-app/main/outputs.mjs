@@ -140,6 +140,7 @@ export function createOutputsService({
           operation: report.operation,
           displayName: report.displayName || entry.name,
           voiceFindings: report.voiceFindings || [],
+          warnings: report.warnings || [],
           updatedAt: stat?.mtime.toISOString(),
           durationMs: report.durationMs || null,
           video: true,

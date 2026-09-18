@@ -11,6 +11,7 @@ import {
   ffmpegBuildProfile,
   resolveRuntimeTools,
 } from "../electron-app/main/runtime-config.mjs";
+import { listCaptureDevices, probeDisplay, screenDevices } from "../electron-app/main/capture/displays.mjs";
 
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -21,6 +22,19 @@ async function hasCaptureBrowser() {
   try {
     const { chromium } = await import("playwright");
     return await fs.access(chromium.executablePath()).then(() => true, () => false);
+  } catch {
+    return false;
+  }
+}
+// 화면 기록 권한은 Electron이 아니라 앱을 띄운 터미널 앱이 받는다. Electron의 권한
+// 조회는 그 차이를 모르므로, ffmpeg로 첫 화면을 한 프레임 찍어 되는지로 판정한다.
+async function canRecordScreen(ffmpeg) {
+  if (!ffmpeg || process.platform !== "darwin") return false;
+  try {
+    const [screen] = screenDevices(await listCaptureDevices(ffmpeg));
+    if (!screen) return false;
+    await probeDisplay(ffmpeg, screen.index);
+    return true;
   } catch {
     return false;
   }
@@ -93,6 +107,8 @@ async function buildReport() {
     captionRunner: await exists(path.join(PROJECT_ROOT, "electron-app/main/workers/captions.mjs")),
     captureRunner: await exists(path.join(PROJECT_ROOT, "electron-app/main/workers/capture.mjs")),
     captureBrowser: await hasCaptureBrowser(),
+    recordRunner: await exists(path.join(PROJECT_ROOT, "electron-app/main/workers/record-display.mjs")),
+    screenCapture: await canRecordScreen(tools.ffmpeg),
     productionRunner: await exists(path.join(deckRoot, "tools/production.mjs"))
       && await exists(path.join(deckRoot, "tools/preflight.mjs")),
     sourceCompiler: await exists(path.join(deckRoot, "node_modules/typescript/package.json")),
@@ -101,6 +117,7 @@ async function buildReport() {
     textVoice: checks.appleSilicon && checks.trainPython && checks.ffprobe
       && checks.referenceAudio && checks.referenceText && checks.adapter,
     editing: checks.ffmpeg && checks.ffprobe,
+    screenRecording: checks.node && checks.ffmpeg && checks.ffprobe && checks.recordRunner && checks.screenCapture,
     courseVideo: checks.appleSilicon && checks.basePython && checks.trainPython
       && checks.node && checks.ffmpeg && checks.ffprobe && checks.referenceAudio
       && checks.referenceText && checks.adapter && checks.courseConfig
@@ -135,6 +152,7 @@ function printReport(report) {
   const capabilityLabels = {
     textVoice: "텍스트 목소리",
     editing: "기존 영상 편집",
+    screenRecording: "화면 녹화",
     courseVideo: "강의 영상 자동 제작",
   };
   const checkLabels = {
@@ -153,6 +171,8 @@ function printReport(report) {
     captionRunner: "자막 자동화 도구",
     captureRunner: "영상 촬영 도구",
     captureBrowser: "촬영용 브라우저",
+    recordRunner: "화면 녹화 도구",
+    screenCapture: "화면 기록 권한 (한 프레임 촬영)",
     productionRunner: "강의 입력 고정·검사 도구",
     sourceCompiler: "강의 소스 분석 도구",
   };

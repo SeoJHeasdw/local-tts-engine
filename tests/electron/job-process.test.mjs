@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   cancelJobProcesses,
+  finishJobProcesses,
   pauseJobProcesses,
   resumeJobProcesses,
   runJobProcess,
@@ -120,4 +121,40 @@ test('촬영 중에는 SIGSTOP을 보내지 않아 녹화 시간축을 보존한
   assert.equal(signals, 0);
   assert.equal(task.paused, undefined);
   assert.equal(task.pauseRequested, true, '편 경계에서 멈출 요청은 유지한다');
+});
+
+test('녹화 중에도 SIGSTOP을 보내지 않는다', () => {
+  let signals = 0;
+  const task = { ...job(), stage: 'record', children: new Set([{ pid: 987654321, kill() { signals++; return true; } }]) };
+  assert.equal(pauseJobProcesses(task), false);
+  assert.equal(signals, 0);
+});
+
+// 녹화의 정지는 결과를 남기는 정상 완료다. 그룹에 보내면 ffmpeg가 SIGUSR1 기본
+// 동작으로 죽어 파일을 닫지 못하므로, 작업자에게만 보내고 손자는 건드리지 않는다.
+test('녹화 정지는 작업자에게만 알리고 취소로 표시하지 않는다', { timeout: 10_000 }, async t => {
+  const task = job();
+  t.after(() => stopJobProcesses(task, 'SIGKILL'));
+  let ready;
+  const started = new Promise(resolve => { ready = resolve; });
+  const script = `const {spawn}=require('node:child_process');
+    const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
+    let alive=true; child.on('exit',()=>{alive=false;});
+    process.on('SIGUSR1',()=>setTimeout(()=>{console.log(alive?'grandchild-alive':'grandchild-dead');child.kill();process.exit(0);},300));
+    console.log('ready'); setInterval(()=>{},1000);`;
+  const running = runJobProcess(task, 'record', process.execPath, ['-e', script], {
+    capture: true, emit: event => { if (event.type === 'log' && event.text.includes('ready')) ready(); },
+  });
+  await started;
+  assert.equal(finishJobProcesses(task), true);
+  assert.match(await running, /grandchild-alive/, '정지 신호가 손자(ffmpeg 자리)에게 닿으면 안 된다');
+  assert.equal(task.cancelled, false);
+  assert.equal(task.stopTimer, undefined, '마무리에는 강제 종료 시계를 두지 않는다');
+});
+
+test('끝났거나 취소 중인 작업은 정지하지 않는다', () => {
+  const child = { pid: 987654321 };
+  assert.equal(finishJobProcesses({ ...job(), state: 'done', children: new Set([child]) }), false);
+  assert.equal(finishJobProcesses({ ...job(), cancelled: true, children: new Set([child]) }), false);
+  assert.equal(finishJobProcesses({ ...job(), children: new Set() }), false);
 });

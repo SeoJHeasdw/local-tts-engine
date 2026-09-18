@@ -87,6 +87,22 @@ export function createRuntimeService({
   // long enough that "언제 끝나는지" is a real question. Read it here, once, so
   // the renderer gets a number instead of parsing log text.
   const VOICE_PROGRESS_PATTERN = /\[자동 음성 검수 (\d+)\/(\d+)\]/g;
+  // 화면 녹화 작업자는 단계를 한 줄 JSON으로 알린다. 녹화 중인지, 마무리 중인지,
+  // 프레임이 빠지고 있는지는 버튼과 경고가 기대는 사실이라 같은 자리에서 사건으로 바꾼다.
+  const RECORD_PHASE_PATTERN = /^\[record\] (\{.*\})$/gm;
+
+  function recordPhases(text) {
+    const phases = [];
+    let match = null;
+    RECORD_PHASE_PATTERN.lastIndex = 0;
+    while ((match = RECORD_PHASE_PATTERN.exec(text))) {
+      try {
+        const { phase, frames, dup, drop } = JSON.parse(match[1]);
+        if (["recording", "progress", "finishing"].includes(phase)) phases.push({ phase, frames, dup, drop });
+      } catch { /* 한 줄이 잘려 와도 녹화는 계속된다. */ }
+    }
+    return phases;
+  }
 
   function runProcess(stage, executable, args, { cwd = ROOT, capture = false } = {}) {
     const job = state.activeJob;
@@ -102,6 +118,7 @@ export function createRuntimeService({
         VOICE_PROGRESS_PATTERN.lastIndex = 0;
         while ((match = VOICE_PROGRESS_PATTERN.exec(payload.text))) last = match;
         if (last) emit({ type: "voice-progress", done: Number(last[1]), total: Number(last[2]) });
+        if (stage === "record") for (const phase of recordPhases(payload.text)) emit({ type: "record-phase", ...phase });
       },
     });
   }

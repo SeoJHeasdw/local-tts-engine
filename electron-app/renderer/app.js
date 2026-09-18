@@ -1,6 +1,7 @@
 import { createOutputsController } from "./controllers/outputs.mjs";
 import { createEditorController } from "./controllers/editor.mjs";
 import { createReviewController } from "./controllers/review.mjs";
+import { createRecordingController } from "./controllers/recording.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
@@ -112,6 +113,10 @@ function suggestedName() {
 
 function suggestedTextVoiceName() {
   return `voice-${dateStamp()}`;
+}
+
+function suggestedRecordingName() {
+  return `record-${dateStamp()}`;
 }
 
 function pageMeta(pageNumber) {
@@ -833,6 +838,9 @@ function handleTextVoiceEvent(event) {
 
 const outputs = createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review });
 
+const recording = createRecordingController({ $, api, showToast, setIconStatus, formatDuration, review, outputs,
+  suggestName: suggestedRecordingName });
+
 function renderSettings(settings) {
   appSettings = settings;
   $("#global-model").value = settings.modelId;
@@ -1055,13 +1063,18 @@ function handleTrainingEvent(event) {
 }
 
 function handleJobEvent(event) {
-  if (["log", "progress", "stage"].includes(event.type)) return renderJobEvent(event);
-  const container = ["edit", "text-voice", "training"].includes(event.jobKind)
-    ? $("#edit-job-dialog .job-modal-body") : $("#job-workspace");
+  if (["log", "progress", "stage", "record-phase"].includes(event.type)) return renderJobEvent(event);
+  const container = event.jobKind === "record" ? $("#record-workspace")
+    : ["edit", "text-voice", "training"].includes(event.jobKind)
+      ? $("#edit-job-dialog .job-modal-body") : $("#job-workspace");
   return animateLayout(container, () => renderJobEvent(event));
 }
 
 function renderJobEvent(event) {
+  if (event.jobKind === "record") {
+    recording.handleEvent(event);
+    return;
+  }
   if (event.jobKind === "text-voice") {
     handleTextVoiceEvent(event);
     return;
@@ -1298,6 +1311,7 @@ async function initialize() {
   }
   $("#job-name").value = suggestedName();
   $("#text-voice-name").value = suggestedTextVoiceName();
+  $("#record-name").value = suggestedRecordingName();
   api.onJobEvent(handleJobEvent);
   refreshResumable();
   const [status, settings] = await Promise.all([api.getStatus(), api.getSettings()]);
@@ -1336,6 +1350,8 @@ async function initialize() {
       setEditBusy(true);
     } else if (status.activeJob.kind === "training") {
       openJobDialog("파인튜닝 학습 중");
+    } else if (status.activeJob.kind === "record") {
+      recording.restore(status.activeJob);
     } else if (status.activeJob.kind === "text-voice") {
       candidatePurpose = "text";
       openJobDialog("텍스트 목소리 후보 생성 중");
@@ -1354,7 +1370,7 @@ async function initialize() {
   }
   await outputs.loadOutputs();
   const initialView = new URLSearchParams(window.location.search).get("view");
-  if (["voice", "review", "edit", "results"].includes(initialView)) {
+  if (["record", "voice", "review", "edit", "results"].includes(initialView)) {
     $(`[data-view='${initialView}']`).click();
   } else if (initialView === "results-group-menu") {
     // 묶음 안의 행에서 연 메뉴는 묶음 밖까지 나와야 한다. 잘리는지는 그 자리를
@@ -1689,6 +1705,7 @@ function navigateToView(view, traversal = false) {
   });
   if (view !== "review") review.reviewPlayer.pause();
   if (view === "results") outputs.loadOutputs();
+  if (view === "record") recording.opened();
 }
 $$('[data-view]').forEach(button => button.addEventListener('click', () => navigateToView(button.dataset.view)));
 $('#window-back').addEventListener('click', () => navigateToView(viewHistory.back(), true));

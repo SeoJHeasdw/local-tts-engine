@@ -635,6 +635,58 @@ button:disabled { cursor: not-allowed; }
 .inline-profile strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
 
 /* ============================================================================
+   화면 녹화
+   ----------------------------------------------------------------------------
+   화면 이름(Capture screen N)으로는 어느 모니터인지 알 수 없다. 썸네일과 원본
+   크기를 앞에 두고, 덱과 그대로 합쳐지는지는 한 줄로 붙인다.
+   ========================================================================== */
+.record-workspace { max-width: 760px; margin: 0 auto; display: grid; gap: var(--s4); align-items: start; }
+.record-card { display: grid; gap: var(--s4); padding: var(--s5); }
+.display-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--s3); }
+.display-empty {
+  grid-column: 1 / -1; margin: 0; padding: var(--s5); text-align: center; white-space: pre-line;
+  border: 1px dashed var(--line-3); border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm);
+}
+.display-card {
+  display: grid; gap: var(--s1); padding: var(--s2) var(--s2) var(--s3); text-align: left;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--raised); color: var(--text); cursor: pointer;
+}
+.display-card:hover:not(:disabled) { border-color: var(--line-2); }
+.display-card[aria-checked="true"] { border-color: var(--lime-edge); background: var(--lime-wash); box-shadow: 0 0 0 3px var(--lime-wash); }
+.display-card:disabled { cursor: default; opacity: .6; }
+.display-thumb { display: block; aspect-ratio: 16 / 10; margin-bottom: var(--s1); border-radius: var(--r-sm); background: var(--well); overflow: hidden; }
+.display-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.display-card strong { padding: 0 var(--s1); font: var(--fw-semi) var(--fs-md) var(--mono); }
+.display-card small { padding: 0 var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
+.display-card em { padding: 0 var(--s1); color: var(--text-3); font-size: var(--fs-xs); font-style: normal; line-height: var(--lh-snug); }
+.display-card em[data-tone="ready"] { color: var(--lime); }
+.display-card em[data-tone="warn"] { color: var(--warn); }
+
+.record-live { display: grid; gap: var(--s4); padding: var(--s5); }
+.record-clock { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: var(--s1) var(--s3); }
+.record-dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--danger); box-shadow: 0 0 0 5px var(--dngr-soft);
+}
+.record-clock strong { font: var(--fw-bold) 44px / 1 var(--mono); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.record-clock small { grid-column: 2; color: var(--text-3); font-size: var(--fs-sm); }
+.record-warning, .record-done-warnings {
+  margin: 0; padding: var(--s3); border: 1px solid var(--warn-edge); border-radius: var(--r-md);
+  background: var(--warn-wash); color: var(--warn); font-size: var(--fs-sm); line-height: var(--lh-snug);
+  text-align: left; white-space: pre-line;
+}
+.record-live .job-controls .primary-small { flex: 1; }
+
+.record-done { min-height: 320px; padding: var(--s5); }
+.record-done #record-done-summary { white-space: pre-line; overflow-wrap: anywhere; }
+.record-done-warnings { width: 100%; margin-top: var(--s4); }
+.record-done .complete-actions { flex-wrap: wrap; justify-content: center; }
+.record-done[data-tone="warn"] .complete-icon { background: var(--warn-wash); color: var(--warn); box-shadow: none; }
+.record-done[data-tone="failed"] .complete-icon { background: var(--dngr-wash); color: var(--danger); box-shadow: none; }
+/* 녹화는 다른 화면을 보는 동안에도 돈다. 메뉴에서 녹화 중임을 놓치지 않게 한다. */
+.nav-item.recording span { color: var(--danger); animation: pulse 1.25s infinite; }
+
+/* ============================================================================
    영상 검수·수정
    ========================================================================== */
 /* 이름·상태·고르기를 한 줄로 모은다. 제목과 설명, 조망 스트립, 도구 막대가

@@ -245,6 +245,11 @@ test("결과 상태는 세 배지가 아니라 한 마디로 읽힌다", () => {
   );
   assert.equal(outputState({ ok: true, review: { status: "approved" } }, []).key, "approved");
   assert.equal(outputState({ ok: true }, []).key, "ready");
+  // 프레임이 빠진 녹화는 완료이지만 확인할 곳 없음이라고 적지 않는다. 들어 보고
+  // 승인했다면 그 판단을 따른다.
+  assert.deepEqual(outputState({ ok: true, warnings: ["프레임 복제 3 · 누락 0"] }, []),
+    { key: "attention", label: "경고 1건", tone: "attention" });
+  assert.equal(outputState({ ok: true, warnings: ["x"], review: { status: "approved" } }, []).key, "approved");
 });
 
 test("레슨 편 이름을 짧은 표로 읽는다", () => {

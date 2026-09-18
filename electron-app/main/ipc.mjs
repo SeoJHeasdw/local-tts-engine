@@ -31,12 +31,14 @@ export function createIpcService({
   dialog,
   emit,
   findVideoTimeline,
+  finishRecording,
   finishedUnitNames,
   fs = nativeFs,
   ipcMain,
   jobSnapshot,
   launchPipeline,
   listOutputs,
+  listRecordingSources,
   loadCatalog,
   readActiveJob,
   readAppSettings,
@@ -52,6 +54,7 @@ export function createIpcService({
   setClearedFindings,
   setOutputReview,
   shell,
+  startRecording,
   state,
   writeActiveJob,
 }) {
@@ -469,6 +472,22 @@ export function createIpcService({
         ffmpeg: options.deliverable === "video",
       });
       return launchPipeline(options);
+    });
+
+    ipcMain.handle("studio:list-displays", async (event) => {
+      guard(event);
+      return listRecordingSources();
+    });
+
+    ipcMain.handle("studio:start-recording", async (event, rawOptions = {}) => {
+      guard(event);
+      return startRecording(rawOptions);
+    });
+
+    // 녹화의 정지는 결과를 남기는 정상 완료다. 결과를 버리는 중지(studio:cancel)와 다르다.
+    ipcMain.handle("studio:finish-recording", async (event) => {
+      guard(event);
+      return finishRecording();
     });
 
     ipcMain.handle("studio:pause", async (event) => {

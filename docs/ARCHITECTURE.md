@@ -11,14 +11,15 @@
 | `electron-app/main/application.mjs` | 서비스 조립과 앱 수명 |
 | `electron-app/main/runtime.mjs`, `job-process.mjs` | 프로세스 실행·진행 이벤트·중지·일시정지 |
 | `electron-app/main/production.mjs` | 입력 고정 → 합성 → 자막 → 촬영 → 검증·발행 |
-| `electron-app/main/capture/` | 화면 촬영: 규격·인코딩·프레임 전송·사이트 서버 |
-| `electron-app/main/workers/` | 별도 프로세스로 도는 입력 고정·자막·촬영 진입점 |
+| `electron-app/main/recording.mjs` | 디스플레이 수동 녹화의 시작·정지·결과 기록 |
+| `electron-app/main/capture/` | 화면 촬영: 규격·인코딩·프레임 전송·사이트 서버, 디스플레이 목록·녹화 |
+| `electron-app/main/workers/` | 별도 프로세스로 도는 입력 고정·자막·촬영·녹화 진입점 |
 | `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보와 학습 작업 |
 | `electron-app/main/editing/` | 합치기·페이지 교체·구간 편집·미리듣기 |
 | `electron-app/main/`의 나머지 서비스 | 경로·설정·목록·파일·미디어·결과·IPC·창 관리 |
 | `electron-app/renderer/app.js` | 초기화·화면 전환·제작 진행 |
 | `electron-app/renderer/job-pace.mjs` | 단계별 실측으로 내는 이 편·전체 남은 시간 |
-| `electron-app/renderer/controllers/` | 검수·클립 편집·최근 결과 화면 |
+| `electron-app/renderer/controllers/` | 검수·클립 편집·최근 결과·화면 녹화 화면 |
 | `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산·촬영 규격·자막 cue |
 | `src/local_tts_engine/course_pilot.py` | 강의 생성 CLI 조립 |
 | `src/local_tts_engine/course/` | 대본 입력·청킹·오디오·정렬·직렬화 |
@@ -89,6 +90,28 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 실패 시 입력을 보존하고 성공·중지·이어하기 기록 삭제 때 정리한다. 이어하기는 완료
 레슨의 실제 파일·화질·판본·해시를 검사한다. 실패 레슨의 음성·정렬·촬영은 새로 실행한다.
 새 작업은 과거 완성본을 자동으로 건너뛰지 않으며 앱의 생성 캐시는 항상 꺼져 있다.
+
+## 화면 녹화
+
+디스플레이 하나를 사람이 시작·정지하는 녹화다. 강의 제작 흐름과 따로 돌고 내레이션은
+다듬기의 구간 음성 교체로 넣는다. `main/workers/record-display.mjs`가 별도 프로세스로
+`capture/record-display.mjs`를 돌린다. 화면은 `capture/displays.mjs`가 avfoundation
+목록에서 `Capture screen N`을 이름으로 찾고, 녹화 직전에 다시 조회해 번호를 얻는다.
+
+| 조작 | 경로 | 결과 |
+| --- | --- | --- |
+| 정지 | `finishJobProcesses`: 작업자 PID에만 SIGUSR1 → ffmpeg stdin에 `q` | 무음 트랙을 붙이고 검증해 남긴다 |
+| 취소 | 공통 `cancelJobProcesses`: 그룹에 SIGTERM | 이번 녹화 폴더를 지운다 |
+| 일시정지 | 거절 | SIGSTOP은 영상에 공백을 만든다 |
+
+정지 신호를 그룹에 보내면 ffmpeg가 SIGUSR1로 죽어 파일을 닫지 못한다. 정지에는 강제
+종료 시계가 없고 `job.cancelled`를 쓰지 않는다. ffmpeg는 늘 파이프 stdin으로 띄운다.
+작업자는 단계를 `[record] {"phase":…}` 줄로 알리고 실행기가 `record-phase` 사건으로 바꾼다.
+
+결과는 `editOutputRoot/<날짜>/<이름>/`에 `<이름>.mp4`, `.capture.json`, 편집 결과와 같은
+모양의 `validation-report.json`(`operation: "record-display"`, `warnings`)으로 남아
+최근 결과·이름 변경·다듬기가 그대로 받는다. 검증에 실패한 녹화는 지우지 않고 실패로
+기록한다. 규격과 측정은 [VIDEO-QUALITY](VIDEO-QUALITY.md#화면-녹화)에 있다.
 
 ## 타임라인과 편집
 

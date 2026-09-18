@@ -3,6 +3,7 @@ import { createRuntimeService } from "./runtime.mjs";
 import { createCatalogService } from "./catalog.mjs";
 import { createMediaService } from "./media.mjs";
 import { createProductionService } from "./production.mjs";
+import { createRecordingService } from "./recording.mjs";
 import { createVoicesService } from "./voices.mjs";
 import { createEditingComposeService } from "./editing/compose.mjs";
 import { createEditingPagesService } from "./editing/pages.mjs";
@@ -44,6 +45,9 @@ export function createStudio({
   const { writeActiveJob, clearActiveJob, readActiveJob, finishedUnitNames, launchPipeline } = createProductionService({
     emit, ffprobe, jobSnapshot, loadCatalog, requireRuntimeTool, runProcess, state,
   });
+  const { listRecordingSources, startRecording, finishRecording } = createRecordingService({
+    emit, jobSnapshot, readAppSettings, requireRuntimeTool, runProcess, state,
+  });
   const {
     generateReplacementVoice, runVoiceCandidates, runTextVoiceCandidates, selectTextVoice,
     runFineTune,
@@ -73,13 +77,13 @@ export function createStudio({
   });
   const { registerIpc, cleanupReviewPreviews } = createIpcService({
     applyVoiceSettings, assertRuntime, chosenRecord, clearActiveJob,
-    deleteOutput, dialog, emit, findVideoTimeline,
+    deleteOutput, dialog, emit, findVideoTimeline, finishRecording,
     finishedUnitNames, ipcMain, jobSnapshot, launchPipeline,
-    listOutputs, loadCatalog, readActiveJob, readAppSettings,
+    listOutputs, listRecordingSources, loadCatalog, readActiveJob, readAppSettings,
     registerSelected, renameOutput, requireRuntimeTool, resolveOutputFile,
     runFineTune, runTextVoiceCandidates, runVideoEdit, saveAppSettings,
     selectTextVoice, setClearedFindings, setOutputReview, shell,
-    state, writeActiveJob,
+    startRecording, state, writeActiveJob,
   });
   const { createWindow } = createWindowService({
     BrowserWindow, app, state,
