@@ -69,6 +69,21 @@ Anthropic의 `안쓰로픽`과 `엔트로픽`은 모두 거리 0.100으로 문�
 이는 읽기 지정이며 새 합성의 청취 승인과는 별개다. 다른 미등록 용어를 자동으로
 사전에 등록하지 않는다. 이 결정은 음성 기본값·자동 검수·재시도 예산을 바꾸지 않는다.
 
+## 화면 촬영의 소유와 브라우저 판본
+
+2026-09-18 결정: 화면 촬영과 자막을 `udemy-agent`에서 이 저장소로 옮겼다. 영상
+제작이 여기서 끝나는데 촬영 도구만 저쪽에 있어, 앱이 덱 CLI에 말을 걸려고 얼려 둔
+입력의 `narration.config.json`을 제작 중에 고쳐 썼다 되돌리고 있었다. 이제
+내보내기·자막·촬영이 타임라인 파일과 결과 폴더를 직접 받으므로 그 왕복이 없다.
+덱 화면의 약속과 대본·편집점 판정은 덱에 남기고 한 지점에서만 부른다.
+
+같은 날 브라우저 판본을 `playwright@1.62.0`(Chromium 1234)에 고정했다. 옮기면서
+1.63.0(Chromium 1243)을 받았더니, 코드가 같은데도 4K에서 받는 프레임이 3초 시험
+기준 95개에서 65개로 줄고 복제 프레임이 5~6개에서 41~47개로 늘었다(각 3회 측정,
+1080p·1440p는 거의 동일). 브라우저를 올릴 때는 `npm run check:capture`로 세 화질을
+다시 재고 [VIDEO-QUALITY](VIDEO-QUALITY.md)의 수치를 갱신한다. 이 측정은 3초짜리
+합성 화면 기준이며 실제 강의 전체의 4K 성능 보증이 아니다.
+
 ## 모델·코드 라이선스 확인 기록
 
 | 확인일 | 대상·당시 판단 | 출처 |
@@ -80,6 +95,7 @@ Anthropic의 `안쓰로픽`과 `엔트로픽`은 모두 거리 0.100으로 문�
 | 2026-08-25 | MLX-Tune 0.6.0: Apache-2.0, `.venv-train`에서 LoRA 학습 | [저장소](https://github.com/ARahim3/mlx-tune), [Qwen 학습 예제](https://github.com/ARahim3/mlx-tune/blob/main/examples/20_qwen3_tts_finetuning.py) |
 | 2026-09-03 | Whisper 원본 코드·가중치: MIT. 독립 검수에 MLX FP16 변환 모델 사용 | [Whisper 라이선스](https://github.com/openai/whisper/blob/main/LICENSE), [변환 모델](https://huggingface.co/mlx-community/whisper-large-v3-turbo-asr-fp16) |
 | 2026-08-23 | Fish S2 Pro: 상업 이용에 별도 서면 라이선스 필요, 후보 제외. S2.1 Pro 클라우드 경로도 로컬·비공개 목표와 맞지 않아 제외 | [S2 Pro 라이선스](https://huggingface.co/fishaudio/s2-pro/blob/main/LICENSE.md), [S2.1 당시 안내](https://fish.audio/blog/s2-1-pro-free-api/) |
+| 2026-09-18 | Playwright 1.62.0: Apache-2.0, 화면 촬영용 브라우저 구동에 채택. 내려받는 Chromium은 BSD 계열이며 이 저장소에 커밋하지 않는다 | [라이선스](https://github.com/microsoft/playwright/blob/main/LICENSE), [Chromium 라이선스](https://chromium.googlesource.com/chromium/src/+/main/LICENSE) |
 
 MLX-Tune LoRA는 Qwen의 공식 CUDA 전체 SFT와 다른 경로다.
 [공식 학습 문서](https://github.com/QwenLM/Qwen3-TTS/blob/main/finetuning/README.md)는

@@ -14,6 +14,17 @@ import {
 
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+// playwright가 설치돼 있어도 브라우저 본체를 내려받지 않으면 촬영은 실행 순간에야
+// 실패한다. 제작을 시작하기 전에 알 수 있도록 여기서 확인한다.
+async function hasCaptureBrowser() {
+  try {
+    const { chromium } = await import("playwright");
+    return await fs.access(chromium.executablePath()).then(() => true, () => false);
+  } catch {
+    return false;
+  }
+}
 const SETTINGS_PATH = path.join(PROJECT_ROOT, "artifacts/app-settings.json");
 const flags = new Set(process.argv.slice(2));
 
@@ -78,8 +89,10 @@ async function buildReport() {
     qualityModel: Boolean(qualityModelPath),
     courseConfig: await exists(path.join(deckRoot, "narration.config.json")),
     courseScripts: await exists(path.join(deckRoot, "script/course")),
-    captionRunner: await exists(path.join(deckRoot, "tools/captions.mjs")),
-    captureRunner: await exists(path.join(deckRoot, "tools/capture.mjs")),
+    // 자막과 촬영은 이 저장소가 소유한다. 촬영에는 실제 브라우저가 필요하다.
+    captionRunner: await exists(path.join(PROJECT_ROOT, "electron-app/main/workers/captions.mjs")),
+    captureRunner: await exists(path.join(PROJECT_ROOT, "electron-app/main/workers/capture.mjs")),
+    captureBrowser: await hasCaptureBrowser(),
     productionRunner: await exists(path.join(deckRoot, "tools/production.mjs"))
       && await exists(path.join(deckRoot, "tools/preflight.mjs")),
     sourceCompiler: await exists(path.join(deckRoot, "node_modules/typescript/package.json")),
@@ -139,6 +152,7 @@ function printReport(report) {
     courseScripts: "강의 대본",
     captionRunner: "자막 자동화 도구",
     captureRunner: "영상 촬영 도구",
+    captureBrowser: "촬영용 브라우저",
     productionRunner: "강의 입력 고정·검사 도구",
     sourceCompiler: "강의 소스 분석 도구",
   };

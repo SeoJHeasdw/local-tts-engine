@@ -4,28 +4,27 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileSha256, findVideo } from '../../electron-app/main/files.mjs';
-import { pathToFileURL } from 'node:url';
-import { VIDEO_QUALITIES, videoQuality, captureVideoFileName, videoFrameRate } from '../../electron-app/shared/video-quality.mjs';
+import { VIDEO_QUALITIES, captureFrameCount, captureVideoFileName, videoFrameRate, videoQuality } from '../../electron-app/shared/video-quality.mjs';
 import { normalizeOptions } from '../../electron-app/shared/options.mjs';
 import { createProductionService } from '../../electron-app/main/production.mjs';
-import { APP_SETTINGS_PATH, dateFolder, runtimePaths } from '../../electron-app/main/paths.mjs';
+import { dateFolder } from '../../electron-app/main/paths.mjs';
 
-// sourceProjectRoot의 기본값은 "옆 폴더에 udemy-agent가 있다"는 추측이라, 강의
-// 저장소가 다른 자리에 있으면 틀린다. 실제 앱처럼 저장된 설정을 따라가야 어느
-// 환경에서도 진짜 강의 저장소 위치를 찾는다.
-async function configuredDeckRoot() {
-  const stored = await fs.readFile(APP_SETTINGS_PATH, 'utf8').then(JSON.parse).catch(() => ({}));
-  return runtimePaths(stored.paths).deckRoot;
-}
-
-test('앱의 화질 선택은 CLI의 ID·해상도·프레임률 계약과 일치한다', async () => {
-  const deckRoot = await configuredDeckRoot();
-  const { CAPTURE_PROFILES } = await import(pathToFileURL(path.join(deckRoot, 'tools/capture-quality.mjs')));
+// 촬영 규격은 이 저장소가 소유하며 정본은 shared/video-quality.mjs 하나다. 예전에는
+// 덱에도 같은 표가 있어 두 벌을 대조했는데, 촬영이 이쪽으로 오면서 대조할 상대가
+// 없어졌다. 대신 화면 선택지와 촬영이 같은 표를 읽는지를 여기서 고정한다.
+test('화면이 고르는 화질과 촬영이 쓰는 규격은 같은 표에서 나온다', () => {
+  assert.deepEqual(Object.keys(VIDEO_QUALITIES), ['standard', 'high', 'ultra']);
   for (const [id, quality] of Object.entries(VIDEO_QUALITIES)) {
-    const profile = CAPTURE_PROFILES[id];
-    assert.deepEqual([quality.width, quality.height, quality.fps], [profile.width, profile.height, profile.fps]);
+    assert.equal(quality.id, id);
     assert.equal(normalizeOptions({ videoQuality: id }).videoQuality, id);
+    // 촬영 인코더가 읽는 항목이 하나라도 빠지면 규격 없이 찍게 된다.
+    for (const key of ['width', 'height', 'fps', 'crf']) {
+      assert.ok(Number.isInteger(quality[key]) && quality[key] > 0, `${id}.${key}`);
+    }
+    assert.ok(Object.isFrozen(quality), `${id}는 실행 중에 바뀌면 안 된다`);
   }
+  assert.deepEqual([VIDEO_QUALITIES.standard.width, VIDEO_QUALITIES.high.width, VIDEO_QUALITIES.ultra.width],
+    [1920, 2560, 3840]);
   assert.equal(normalizeOptions().videoQuality, 'high');
   for (const id of ['4k', '__proto__', '', true]) assert.throws(() => videoQuality(id));
 });
@@ -104,17 +103,20 @@ test('선택한 화질·자막 파일이 없으면 예전 MP4로 대체하지 �
   assert.equal(await findVideo(dir, 'sample', expected), path.join(dir, expected));
 });
 
-test('앱과 CLI가 같은 파일명을 사용하고 마지막 음성 프레임을 덮는다', async () => {
-  const deckRoot = await configuredDeckRoot();
-  const cli = await import(pathToFileURL(path.join(deckRoot, 'tools/capture-quality.mjs')));
-  for (const quality of Object.keys(VIDEO_QUALITIES)) for (const captions of [false, true]) {
-    assert.equal(captureVideoFileName('lesson', { videoQuality: quality, burnCaptions: captions }),
-      cli.captureVideoFileName('lesson', { quality, burnCaptions: captions }));
-  }
-  assert.equal(cli.captureFrameCount(1001, 25), 26);
-  assert.equal(cli.captureFrameCount(1000, 25), 25);
-  assert.equal(cli.captureFrameCount(20, 25), 1);
-  assert.throws(() => cli.captureFrameCount(NaN, 25));
+// 촬영이 붙이는 이름과 검증이 찾는 이름은 같은 함수에서 나오지만, 이름 규칙 자체가
+// 바뀌면 이미 만든 완성본을 못 찾는다. 규칙을 글자 그대로 고정한다.
+test('완성본 이름 규칙과 마지막 음성 프레임을 덮는 계산을 고정한다', () => {
+  assert.equal(captureVideoFileName('lesson'), 'lesson.mp4');
+  assert.equal(captureVideoFileName('lesson', { videoQuality: 'standard', burnCaptions: true }), 'lesson-captioned.mp4');
+  assert.equal(captureVideoFileName('lesson', { videoQuality: 'high' }), 'lesson-high.mp4');
+  assert.equal(captureVideoFileName('lesson', { videoQuality: 'ultra', burnCaptions: true }), 'lesson-ultra-captioned.mp4');
+  assert.equal(captureVideoFileName('lesson', { videoQuality: 'high', burnCaptions: true, durationSuffix: '-30s' }),
+    'lesson-high-captioned-30s.mp4');
+  // 프레임 수는 올림해 마지막 음성 구간을 덮는다. 내림으로 반 프레임을 버리지 않는다.
+  assert.equal(captureFrameCount(1001, 25), 26);
+  assert.equal(captureFrameCount(1000, 25), 25);
+  assert.equal(captureFrameCount(20, 25), 1);
+  assert.throws(() => captureFrameCount(NaN, 25));
 });
 
 test('이어하기는 파일·화질·판본·해시가 확인되는 완성본만 건너뛴다', async t => {

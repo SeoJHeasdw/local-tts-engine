@@ -116,18 +116,18 @@ def splice_audio(original, rate, replacements):
     return audio, evidence
 
 
-def caption_runtime(deck, work):
-    # Extract only the pure caption helpers. The normal legacy CLI also reads
-    # .env.local, which neither this repair nor these helpers need or access.
-    source = (deck / "tools/course-media.mjs").read_text()
-    pure = source[source.index("function splitLongSentence("):source.index("function concatPath(")]
-    runtime = work / "caption-runtime.mjs"
-    runtime.write_text('import fs from "node:fs"; import path from "node:path";\n'
-        'function writeJson(file,value){fs.writeFileSync(file,JSON.stringify(value,null,2)+"\\n");}\n' + pure +
-        '\nbuildCaptions(JSON.parse(fs.readFileSync(process.argv[2])),JSON.parse(fs.readFileSync(process.argv[3])),process.argv[4]);\n')
-    config = work / "caption-config.json"
-    config.write_text(json.dumps({"captions": json.loads((deck / "narration.config.json").read_text())["captions"]}))
-    return runtime, config
+CAPTION_WORKER = Path(__file__).resolve().parents[1] / "electron-app/main/workers/captions.mjs"
+
+
+def write_captions(timeline_path, out_dir):
+    """제작과 같은 자막 생성기로 cue를 만든다.
+
+    예전에는 덱 CLI의 소스에서 순수 함수만 잘라 임시 모듈로 실행했다. 자막이 이
+    저장소의 모듈이 된 뒤로는 제작이 부르는 그 진입점을 그대로 부른다. 덕분에
+    아래 '원본과 같은 규칙인지' 검사가 실제 제작 경로를 검사하게 된다.
+    """
+    subprocess.run(["node", str(CAPTION_WORKER), "--timeline", str(timeline_path),
+                    "--out-dir", str(out_dir)], check=True)
 
 
 def video_anchors(original, timeline, old_captions, new_captions):
@@ -220,7 +220,9 @@ def main():
     parser.add_argument("--ready", type=Path, required=True)
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--deck", type=Path, required=True)
+    # 자막이 이 저장소로 오면서 덱 경로는 더 쓰지 않는다. 저장된 검수 명령이 아직
+    # 넘기므로 받기만 하고 버린다.
+    parser.add_argument("--deck", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--output-name", help="Optional MP4 basename for a successive edit")
     parser.add_argument("--prepare-only", action="store_true")
@@ -267,14 +269,13 @@ def main():
             raise ValueError(f"수정 타임라인 범위를 확인하세요: {entry['key']}")
     timeline_path = args.output_dir / "timeline.json"
     timeline_path.write_text(json.dumps(timeline, ensure_ascii=False, indent=2) + "\n")
-    runtime, config = caption_runtime(args.deck, work)
     baseline = work / "caption-baseline"
     baseline.mkdir(exist_ok=True)
-    subprocess.run(["node", str(runtime), ready["sourceTimeline"], str(config), str(baseline)], check=True)
+    write_captions(ready["sourceTimeline"], baseline)
     old_captions = json.loads((args.project / "captions.json").read_text())
     if old_captions != json.loads((baseline / "captions.json").read_text()):
         raise ValueError("현재 자막 생성 규칙이 원본과 다릅니다. 기존 판본이 필요합니다.")
-    subprocess.run(["node", str(runtime), str(timeline_path), str(config), str(args.output_dir)], check=True)
+    write_captions(timeline_path, args.output_dir)
     captions = json.loads((args.output_dir / "captions.json").read_text())
     anchors, compact = video_anchors(original, timeline, old_captions, captions)
     plan = {"policy": policy, "approvalBasis": approval, "sourceAudioPath": str(input_audio.resolve()),

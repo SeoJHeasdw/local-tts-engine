@@ -2,8 +2,8 @@
 
 ## 책임과 코드 위치
 
-`udemy-agent`는 강의 대본·화면·자료·캡처 도구, 이 저장소는 개인 음성·TTS 작업·
-자막·타임라인·완성 영상을 소유한다. 실행법은 [README](../README.md)에 있다.
+`udemy-agent`는 강의 대본·화면·자료와 그 소스 고정, 이 저장소는 개인 음성·TTS 작업·
+자막·타임라인·화면 촬영·완성 영상을 소유한다. 실행법은 [README](../README.md)에 있다.
 
 | 위치 | 책임 |
 | --- | --- |
@@ -11,13 +11,15 @@
 | `electron-app/main/application.mjs` | 서비스 조립과 앱 수명 |
 | `electron-app/main/runtime.mjs`, `job-process.mjs` | 프로세스 실행·진행 이벤트·중지·일시정지 |
 | `electron-app/main/production.mjs` | 입력 고정 → 합성 → 자막 → 촬영 → 검증·발행 |
+| `electron-app/main/capture/` | 화면 촬영: 규격·인코딩·프레임 전송·사이트 서버 |
+| `electron-app/main/workers/` | 별도 프로세스로 도는 입력 고정·자막·촬영 진입점 |
 | `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보와 학습 작업 |
 | `electron-app/main/editing/` | 합치기·페이지 교체·구간 편집·미리듣기 |
 | `electron-app/main/`의 나머지 서비스 | 경로·설정·목록·파일·미디어·결과·IPC·창 관리 |
 | `electron-app/renderer/app.js` | 초기화·화면 전환·제작 진행 |
 | `electron-app/renderer/job-pace.mjs` | 단계별 실측으로 내는 이 편·전체 남은 시간 |
 | `electron-app/renderer/controllers/` | 검수·클립 편집·최근 결과 화면 |
-| `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산 |
+| `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산·촬영 규격·자막 cue |
 | `src/local_tts_engine/course_pilot.py` | 강의 생성 CLI 조립 |
 | `src/local_tts_engine/course/` | 대본 입력·청킹·오디오·정렬·직렬화 |
 | `src/local_tts_engine/course_catalog.py` | 생성 모델을 로드하지 않는 목록 CLI |
@@ -40,13 +42,25 @@
 
 ```text
 preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검수·정렬
-            → export → 덱 자막·촬영 → 파일 검증 → 발행
+            → export → 자막 → 촬영 → 파일 검증 → 발행
 ```
 
 `main/workers/prepare-input.mjs`가 덱의 `tools/production.mjs`를 별도 프로세스로
 실행한다. 화면·대본·자료·순서를 `.production-input`에 고정하고 전후 해시, 선택 ID·
 스텝, 챕터 린터를 검사한다. 영상이면 타입 검사·정적 빌드도 수행한다. 한 챕터의 모든
-레슨은 이 입력을 사용하며 원본 `narration.config.json`을 제작 중 수정하지 않는다.
+레슨은 이 입력을 사용한다. 제작은 고정한 입력을 읽기만 하며 고쳐 쓰지 않는다.
+
+내보내기·자막·촬영은 preset 이름이 아니라 타임라인 파일과 결과 폴더를 직접 받는다.
+영상 범위·음성 정의는 `exportContract`가 manifest에서 만들어 인자로 넘긴다.
+덱의 `narration.config.json`은 레슨 목록을 읽는 입력일 뿐 제작 중 쓰지 않는다.
+
+촬영은 `main/workers/capture.mjs`가 별도 프로세스로 돈다. 중지 버튼이 프로세스
+그룹째 끝낼 수 있고 페이지 충돌이 앱을 죽이지 않는다. 안에서는 규격
+(`shared/video-quality.mjs`), 프레임 전송(`capture/recorder.mjs`), 인코딩
+(`capture/encoding.mjs`), 사이트 서버(`capture/site.mjs`)가 화면 종류와 무관하게
+동작하고, 덱 고유의 조작만 `capture/deck-page.mjs`에 모인다. 대본·편집점 판정은
+덱이 소유하므로 `capture/deck-source.mjs`가 얼려 둔 입력의 `tools/production.mjs`를
+불러 쓴다. 소스 판본 검사를 건너뛰려면 `--no-source-check`를 명시해야 한다.
 
 발음 처리는 각 레슨의 `course_entries`에서 한 번 수행한다. 미등록 용어는 합성을
 막지 않고 실제 청크 시각과 함께 완료 후 검수 대상으로 남긴다. 상세는 [QUALITY](QUALITY.md).

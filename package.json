@@ -13,12 +13,14 @@
     "test:app": "node --test tests/electron/*.test.mjs",
     "test:python": ".venv/bin/python -m pytest -q",
     "check": "npm run doctor -- --strict && npm run check:architecture && npm test",
-    "check:architecture": "node scripts/check_architecture.mjs"
+    "check:architecture": "node scripts/check_architecture.mjs",
+    "check:capture": "node scripts/check_capture.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "devDependencies": {
-    "electron": "44.0.0"
+    "electron": "44.0.0",
+    "playwright": "1.62.0"
   }
 }

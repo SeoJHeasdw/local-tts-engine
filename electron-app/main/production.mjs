@@ -52,41 +52,18 @@ export function createProductionService({
     return checked.filter(Boolean);
   }
 
-  async function writeDeckContract(manifest, options, providerName, studio) {
-    const raw = await fs.readFile(studio.configPath, "utf8");
-    const config = JSON.parse(raw);
-    const provider = providerForOptions(options, {
-      repository: manifest.model,
-      revision: manifest.modelRevision,
-    });
-    config.presets ||= {};
-    config.providers ||= {};
-    const previous = {
-      preset: Object.hasOwn(config.presets, options.name) ? config.presets[options.name] : null,
-      provider: Object.hasOwn(config.providers, providerName) ? config.providers[providerName] : null,
-      outputRoot: config.outputRoot,
+  // 영상 범위·음성 정의는 앱이 이미 알고 있다. 예전에는 이것을 얼려 둔 덱 사본의
+  // narration.config.json에 써넣었다 되돌렸는데, 덱 CLI가 preset 이름으로만 말을
+  // 알아들었기 때문이다. 내보내기·자막·촬영이 모두 이 저장소로 오면서 고정한
+  // 입력을 제작 중에 고쳐 쓸 이유가 없어졌다.
+  function exportContract(manifest, options) {
+    return {
+      preset: { name: options.name, ...presetFromManifest(manifest, options) },
+      provider: {
+        provider: `${options.name}-provider`,
+        ...providerForOptions(options, { repository: manifest.model, revision: manifest.modelRevision }),
+      },
     };
-    config.presets[options.name] = presetFromManifest(manifest, options);
-    config.providers[providerName] = provider;
-    config.outputRoot = path.relative(studio.deckRoot, studio.captionOutputRoot) || ".";
-
-    const temporary = `${studio.configPath}.studio-${process.pid}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    await fs.rename(temporary, studio.configPath);
-    emit({ type: "log", stream: "stdout", text: "영상 범위를 실제 음성 길이에 맞췄습니다.\n" });
-    return previous;
-  }
-
-  async function restoreDeckContract(options, providerName, previous, studio) {
-    const config = JSON.parse(await fs.readFile(studio.configPath, "utf8"));
-    if (previous.preset === null) delete config.presets[options.name];
-    else config.presets[options.name] = previous.preset;
-    if (previous.provider === null) delete config.providers[providerName];
-    else config.providers[providerName] = previous.provider;
-    config.outputRoot = previous.outputRoot;
-    const temporary = `${studio.configPath}.studio-${process.pid}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    await fs.rename(temporary, studio.configPath);
   }
 
   async function validateResult({ sourceDir, renderDir, options, studio }) {
@@ -188,7 +165,6 @@ export function createProductionService({
     const job = state.activeJob;
     const sourceDir = path.join(studio.ttsOutputRoot, dateFolder(), options.name);
     const renderDir = path.join(studio.captionOutputRoot, options.name);
-    const providerName = `${options.name}-provider`;
     const ttsArgs = [
       "-m", "local_tts_engine.course_pilot",
       "--source-project", studio.sourceProjectRoot,
@@ -211,48 +187,45 @@ export function createProductionService({
     // 여기서 한 번 알려, 남은 시간이 촬영·검증 단계에서도 답을 낼 수 있게 한다.
     emit({ type: "unit-duration", durationMs: Number(manifest.durationMs) || 0 });
 
-    let previousContract = null;
-    try {
-      if (options.deliverable !== "audio") {
-        previousContract = await writeDeckContract(manifest, options, providerName, studio);
-        await runProcess("export", requireRuntimeTool("basePython", "강의 도구 Python"), [
-          "-m", "local_tts_engine.export_udemy",
-          "--source-dir", sourceDir,
-          "--deck-root", studio.deckRoot,
-          "--preset", options.name,
-          "--provider", providerName,
-        ]);
-        await runProcess("captions", requireRuntimeTool("node", "Node.js"), [
-          "tools/captions.mjs",
-          "--preset", options.name,
-          "--provider", providerName,
-        ], { cwd: studio.deckRoot });
-      }
+    if (options.deliverable !== "audio") {
+      const { preset, provider } = exportContract(manifest, options);
+      emit({ type: "log", stream: "stdout", text: "영상 범위를 실제 음성 길이에 맞췄습니다.\n" });
+      await runProcess("export", requireRuntimeTool("basePython", "강의 도구 Python"), [
+        "-m", "local_tts_engine.export_udemy",
+        "--source-dir", sourceDir,
+        "--out-dir", renderDir,
+        "--preset-json", JSON.stringify(preset),
+        "--provider-json", JSON.stringify(provider),
+      ]);
+      await runProcess("captions", requireRuntimeTool("node", "Node.js"), [
+        path.join(ROOT, "electron-app/main/workers/captions.mjs"),
+        "--timeline", path.join(renderDir, "timeline.json"),
+        "--out-dir", renderDir,
+      ]);
+    }
 
-      if (options.deliverable === "video") {
-        const captureArgs = [
-          "tools/capture.mjs",
-          "--preset", options.name,
-          "--provider", providerName,
-          "--no-cache",
-          "--quality", options.videoQuality ?? "standard",
-        ];
-        if (captureSiteDir) captureArgs.push("--site-dir", captureSiteDir);
-        if (options.burnCaptions) captureArgs.push("--burn-captions");
-        try {
-          await runProcess("capture", requireRuntimeTool("node", "Node.js"), captureArgs, { cwd: studio.deckRoot });
-        } catch (error) {
-          if (job.cancelled) throw error;
-          emit({
-            type: "log",
-            stream: "stderr",
-            text: "화면 촬영이 중간에 멈춰 같은 음성과 타임라인으로 한 번 다시 시도합니다.\n",
-          });
-          await runProcess("capture", requireRuntimeTool("node", "Node.js"), captureArgs, { cwd: studio.deckRoot });
-        }
+    if (options.deliverable === "video") {
+      const captureArgs = [
+        path.join(ROOT, "electron-app/main/workers/capture.mjs"),
+        "--timeline", path.join(renderDir, "timeline.json"),
+        "--out-dir", renderDir,
+        "--deck-root", studio.deckRoot,
+        "--no-cache",
+        "--quality", options.videoQuality ?? "standard",
+      ];
+      if (captureSiteDir) captureArgs.push("--site-dir", captureSiteDir);
+      if (options.burnCaptions) captureArgs.push("--burn-captions");
+      try {
+        await runProcess("capture", requireRuntimeTool("node", "Node.js"), captureArgs);
+      } catch (error) {
+        if (job.cancelled) throw error;
+        emit({
+          type: "log",
+          stream: "stderr",
+          text: "화면 촬영이 중간에 멈춰 같은 음성과 타임라인으로 한 번 다시 시도합니다.\n",
+        });
+        await runProcess("capture", requireRuntimeTool("node", "Node.js"), captureArgs);
       }
-    } finally {
-      if (previousContract) await restoreDeckContract(options, providerName, previousContract, studio);
     }
 
     const report = await validateResult({ sourceDir, renderDir, options, studio });
@@ -453,5 +426,5 @@ export function createProductionService({
     }
   }
 
-  return { writeActiveJob, clearActiveJob, readActiveJob, finishedUnitNames, writeDeckContract, restoreDeckContract, validateResult, runPipelineUnit, chapterUnitName, chapterUnits, runPipeline, launchPipeline, cleanupCaptureSite };
+  return { writeActiveJob, clearActiveJob, readActiveJob, finishedUnitNames, exportContract, validateResult, runPipelineUnit, chapterUnitName, chapterUnits, runPipeline, launchPipeline, cleanupCaptureSite };
 }

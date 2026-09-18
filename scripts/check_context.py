@@ -15,8 +15,7 @@ REQUIRED_PATHS = [
     SOURCE_ROOT / "VIDEO-PACING-GUIDELINES.md",
     SOURCE_ROOT / "deck/script/course/ch01.md",
     SOURCE_ROOT / "deck/narration/pronunciation.ko.json",
-    SOURCE_ROOT / "deck/tools/captions.mjs",
-    SOURCE_ROOT / "deck/tools/capture.mjs",
+    # 자막·촬영은 이 저장소가 소유한다. 덱에서 기대하는 것은 소스 고정과 판정뿐이다.
     SOURCE_ROOT / "deck/tools/production.mjs",
     SOURCE_ROOT / "deck/tools/preflight.mjs",
     SOURCE_ROOT / "deck/narration.config.json",

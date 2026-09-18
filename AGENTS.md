@@ -6,11 +6,10 @@
 2. `python3.13 scripts/check_context.py`로 강의 연결과 음성 정본을 확인한다.
 3. 작업 트리의 기존 수정을 보존한다. 구조·코드 변경 후 `npm run check`를 실행한다.
 
-이 저장소는 M4 Max 36GB에서 개인 음성으로 한국어 강의를 제작하는 로컬 엔진이다.
-강의 소스는 `/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent`에 있다.
+이 저장소는 Apple Silicon Mac에서 개인 음성·자막·화면 촬영으로 강의 영상을 만드는
+로컬 엔진이다. 강의 대본과 화면은 `/Users/jaehoseo/Desktop/vswrk/edu/udemy-agent`에 있다.
 Python은 3.13.12, 기본 검사 환경은 `.venv`, 제작 환경은 `.venv-train`이다.
 모델 설치·Chatterbox 비교·LoRA 튜닝은 완료됐다. 요청 없이 반복하지 않는다.
-ElevenLabs를 기본 경로로 쓰거나 결제하지 않는다.
 
 ## 제작·검수 정책
 
@@ -27,32 +26,35 @@ ElevenLabs를 기본 경로로 쓰거나 결제하지 않는다.
   품질과 성능의 교환이 필요하면 효과와 손실을 설명하고 사용자 판단을 받는다.
 - 발음문과 자막 원문을 분리하고 의미 단위의 짧은 클립으로 합성한다. 길이는 실제
   오디오에서 측정한다. 자동 검사와 최종 청취 승인을 구분한다.
-- 앱의 새 제작은 음성·정렬·촬영 캐시를 항상 우회한다. 독립 CLI 해시 캐시는 허용한다.
+- 앱의 새 제작은 음성·정렬·촬영 캐시를 항상 우회한다. `course_pilot`을 직접 실행할
+  때의 클립 해시 캐시는 허용한다.
   명시적인 이어하기에서만 검증된 완료 레슨을 건너뛰며 실패 레슨은 새로 만든다.
-- 모델 비교는 같은 원문·참조·출력 포맷을 사용하고 목소리 유사도, 한국어·영어 발음,
-  억양, 반복·누락, 장문 안정성, 생성 속도와 최대 메모리를 기록한다.
 
 ## 데이터와 변경 경계
 
-- `data/private/voice/`의 원본·정제본은 불변 정본이다. 덮어쓰기·이동·재인코딩하지
-  않는다. `udemy-agent/deck/voice/`는 이관 전 복구용 사본이다.
+- 음성 원본·정제본은 불변 정본이다. 덮어쓰기·이동·재인코딩하지 않는다.
 - 모델 가중치, 음성 원본, 생성물, 캐시, `.env`, 토큰은 Git에 커밋하지 않는다.
-  API 키·로그인 세션·ElevenLabs 비밀값을 요청하거나 문서에 기록하지 않는다.
+  API 키·로그인 세션을 요청하거나 문서에 기록하지 않는다.
 - 모델·음성·코드 선택 시 상업용 라이선스를 검증하고 `docs/DECISIONS.md`에
   출처와 날짜를 남긴다. 기존 라이선스 기록은 최신 검증을 대신하지 않는다.
-- 강의 대본·슬라이드·캡처 도구는 `udemy-agent`, 개인 음성·TTS 작업·자막·타임라인·
-  완성 영상은 이 저장소가 소유한다. 덱 수정 전에는 해당 저장소 지침과
-  `NARRATION-PIPELINE.md`, `VIDEO-PACING-GUIDELINES.md`를 읽는다.
-- 기존 `deck/tools/narration.mjs`의 클립·해시·타임라인 계약, Python CLI 이름과
-  저장된 검수 명령이 쓰는 `scripts/` 경로를 유지한다.
+- 강의 대본·슬라이드·화면과 그 소스 고정은 `udemy-agent`, 개인 음성·TTS 작업·
+  자막·타임라인·화면 촬영·완성 영상은 이 저장소가 소유한다. 덱 수정 전에는 해당
+  저장소 지침과 `NARRATION-PIPELINE.md`, `VIDEO-PACING-GUIDELINES.md`를 읽는다.
+- 촬영이 기대는 덱 화면의 약속(`.stage`, `[data-capture-slide]`, `udemy-deck-sync`
+  채널, 이동 키)은 덱이 소유한다. 이 약속을 아는 코드는
+  `electron-app/main/capture/deck-page.mjs` 하나로 모은다.
+- 대본·편집점의 판정(`checkCaptureContract`, `inspectProductionTimeline`)은 덱에
+  두고 `capture/deck-source.mjs`를 통해서만 부른다. 같은 판정을 이쪽에 베끼지 않는다.
+- 클립·해시·타임라인 계약, Python CLI 이름과 저장된 검수 명령이 쓰는 `scripts/`
+  경로를 유지한다.
 - 서비스·컨트롤러·공유 계산의 배치는 `docs/ARCHITECTURE.md`를 따른다.
   앱 동작 검사는 `tests/electron/`에서 실제 서비스 모듈을 import한다.
 
 ## 협업과 문서
 
 사용자에게는 한국어로 결론부터 간결하게 보고한다. 설치·모델 다운로드 전에는
-목적과 예상 용량을 알린다. 생성 범위는 30~60초 → CH01 일부 → CH01 전체 →
-전체 강의 순으로 승인받아 넓히며, 한 번에 전체 7~8시간을 생성하지 않는다.
+목적과 예상 용량을 알린다. 요청받은 범위만 생성하며 한 번에 강의 전체를
+생성하지 않는다.
 
 README는 사용법, HANDOFF는 현재 상태·결과 위치, ARCHITECTURE는 구조·데이터 계약,
 QUALITY는 음성 검수, VIDEO-QUALITY는 영상 규격·측정, DECISIONS는 승인·라이선스

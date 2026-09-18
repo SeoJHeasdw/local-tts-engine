@@ -1,7 +1,23 @@
 # 현재 상태와 인수인계
 
-갱신: 2026-09-11. 작업 절차는 [AGENTS](../AGENTS.md), 실행은 [README](../README.md),
+갱신: 2026-09-18. 작업 절차는 [AGENTS](../AGENTS.md), 실행은 [README](../README.md),
 구조는 [ARCHITECTURE](ARCHITECTURE.md), 음성 규칙은 [QUALITY](QUALITY.md)를 따른다.
+
+## 촬영 이관 (2026-09-18)
+
+화면 촬영과 자막이 `udemy-agent`에서 이 저장소로 왔다. 덱에서 `course-media.mjs`·
+`narration.mjs`·`captions.mjs`·`capture*.mjs`와 `narration:*` npm 스크립트를 걷어냈고,
+자막을 쓰던 레거시 TTS 경로(macOS 음성·mock·ElevenLabs)도 함께 정리했다. 덱은 대본·
+화면·소스 고정을 소유한다. 근거는 [DECISIONS](DECISIONS.md).
+
+확인한 것: 자막 cue가 실제 타임라인 13건·1645개에서 srt/vtt/json까지 이전과 동일,
+세 화질 합성 촬영이 덱 원본과 프레임 수·전환 시각·출력 스트림 규격 일치, 실제 CH00
+화면 30초를 1440p 자막 합성으로 촬영(750프레임, 정지 0초), 소스 판본 불일치 차단 동작,
+`npm run check` 통과(앱 307·Python 298).
+
+확인하지 않은 것: 실제 강의 한 편 전체나 4K 장시간 촬영은 다시 돌리지 않았다.
+`playwright@1.62.0` 고정 이유와 브라우저를 올릴 때 다시 재는 절차는
+[VIDEO-QUALITY](VIDEO-QUALITY.md)에 있다.
 
 ## 제작 상태
 
@@ -42,6 +58,5 @@ CH03 L02의 `한 끗이 → 한 끄시`는 사전에만 반영했고 당시 영�
   실제 CH03 전체 영상을 다시 생성하거나 청취 승인받은 것은 아니다.
 - 실제 Electron 창과 긴 4K 강의의 시청 검증은 코드·모델 대체물 검사로 대신하지 않는다.
   짧은 촬영·인코딩 측정의 조건과 한계는 [VIDEO-QUALITY](VIDEO-QUALITY.md)에 있다.
-- 브라우저 접근 재시도는 사용자가 중단했다. 같은 권한 요청이나 접근 시도를 반복하지 않는다.
 - 자동 검수는 영어 억양·강세·음색을 승인하지 않는다. 실제 MLX 배열 접근·새 합성의
   성공도 테스트 통과나 `metal.is_available()`만으로 주장하지 않는다.

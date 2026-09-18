@@ -53,7 +53,8 @@ export async function productionFixture(t, { mode = 'chapter', chapterMode = 'le
         await json(path.join(project, 'deck/narration.config.json'), { presets: {}, providers: {}, outputRoot: 'original' });
         return;
       }
-      const name = stage === 'voice' ? path.basename(value('--output-dir')) : value('--preset');
+      // 내보내기·자막·촬영은 결과 폴더를 직접 받는다. 편 이름은 그 폴더 이름이다.
+      const name = path.basename(value(stage === 'voice' ? '--output-dir' : '--out-dir'));
       if (failures.get(name) === 'cancel') {
         state.activeJob.cancelled = true;
         throw new Error('사용자가 작업을 중지했습니다.');
@@ -72,11 +73,16 @@ export async function productionFixture(t, { mode = 'chapter', chapterMode = 'le
           chunks: [{ key: 'chunk', startMs: 0, endMs: 1000 }],
           quality: { enabled: true, summary: { clean: true }, chunks: [] },
         });
-      } else if (stage === 'captions') {
+      } else if (stage === 'export') {
+        // 타임라인은 내보내기가 만들고, 자막·촬영이 그것을 지목해 읽는다.
+        assert.equal(JSON.parse(value('--preset-json')).name, name);
         await json(path.join(renderDir, 'timeline.json'), { totalMs: 1000, entries: [] });
+      } else if (stage === 'captions') {
+        assert.equal(value('--timeline'), path.join(renderDir, 'timeline.json'));
         await json(path.join(renderDir, 'captions.json'), [{ text: '원문', startMs: 0, endMs: 1000 }]);
       } else if (stage === 'capture') {
         assert.ok(args.includes('--no-cache'));
+        assert.equal(value('--timeline'), path.join(renderDir, 'timeline.json'));
         const file = path.join(renderDir, captureVideoFileName(name, options));
         await fs.writeFile(file, `video-${name}`);
         await json(path.join(renderDir, 'lesson-review.json'), {});

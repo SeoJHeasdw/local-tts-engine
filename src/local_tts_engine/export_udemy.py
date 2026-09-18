@@ -1,22 +1,29 @@
-"""Export a local course pilot into the udemy-agent narration contract.
+"""Export a local course pilot into the narration timeline contract.
 
-course_pilot.py 가 생성한 manifest.json을 udemy-agent의 narration 계약 형식으로
-변환해 deck 저장소에 직접 복사·배치한다.
+course_pilot.py 가 생성한 manifest.json을 자막 생성과 화면 촬영이 함께 읽는
+타임라인 계약으로 변환해 결과 폴더에 배치한다.
 
 변환 흐름:
     1. course_pilot manifest.json 읽기
-    2. deck의 narration.config.json 에서 preset·provider 정의 로드
+    2. preset·provider 정의 확보 (앱이 직접 넘기거나 덱 설정에서 읽는다)
     3. manifest entries → timeline entries 형식으로 변환
-    4. 오디오 파일(track.wav, track.m4a)을 deck 출력 디렉터리로 복사
+    4. 오디오 파일(track.wav, track.m4a)을 결과 폴더로 복사
     5. timeline.json, local-import.json 저장
 
-출력 결과물 (deck_root/narration/output/<preset_name>/ 하위):
-    track.wav          - 정규화된 최종 오디오
-    track.m4a          - AAC 미리듣기 파일
-    timeline.json      - captions.mjs/capture.mjs 가 소비하는 타임라인 계약
+출력 결과물 (<out_dir>/ 하위):
+    audio/track.wav    - 정규화된 최종 오디오
+    audio/track.m4a    - AAC 미리듣기 파일
+    timeline.json      - 자막·촬영이 소비하는 타임라인 계약
     local-import.json  - 재현성 추적용 소스 링크
 
 CLI 진입점:
+    python -m local_tts_engine.export_udemy \\
+        --source-dir outputs/ch00-5m \\
+        --out-dir render/ch00-5m \\
+        --preset-json '{"name": "ch00-5m", ...}' \\
+        --provider-json '{"provider": "qwen3-local", ...}'
+
+덱 설정에서 preset·provider·출력 루트를 읽던 기존 경로도 남아 있다:
     python -m local_tts_engine.export_udemy \\
         --source-dir outputs/ch00-5m \\
         --deck-root /path/to/udemy-agent/deck
@@ -68,9 +75,9 @@ def timeline_from_course_manifest(
     preset: dict[str, Any],
     provider: dict[str, Any],
 ) -> dict[str, Any]:
-    """course_pilot manifest를 덱 미디어 런타임의 timeline 형식으로 변환한다.
+    """course_pilot manifest를 자막·촬영이 읽는 timeline 형식으로 변환한다.
 
-    course-media.mjs 계약:
+    타임라인 계약:
         - entries[].order:         0-based 순번
         - entries[].key:           "<slide_id>--<step>" 형식 고유 키
         - entries[].startMs:       화면이 활성화되는 절대 시각 (ms)
@@ -83,11 +90,11 @@ def timeline_from_course_manifest(
 
     Args:
         manifest: course_pilot 이 생성한 manifest 딕셔너리.
-        preset:   deck narration.config.json 의 preset 항목 (이름 포함).
-        provider: deck narration.config.json 의 provider 항목 (이름 포함).
+        preset:   "name"을 포함한 preset 정의.
+        provider: "provider"를 포함한 provider 정의.
 
     Returns:
-        captions.mjs와 capture.mjs가 직접 소비할 수 있는 timeline 딕셔너리.
+        자막 생성과 화면 촬영이 직접 소비할 수 있는 timeline 딕셔너리.
     """
     source_entries = manifest["entries"]
     total_ms = int(manifest["durationMs"])
@@ -149,28 +156,25 @@ def timeline_from_course_manifest(
 
 def export(
     source_dir: Path,
-    deck_root: Path,
-    preset_name: str,
-    provider_name: str,
+    output_dir: Path,
+    preset: dict[str, Any],
+    provider: dict[str, Any],
 ) -> Path:
-    """course_pilot 결과물을 deck 저장소의 narration 출력 디렉터리로 내보낸다.
-
-    deck narration.config.json 에서 outputRoot 를 읽어 출력 경로를 결정하므로
-    경로를 하드코딩하지 않는다.
+    """course_pilot 결과물을 자막·촬영이 읽는 타임라인 계약으로 내보낸다.
 
     복사 목록:
         - manifest["audioPath"]   → <output_dir>/audio/track.wav
         - manifest["previewPath"] → <output_dir>/audio/track.m4a
 
     저장 목록:
-        - <output_dir>/timeline.json       (captions.mjs/capture.mjs 소비)
+        - <output_dir>/timeline.json       (자막·촬영이 소비)
         - <output_dir>/local-import.json   (재현성 추적)
 
     Args:
-        source_dir:    course_pilot --output-dir 와 동일한 경로 (manifest.json 포함).
-        deck_root:     udemy-agent 저장소의 deck 하위 디렉터리.
-        preset_name:   narration.config.json["presets"] 의 키.
-        provider_name: narration.config.json["providers"] 의 키.
+        source_dir:  course_pilot --output-dir 와 동일한 경로 (manifest.json 포함).
+        output_dir:  타임라인·오디오를 둘 결과 폴더.
+        preset:      "name"을 포함한 preset 정의.
+        provider:    "provider"를 포함한 provider 정의.
 
     Returns:
         생성된 출력 디렉터리 경로.
@@ -178,24 +182,16 @@ def export(
     source_manifest_path = source_dir / "manifest.json"
     source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
 
-    # deck 설정에서 preset·provider 정의와 출력 루트를 읽는다
-    deck_config = json.loads(
-        (deck_root / "narration.config.json").read_text(encoding="utf-8")
-    )
-    preset = {"name": preset_name, **deck_config["presets"][preset_name]}
-    provider = {"provider": provider_name, **deck_config["providers"][provider_name]}
-
+    preset_name = preset["name"]
     timeline = timeline_from_course_manifest(source_manifest, preset, provider)
 
-    # 출력 디렉터리: deck_root/<outputRoot>/<preset_name>/
-    output_dir = deck_root / deck_config["outputRoot"] / preset_name
     audio_dir = output_dir / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
     # 오디오·타임라인만 교체되고 예전 MP4가 최종본처럼 남는 일을 방지한다.
     invalidate_render_derivatives(output_dir, preset_name)
 
-    # 오디오 파일을 deck 저장소 내 고정 경로로 복사
+    # 오디오 파일을 결과 폴더의 고정 경로로 복사
     shutil.copy2(source_manifest["audioPath"], audio_dir / "track.wav")
     shutil.copy2(source_manifest["previewPath"], audio_dir / "track.m4a")
 
@@ -225,8 +221,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, required=True,
                         help="course_pilot --output-dir 와 동일한 경로 (manifest.json 포함)")
-    parser.add_argument("--deck-root", type=Path, required=True,
-                        help="udemy-agent 저장소의 deck 하위 디렉터리")
+    parser.add_argument("--out-dir", type=Path,
+                        help="타임라인·오디오를 둘 결과 폴더 (--preset-json 과 함께 사용)")
+    parser.add_argument("--preset-json",
+                        help="preset 정의 JSON. name 키를 포함한다")
+    parser.add_argument("--provider-json",
+                        help="provider 정의 JSON. provider 키를 포함한다")
+    parser.add_argument("--deck-root", type=Path,
+                        help="덱 설정에서 preset·provider·출력 루트를 읽는 기존 경로")
     parser.add_argument("--preset", default=DEFAULT_PRESET,
                         help=f"narration.config.json 의 preset 키 (기본값: {DEFAULT_PRESET})")
     parser.add_argument("--provider", default=DEFAULT_PROVIDER,
@@ -234,13 +236,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_target(args: argparse.Namespace) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    """출력 폴더와 preset·provider 정의를 정한다.
+
+    앱은 이미 둘을 알고 있으므로 직접 넘긴다. --deck-root 는 덱 설정에서 읽어
+    오던 기존 CLI 경로이며, 저장된 명령과의 호환을 위해 남겨 둔다.
+    """
+    if args.out_dir is not None:
+        if not args.preset_json or not args.provider_json:
+            raise SystemExit("--out-dir 에는 --preset-json 과 --provider-json 이 필요합니다.")
+        preset = json.loads(args.preset_json)
+        provider = json.loads(args.provider_json)
+        if "name" not in preset or "provider" not in provider:
+            raise SystemExit("preset 에는 name, provider 에는 provider 키가 있어야 합니다.")
+        return args.out_dir, preset, provider
+
+    if args.deck_root is None:
+        raise SystemExit("--out-dir 또는 --deck-root 중 하나가 필요합니다.")
+    deck_config = json.loads(
+        (args.deck_root / "narration.config.json").read_text(encoding="utf-8")
+    )
+    preset = {"name": args.preset, **deck_config["presets"][args.preset]}
+    provider = {"provider": args.provider, **deck_config["providers"][args.provider]}
+    return args.deck_root / deck_config["outputRoot"] / args.preset, preset, provider
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    target, preset, provider = resolve_target(args)
     output_dir = export(
         source_dir=args.source_dir,
-        deck_root=args.deck_root,
-        preset_name=args.preset,
-        provider_name=args.provider,
+        output_dir=target,
+        preset=preset,
+        provider=provider,
     )
     # 성공 시 출력 디렉터리 경로를 stdout에 출력해 셸 파이프라인에서 사용 가능하게 한다
     print(output_dir)
