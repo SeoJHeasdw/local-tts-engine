@@ -76,13 +76,32 @@ def test_inline_definition_requires_separate_synthesis_and_comparison_spellings(
 def test_user_selection_preserves_approved_terms_and_leaves_deferred_terms_in_hangul():
     dictionary = production_pronunciation()
     approved = {'Observation', 'Anthropic', 'permissiondenied', 'permission_denied', 'permission denied',
-                'Artificial Analysis', 'Intelligence Index', 'Boris Cherny', 'Y Combinator'}
+                'Artificial Analysis', 'Intelligence Index', 'Boris Cherny', 'Y Combinator', 'RICE'}
     assert {d['from'] for d in dictionary if d.get('inline')} == approved
     text = apply_pronunciation('Authentication과 Authorization, Attention Budget과 knowledge cutoff입니다.', dictionary)
     assert text == '어센티케이션과 어서라이제이션, 어텐션 버짓과 널리지 컷오프입니다.'
     approved_text = 'Anthropic의 Artificial Analysis Intelligence Index와 Boris Cherny, Y Combinator입니다.'
     assert apply_pronunciation(approved_text, dictionary) == approved_text
     assert speech_segments(approved_text, dictionary) == [{'text': approved_text, 'language': 'Korean'}]
+
+
+def test_product_name_in_caps_is_read_as_a_word_not_spelled_out():
+    """RICE는 제품 이름이라 대문자일 때만 잡고, 모델에는 Rice로 보낸다.
+
+    inline 항목은 영어 음성으로 보내지 않고 한국어 모델이 그 철자를 직접 읽는다.
+    대문자 RICE는 철자로 읽혀 "알라이 씨"가 됐고(2026-09-20 3회 모두 불일치),
+    Rice는 3회 모두 라이스였다. 그래서 자막 원문은 RICE, 발음문은 Rice다.
+    소문자 rice까지 잡으면 경로나 영어 낱말이 제품 이름이 되므로 caseSensitive를 켰다.
+    """
+    dictionary = production_pronunciation()
+    assert apply_pronunciation('RICE에게 시키면 됩니다.', dictionary) == 'Rice에게 시키면 됩니다.'
+    assert comparison_pronunciation('RICE에게 시키면 됩니다.', dictionary) == '라이스에게 시키면 됩니다.'
+    # 낱말 하나뿐인 inline 항목은 영어 음성으로 갈라지지 않는다.
+    assert speech_segments('Rice에게 시키면 됩니다.', dictionary) == [
+        {'text': 'Rice에게 시키면 됩니다.', 'language': 'Korean'}]
+    # 경로 안의 소문자와 식별자의 일부는 건드리지 않는다.
+    for untouched in ('/shots/rice-trace.png 를 씁니다.', 'RICE-1 규칙입니다.'):
+        assert apply_pronunciation(untouched, dictionary) == untouched
 
 
 def test_declared_readings_separate_an_asr_spelling_from_a_misread_vowel(tmp_path):

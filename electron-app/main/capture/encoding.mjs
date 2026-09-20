@@ -4,13 +4,21 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-export function captureEncodingArgs(profile) {
+// RGB 값을 변환하면서 결과 YUV 행렬 태그도 같이 맞춘다. 필터 그래프를 직접 짜는
+// 쪽(앱 데모 렌더)은 이 문자열을 자기 사슬 끝에 붙여 같은 색 경로를 쓴다.
+export const CAPTURE_COLOR_FILTERS =
+  "scale=in_range=full:out_range=limited:out_color_matrix=bt709,format=yuv420p,"
+  + "setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709";
+
+export function captureCodecArgs(profile) {
   return [
-    // RGB 값을 변환하면서 결과 YUV 행렬 태그도 같이 맞춘다.
-    "-vf", "scale=in_range=full:out_range=limited:out_color_matrix=bt709,format=yuv420p,setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709",
     "-c:v", "libx264", "-preset", "slow", "-crf", String(profile.crf),
     "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
   ];
+}
+
+export function captureEncodingArgs(profile) {
+  return ["-vf", CAPTURE_COLOR_FILTERS, ...captureCodecArgs(profile)];
 }
 
 // 촬영 프레임을 음성과 합쳐 최종 MP4로 만드는 인자.

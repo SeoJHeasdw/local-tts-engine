@@ -166,22 +166,34 @@ export function buildCaptionCues(timeline, { maxCharsPerCue, maxCharsPerLine } =
 
     // Providers without word alignment retain proportional timing as a
     // clearly isolated fallback.
-    const weights = chunks.map((chunk) => Math.max(1, [...chunk].length));
-    const totalWeight = weights.reduce((sum, value) => sum + value, 0);
-    let cursor = entry.startMs;
-    chunks.forEach((chunk, index) => {
-      const endMs = index === chunks.length - 1
-        ? entry.endMs
-        : cursor + ((entry.endMs - entry.startMs) * weights[index]) / totalWeight;
-      cues.push({
-        startMs: Math.round(cursor),
-        endMs: Math.round(endMs),
-        text: wrapSubtitle(chunk, maxCharsPerLine),
-      });
-      cursor = endMs;
-    });
+    cues.push(...proportionalCues(chunks, entry.startMs, entry.endMs, maxCharsPerLine));
   }
 
+  return settleCues(cues, timeline.totalMs);
+}
+
+// 글자 수에 비례해 놓는다. 단어 정렬이 없는 강의의 대비 경로이자, 정렬할 원문이
+// 없는 앱 데모 대본의 기본 경로다.
+function proportionalCues(chunks, startMs, endMs, maxCharsPerLine) {
+  const weights = chunks.map((chunk) => Math.max(1, [...chunk].length));
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+  const cues = [];
+  let cursor = startMs;
+  chunks.forEach((chunk, index) => {
+    const stopMs = index === chunks.length - 1
+      ? endMs
+      : cursor + ((endMs - startMs) * weights[index]) / totalWeight;
+    cues.push({
+      startMs: Math.round(cursor),
+      endMs: Math.round(stopMs),
+      text: wrapSubtitle(chunk, maxCharsPerLine),
+    });
+    cursor = stopMs;
+  });
+  return cues;
+}
+
+function settleCues(cues, totalMs) {
   for (let index = 1; index < cues.length; index++) {
     cues[index - 1].endMs = Math.min(
       cues[index - 1].endMs,
@@ -192,10 +204,27 @@ export function buildCaptionCues(timeline, { maxCharsPerCue, maxCharsPerLine } =
   if (cues.some((cue) => cue.text.split("\n").length > 2)) {
     throw new Error("2줄을 초과한 자막이 있습니다.");
   }
-  if (cues.at(-1)?.endMs > timeline.totalMs) {
+  if (cues.at(-1)?.endMs > totalMs) {
     throw new Error("자막이 영상 타임라인을 벗어났습니다.");
   }
   return cues;
+}
+
+/**
+ * 말할 구간 목록에서 자막 cue를 만든다.
+ *
+ * `spans`는 `{ text, startMs, durationMs }`다. 앱 데모는 대본을 화면에 맞춰 쓴 것이
+ * 아니라 찍은 뒤에 쓴 것이라 단어 정렬이 없다. 장면 음성 길이 안에서 글자 수에
+ * 비례해 놓는다.
+ */
+export function buildSpanCues(spans, totalMs, { maxCharsPerCue, maxCharsPerLine } = CAPTION_LIMITS) {
+  const cues = [];
+  for (const span of spans) {
+    if (!span.text?.trim() || !(span.durationMs > 0)) continue;
+    const chunks = subtitleChunks(span.text, maxCharsPerCue);
+    cues.push(...proportionalCues(chunks, span.startMs, span.startMs + span.durationMs, maxCharsPerLine));
+  }
+  return settleCues(cues, totalMs);
 }
 
 export function captionsToSrt(cues) {

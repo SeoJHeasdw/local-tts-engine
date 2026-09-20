@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
+import { captureFrameCount } from '../../shared/video-quality.mjs';
 
 const LAG_MS = 150;
 // Lossless PNG frames are sampled onto the lecture clock and encoded once.
@@ -201,8 +202,15 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
       try { await Promise.race([failed, new Promise(resolve => { timeout = setTimeout(resolve, Math.max(0, ms)); })]); }
       finally { clearTimeout(timeout); }
     },
-    async finish() {
+    // `endAt`은 강의 촬영처럼 길이를 미리 아는 쪽이 아니라, 앱 데모처럼 끝나는
+    // 시각을 찍고 나서야 아는 쪽을 위한 것이다. 주면 그 시각까지만 채우고 끝낸다.
+    // 주지 않으면 지금까지처럼 begin에서 정한 프레임 수를 마지막 화면으로 채운다.
+    async finish({ endAt = null } = {}) {
       if (phase !== 'recording') throw failure || new Error('진행 중인 촬영이 없습니다.');
+      if (endAt !== null) {
+        if (!Number.isFinite(endAt) || endAt <= startedAt) throw new Error('촬영 종료 시각이 시작보다 뒤여야 합니다.');
+        capFrames = Math.min(capFrames, captureFrameCount(endAt - startedAt, fps));
+      }
       clearInterval(timer); timer = null; phase = 'finishing'; clearAcks(); unlisten();
       try {
         await stopStream();

@@ -38,6 +38,25 @@ rate 2e-5, batch 1, gradient accumulation 4, 60 optimizer step이었다. 평균 
 | Artificial Analysis, Intelligence Index, Boris Cherny, Y Combinator | 같은 전체 문장 방식 채택 |
 | Authentication, Authorization | 새 방식 보류, 기존 한글 읽기 유지 |
 | Attention Budget, knowledge cutoff | 새 방식 불채택, 기존 한글 읽기 유지 |
+| RICE (2026-09-20) | 제품 이름이므로 같은 방식 채택. 다만 합성에 보내는 철자는 `Rice`다 |
+
+2026-09-20 RICE는 사용자가 방식을 승인했다(앱 데모 내레이션에서 제품 이름으로 부른다).
+사전 항목을 `라이스`에서 영어 철자 보호로 바꿨고 판독 비교 표기는 `라이스`로 남겼다.
+제품 이름만 잡도록 이 항목에만 `caseSensitive`를 켰다 — 소문자 `rice`는 경로·영어 낱말이라
+건드리지 않는다. 첫 완성본에서 사용자가 "알아이씨이"로 들린다고 지적해 `probe_term_pronunciation.py`로
+같은 문장에 네 철자를 3회씩 재 봤다: `RICE`는 철자로 읽혀 불일치(들림 "알라이 씨"·"RIC"·"Rih"),
+`Rice`·`rice`·`라이스`는 9회 모두 `라이스`로 거리 0.000이었다. 자막 원문은 `RICE`를 유지하고
+발음문만 `Rice`로 보낸다. 근거는 `output/reviews/2026-09-20/app-demo-build/rice-spelling/`.
+
+사용자가 "영어 최적화 세팅으로 그냥 영어를 생성하면 되지 않나"를 물어 같은 날 표본을
+만들어 봤다(`output/reviews/2026-09-20/rice-english-voice/`). 영어 음성 경로로 보내도
+대문자 `RICE`는 낱말로 서지 않아 판독에서 영어 구간이 통째로 빠졌고, `Rice`는 두 경로
+모두 낱말로 읽혔다. **문제는 목소리가 아니라 철자였다.** 영어 목소리 채택 여부는 억양·
+음색과 경계의 자연스러움에 대한 청취 판단으로 남아 있다 — 채택하려면 `speech_segments`의
+"낱말 두 개 이상"과 inline 제외를 바꿔야 하고, 그 변경은 2026-09-09에 거절된 낱말 단위
+영어 전환을 되살리는 것이므로 강의의 모든 inline 용어에 함께 적용된다. 이 사전은 강의 제작도 함께 쓰므로 CH04 L03·L04의 `RICE` 문장은 다음
+제작부터 영어로 읽힌다. 이미 만든 영상은 그대로 둔다. 실제 소리는 첫 목소리 후보를
+들을 때 확인한다 — 방식 승인과 청취 승인은 별개다.
 
 CH01·CH02의 해당 문장은 최신 수정본에서 이어 보정했다. CH01 첫 Anthropic은
 영어 철자 0.60, CH02 L04의 후속 한 문장은 사용자가 고른 `앤쓰로픽` 후보다.

@@ -44,6 +44,35 @@ npm run check
   대괄호로 클립 이동, Delete로 빼기다.
 - **최근 결과**: 결과 검색, 이름 변경, 청취 확인, Finder 표시와 휴지통 이동을 제공한다.
 
+## 앱 데모 촬영 (CLI)
+
+직접 만든 Electron·웹 앱을 자동으로 조작하며 찍어 소개 영상을 만든다. 강의 촬영과
+반대로 **화면을 먼저 찍고 대본을 나중에** 쓴다. AI 응답의 내용과 길이를 미리 알 수
+없기 때문이다. 아직 앱 화면 메뉴는 없고 CLI로만 돈다.
+
+```bash
+npm run demo -- record config/demo/rice-core-flow.json   # 앱 띄우기 → 조작 → 무손실 녹화
+npm run demo -- voice  output/edits/<날짜>/<이름>          # 장면마다 목소리 후보
+npm run demo -- render output/edits/<날짜>/<이름>          # 한 번 인코딩 → 자막 → 검증
+```
+
+`record`는 시나리오가 말한 앱을 띄워 사람 속도의 타이핑·보이는 커서·클릭 표시와
+함께 조작하고, 장면마다 시각·좌표·끝 화면의 글을 `demo/scenes.json`에 남긴다.
+그 글을 근거로 `demo/script.json`의 장면별 대본을 쓰고 `status`를 `approved`로
+바꾼 뒤 `voice`를 돌린다. 후보는 **직접 듣고** `voice.selected`에 적는다.
+`render`는 고른 음성 길이에 맞춰 기다림만 빨리 감고, 클릭 지점을 확대하고,
+내레이션·자막을 붙여 한 번만 인코딩한다. 결과는 편집·합치기가 그대로 받는
+`output/edits/<날짜>/<이름>/`이다.
+
+렌더가 끝나면 그 폴더의 `review.html`을 만들어 **열어 준다.** 완성본과 구간별 배율·
+멈춤·확대·장면별 대본·자동 검증을 한 쪽에 모은 검수 화면이다. 막대의 구간이나 장면을
+누르면 그 자리부터 재생하고, 해상도를 여러 벌 냈으면 같은 자리에서 바꿔 가며 비교한다
+(space 재생, ←→ 2초, 1~9 장면). 열지 않으려면 `--no-open`을 준다.
+
+다시 찍지 않고 고칠 수 있게 무손실 원본(`demo/raw.mkv`)을 남긴다. 대본·목소리·
+배율만 바꿀 때는 `render`만 다시 돌린다. 시나리오 작성법과 동사는
+[아키텍처](docs/ARCHITECTURE.md#앱-데모-촬영)에 있다.
+
 한국어 제작 음성은 Qwen3-TTS 1.7B Base + `jaeho-ko-r16-v1` LoRA **0.60**이다.
 영어 인용문은 사용자 승인한 `english-speaker-only-v1`으로 따로 생성한다.
 승인된 문장 안 영어 용어는 한국어 문장과 함께 읽는다. 자동 검사와 최종 청취
@@ -61,7 +90,7 @@ npm run check
 | `tests/electron/` | 앱·화면·실제 FFmpeg 연동 검사 |
 | `tests/test_*.py`, `tests/fixtures/` | 엔진 검사와 재현용 텍스트 자료 |
 | `scripts/` | 환경 점검과 수동 검수·복구 CLI |
-| `config/` | 제작 발음 사전과 데이터 연결 설정 |
+| `config/` | 제작 발음 사전, 데이터 연결 설정, 앱 데모 시나리오 |
 | `docs/` | 현재 구조, 검수 계약, 승인·라이선스 근거 |
 
 `electron-app/main.mjs`와 기존 Python CLI 이름은 실행 진입점으로 유지한다.

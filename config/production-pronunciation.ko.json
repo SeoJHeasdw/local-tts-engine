@@ -704,7 +704,11 @@
   },
   {
     "from": "RICE",
-    "to": "라이스"
+    "to": "Rice",
+    "literal": true,
+    "inline": true,
+    "caseSensitive": true,
+    "comparisonReading": "라이스"
   },
   {
     "from": "YC",

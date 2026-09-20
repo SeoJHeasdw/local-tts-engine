@@ -14,7 +14,8 @@
     "test:python": ".venv/bin/python -m pytest -q",
     "check": "npm run doctor -- --strict && npm run check:architecture && npm test",
     "check:architecture": "node scripts/check_architecture.mjs",
-    "check:capture": "node scripts/check_capture.mjs"
+    "check:capture": "node scripts/check_capture.mjs",
+    "demo": "node electron-app/main/workers/demo.mjs"
   },
   "engines": {
     "node": ">=22"

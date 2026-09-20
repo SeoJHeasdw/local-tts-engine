@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>데모 픽스처</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif;
+         background: #0f1117; color: #e8ecf4; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 24px; }
+  h1 { font-size: 22px; margin: 0 0 24px; letter-spacing: -.02em; }
+  .row { display: flex; gap: 8px; }
+  textarea { flex: 1; min-height: 72px; resize: none; padding: 12px 14px; border-radius: 10px;
+             border: 1px solid #2a3040; background: #171b26; color: inherit; font: inherit; }
+  .card { margin-top: 20px; padding: 16px; border: 1px solid #2a3040; border-radius: 12px; background: #141824; }
+  .actions { display: flex; gap: 8px; margin-top: 14px; }
+  .actions button { padding: 8px 18px; border-radius: 8px; border: 1px solid #3a4258;
+                    background: #222a3a; color: inherit; font: inherit; cursor: pointer; }
+  [role=status] { display: inline-flex; align-items: center; gap: 8px; margin-top: 20px; color: #9aa7c0; }
+  [role=status] i { width: 10px; height: 10px; border-radius: 50%; background: #5b8cff;
+                    animation: pulse 900ms ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
+  #result { margin-top: 20px; white-space: pre-wrap; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>데모 픽스처</h1>
+  <div class="row">
+    <textarea id="prompt" placeholder="요청을 입력하세요"></textarea>
+  </div>
+  <div class="card" id="plan" hidden>
+    <div>실행 계획: 파일 하나를 만듭니다.</div>
+    <div class="actions">
+      <button id="approve" type="button">승인</button>
+      <button id="reject" type="button">거부</button>
+    </div>
+  </div>
+  <div role="status" aria-label="Pondering" id="status" hidden><i></i>생각하는 중</div>
+  <div id="result"></div>
+</main>
+<script>
+  const prompt = document.getElementById("prompt");
+  const plan = document.getElementById("plan");
+  const status = document.getElementById("status");
+  const result = document.getElementById("result");
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  prompt.addEventListener("keydown", async event => {
+    if (event.key !== "Enter" || event.shiftKey || status.hidden === false) return;
+    event.preventDefault();
+    const text = prompt.value.trim();
+    if (!text) return;
+    result.textContent = "";
+    status.hidden = false;
+    await wait(400);
+    plan.hidden = false;
+  });
+
+  document.getElementById("approve").addEventListener("click", async () => {
+    plan.hidden = true;
+    await wait(1200);
+    result.textContent = "완료했습니다. 체크리스트 5개를 적었습니다.";
+    status.hidden = true;
+  });
+
+  document.getElementById("reject").addEventListener("click", () => {
+    plan.hidden = true;
+    status.hidden = true;
+    result.textContent = "요청을 취소했습니다.";
+  });
+
+  // 준비 신호는 페이지 콘솔로 알린다. 시나리오의 ready.console이 이것을 기다린다.
+  // 실제 앱의 준비 신호(RICE의 런타임 연결)처럼 창이 열린 뒤에 온다.
+  setTimeout(() => console.log("[demo-app] ready"), 250);
+</script>
+</body>
+</html>

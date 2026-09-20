@@ -166,3 +166,93 @@ test("영상의 프레임 번호는 촬영 벽시계와 일치한다", async (t)
     fs.rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+// 앱 데모는 끝나는 시각을 찍고 나서야 안다. begin에는 넉넉한 상한을 주고 finish에
+// 실제 끝 시각을 준다. 상한까지 마지막 화면을 채우면 아무 일도 없는 꼬리가 붙는다.
+test("finish({ endAt })는 상한이 아니라 준 시각에서 끝낸다", async (t) => {
+  let chromium;
+  try {
+    ({ chromium } = await import("playwright"));
+  } catch {
+    t.skip("playwright가 설치되지 않았습니다.");
+    return;
+  }
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "capture-endat-"));
+  const outFile = path.join(workDir, "end.mp4");
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({ viewport: { width: 640, height: 360 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.setContent(`
+      <style>
+        body { margin: 0; background: #101018; }
+        .b { width: 30vw; height: 30vh; margin: 35vh auto; background: #4f7cff;
+             animation: spin 800ms linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+      </style>
+      <div class="b"></div>
+    `);
+    const session = await context.newCDPSession(page);
+    const recorder = startScreencastEncoder({
+      session, width: 640, height: 360, fps: FPS,
+      ffmpegArgs: [
+        "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "image2pipe", "-vcodec", "png", "-framerate", String(FPS), "-i", "pipe:0",
+        "-vf", "scale=in_range=full:out_range=limited,format=yuv420p",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", outFile,
+      ],
+    });
+    await recorder.ready();
+    // 첫 프레임의 브라우저 시각이 시스템 시계보다 몇 ms 앞설 수 있다. 시작 시각을
+    // 그 프레임보다 확실히 뒤에 두고 시작한다.
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const startedAt = Date.now();
+    recorder.begin(startedAt, 60 * FPS);
+    await recorder.wait(2000);
+    const endAt = Date.now();
+    const frames = await recorder.finish({ endAt });
+
+    const expected = Math.ceil((endAt - startedAt) * FPS / 1000);
+    assert.equal(frames.written, expected, `${frames.written}프레임 (기대 ${expected})`);
+    assert.ok(frames.written < 60 * FPS, "상한까지 채우지 않는다");
+    const stream = await probe(outFile, "stream=nb_read_frames");
+    assert.equal(Number(stream.nb_read_frames), expected);
+  } finally {
+    await browser.close();
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test("finish({ endAt })는 시작보다 앞선 시각을 받지 않는다", async (t) => {
+  let chromium;
+  try {
+    ({ chromium } = await import("playwright"));
+  } catch {
+    t.skip("playwright가 설치되지 않았습니다.");
+    return;
+  }
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "capture-endat-bad-"));
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({ viewport: { width: 320, height: 180 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.setContent('<style>body{margin:0;background:#222}div{width:50vw;height:50vh;background:#7af;animation:s .5s linear infinite}@keyframes s{to{opacity:.2}}</style><div></div>');
+    const session = await context.newCDPSession(page);
+    const recorder = startScreencastEncoder({
+      session, width: 320, height: 180, fps: FPS,
+      ffmpegArgs: ["-y", "-hide_banner", "-loglevel", "error", "-f", "image2pipe", "-vcodec", "png",
+        "-framerate", String(FPS), "-i", "pipe:0", "-f", "null", "-"],
+    });
+    await recorder.ready();
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const startedAt = Date.now();
+    recorder.begin(startedAt, 10 * FPS);
+    await recorder.wait(300);
+    await assert.rejects(recorder.finish({ endAt: startedAt - 1 }), /종료 시각이 시작보다 뒤여야/);
+    await recorder.abort();
+  } finally {
+    await browser.close();
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});

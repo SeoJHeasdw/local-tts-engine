@@ -21,7 +21,15 @@ finally에서 원래 값을 복원한다. 두 번째 대형 생성 모델을 올
 샘플 범위·길이·게인은 `voiceRouting`에 남긴다. 한국어만 있는 캐시 키는 유지한다.
 
 문장 안 영어 철자 방식은 Observation, Anthropic, permission denied(별칭 포함),
-Artificial Analysis, Intelligence Index, Boris Cherny, Y Combinator에 채택됐다.
+Artificial Analysis, Intelligence Index, Boris Cherny, Y Combinator, RICE에 채택됐다.
+RICE는 제품 이름만 잡도록 `caseSensitive`를 켠 유일한 항목이다.
+
+사전의 `to`는 **모델이 실제로 읽는 철자**다. inline 항목은 영어 음성으로 보내지 않고
+(`speech_segments`가 건너뛴다) 한국어 모델이 그 철자를 직접 읽으므로, 어떻게 읽히는지는
+경험으로만 안다. `RICE`는 대문자 약어라 철자로 읽혔다(2026-09-20 3회 모두 불일치:
+"알라이 씨", "RIC", "Rih"). 같은 문장에서 `Rice`·`rice`는 3회 모두 `라이스`였다. 그래서
+자막 원문은 `RICE`로 두고 발음문만 `Rice`로 보낸다. 대문자 약어를 새로 넣을 때는
+`scripts/probe_term_pronunciation.py`로 재고 넣는다.
 Authentication/Authorization은 보류, Attention Budget/knowledge cutoff는 불채택으로
 기존 한글 읽기를 유지한다. 단어별 영어 전환은 거절됐다. [청취 근거](DECISIONS.md)를 따른다.
 

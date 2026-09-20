@@ -12,15 +12,15 @@
 | `electron-app/main/runtime.mjs`, `job-process.mjs` | 프로세스 실행·진행 이벤트·중지·일시정지 |
 | `electron-app/main/production.mjs` | 입력 고정 → 합성 → 자막 → 촬영 → 검증·발행 |
 | `electron-app/main/recording.mjs` | 디스플레이 수동 녹화의 시작·정지·결과 기록 |
-| `electron-app/main/capture/` | 화면 촬영: 규격·인코딩·프레임 전송·사이트 서버, 디스플레이 목록·녹화 |
-| `electron-app/main/workers/` | 별도 프로세스로 도는 입력 고정·자막·촬영·녹화 진입점 |
+| `electron-app/main/capture/` | 화면 촬영: 규격·인코딩·프레임 전송·사이트 서버, 디스플레이 목록·녹화, 앱 조작 |
+| `electron-app/main/workers/` | 별도 프로세스로 도는 입력 고정·자막·촬영·녹화·앱 데모 진입점 |
 | `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보와 학습 작업 |
 | `electron-app/main/editing/` | 합치기·페이지 교체·구간 편집·미리듣기 |
 | `electron-app/main/`의 나머지 서비스 | 경로·설정·목록·파일·미디어·결과·IPC·창 관리 |
 | `electron-app/renderer/app.js` | 초기화·화면 전환·제작 진행 |
 | `electron-app/renderer/job-pace.mjs` | 단계별 실측으로 내는 이 편·전체 남은 시간 |
 | `electron-app/renderer/controllers/` | 검수·클립 편집·최근 결과·화면 녹화 화면 |
-| `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산·촬영 규격·자막 cue |
+| `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산·촬영 규격·자막 cue·데모 시나리오와 편집 계획 |
 | `src/local_tts_engine/course_pilot.py` | 강의 생성 CLI 조립 |
 | `src/local_tts_engine/course/` | 대본 입력·청킹·오디오·정렬·직렬화 |
 | `src/local_tts_engine/course_catalog.py` | 생성 모델을 로드하지 않는 목록 CLI |
@@ -112,6 +112,60 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 모양의 `validation-report.json`(`operation: "record-display"`, `warnings`)으로 남아
 최근 결과·이름 변경·다듬기가 그대로 받는다. 검증에 실패한 녹화는 지우지 않고 실패로
 기록한다. 규격과 측정은 [VIDEO-QUALITY](VIDEO-QUALITY.md#화면-녹화)에 있다.
+
+## 앱 데모 촬영
+
+직접 만든 앱을 자동으로 조작하며 찍는다. 강의 촬영과 방향이 반대다. 덱은 대본이 화면을
+끌고 가지만(음성 → 타임라인 → 촬영) 앱 데모는 화면을 먼저 찍고 대본이 맞춘다. AI 응답의
+내용과 길이를 미리 알 수 없기 때문이다. 결정 근거는 [APP-DEMO-DESIGN](APP-DEMO-DESIGN.md).
+
+```text
+demo record  앱 띄우기 → 동사 실행 + RGB 무손실 녹화 → demo/scenes.json
+Claude·사용자  scenes.json의 화면 글을 근거로 demo/script.json 대본, status=approved
+demo voice   장면마다 목소리 후보 → 사람이 듣고 voice.selected에 적는다
+demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
+```
+
+| 위치 | 책임 |
+| --- | --- |
+| `shared/demo-scenario.mjs` | 시나리오 검증·정규화: 동사·선택자·자리표시자·제한 시간. 순수 |
+| `shared/demo-plan.mjs` | scenes.json + 내레이션 길이 → 편집 계획. 순수 |
+| `main/capture/app-page.mjs` | 앱 띄우기(electron·web), 준비·서버·ready 대기, 에뮬레이션, 동사 실행, 장면 기록 |
+| `main/capture/cursor-overlay.mjs` | 페이지에 넣는 커서·클릭 표시. 실제 마우스 사건을 따라 그린다 |
+| `main/capture/record-app.mjs` | `record` 한 번: 작업 폴더·무손실 녹화·scenes.json |
+| `main/editing/demo-render.mjs` | 편집 계획 → ffmpeg 한 번, 음성·자막, 검증·보고서 |
+| `main/editing/demo-review.mjs` | 결과 폴더 → `review.html`. 영상·구간·확대·대본·검증을 한 쪽에 모은다 |
+| `main/workers/demo.mjs` | CLI 진입점: `record`·`voice`·`render` |
+| `config/demo/` | 파일럿 시나리오와 앱별 준비 스크립트 |
+
+**앱을 아는 것은 시나리오 파일뿐이다.** 촬영 엔진은 앱 이름을 모른다. 덱 고유의 조작이
+`deck-page.mjs`에 모이듯 앱 고유의 사정은 시나리오에 모인다. 시나리오가 승인되면 그 앱의
+저장소(`demo/scenarios/<이름>.json`)로 옮기고, 승인 전 파일럿만 여기 `config/demo/`에 둔다.
+
+시나리오의 동사는 `click`·`type`·`press`·`hover`·`scroll`·`waitFor`·`waitGone`·`pause`다.
+대상은 선택자 문자열이거나 `{ role, name, exact }`·`{ placeholder }`·`{ text }`·`{ label }`
+중 하나다. 글자로 찾는 버튼은 `exact: true`로 둔다("승인"이 "승인하고 적용"에 걸리지 않게).
+`{scenario}`는 시나리오 파일 폴더, `{work}`는 이번 촬영의 작업 폴더이며 끝나면 지운다.
+장면의 대본은 시나리오에 두지 않는다 — 찍은 뒤 `script.json`에 쓴다.
+
+| 기록 | 의미 |
+| --- | --- |
+| `demo/raw.mkv` | RGB 무손실 원본. 다시 찍지 않고 고치기 위해 남긴다 |
+| `demo/scenes.json` | 장면·걸음의 시각(ms)·좌표(CSS px)·장면 끝 화면의 글 |
+| `demo/script.json` | 장면별 대본·확정 상태·목소리 후보와 고른 것 |
+| `demo/edit-plan.json` | 구간·배율·멈춤·확대 키프레임·내레이션 자리 |
+| `validation-report.json` | `operation: "app-demo"`. 최근 결과·다듬기·합치기가 그대로 받는다 |
+| `review.html` | 사람이 보고 판단하는 화면. 렌더가 끝나면 다시 쓰고 CLI가 연다 |
+
+편집 계획은 프레임 단위로 센다. 밀리초로 자르면 배율마다 반 프레임이 남아 최종 프레임
+수가 계획과 어긋난다. 감는 것은 `waitFor`·`waitGone`뿐이고 사람 동작은 1배다. 장면 목표
+길이는 `max(내레이션 + 0.8초, 감을 수 있는 만큼 감은 원본)`이며, 감아도 짧으면 장면 끝
+화면을 멈춰 채운다. 확대는 누른 자리를 중심으로 걸고 z=1에서는 중심이 화면 한가운데가
+되도록 가둔다. 규격·측정은 [VIDEO-QUALITY](VIDEO-QUALITY.md#앱-데모-촬영)에 있다.
+
+검수 화면은 검증에 실패해도 만든다. 무엇이 어긋났는지 보려면 영상을 봐야 하기 때문이다.
+결과 폴더의 mp4를 모두 실어 해상도를 바꿔 가며 같은 자리를 비교하고, 대본·목소리가 아직
+없어도 열린다 — 그때 판단할 것이 화면·배율·확대다.
 
 ## 타임라인과 편집
 
