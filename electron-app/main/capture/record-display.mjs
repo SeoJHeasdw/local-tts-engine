@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { captureFrameCount } from "../../shared/video-quality.mjs";
 import { summarizeChecks } from "../../shared/quality.mjs";
 import { fileSha256 } from "../files.mjs";
-import { captureEncodingArgs, validateCaptureStream, writeCaptureReport } from "./encoding.mjs";
+import { CAPTURE_COLOR_FILTERS, captureCodecArgs, validateCaptureStream, writeCaptureReport } from "./encoding.mjs";
 import { ffmpegErrorText, listCaptureDevices, probeDisplay, resolveDevice, screenDevices } from "./displays.mjs";
 
 export const RECORD_FPS = 25;
@@ -37,13 +37,35 @@ export function avfoundationInput({ screenIndex, audioIndex = null, fps = RECORD
     "-i", `${screenIndex}:${audioIndex ?? "none"}`];
 }
 
+// 녹화 중 화면 가장자리에 뜨는 빨간 테두리(record-monitor.mjs)를 지운다. 테두리가
+// 덮은 폭보다 조금 넓게 바로 안쪽 픽셀로 채운다(smear). 크기·규격은 그대로라 합치기
+// 계약도 같다.
+//
+// 채우는 자리는 색 변환(yuv420p) 뒤다. 변환은 채도를 이웃 픽셀과 섞어 구하므로 빨강이
+// 안쪽으로 번지고, 그래서 테두리보다 넓게 채운다. 2026-09-21 회색 바탕 실측: 3px 테두리는
+// 4px, 6px 테두리는 10px을 채우면 빨강이 남지 않았다(8px은 2/255). 변환 전 RGB에서
+// 채우면 번짐은 없지만 fillborders가 평면 RGB만 받아 ffmpeg가 화면 전체를 한 번 더 바꾸고,
+// 3456×2234 인코딩이 9~26% 느려졌다. 실시간 녹화에서는 프레임을 놓치는 쪽이 더 큰 손실이다.
+export const EDGE_BLEED_PX = 4;
+
+export function edgeFill(edgeMask = 0) {
+  if (!Number.isInteger(edgeMask) || edgeMask < 0) throw new Error(`가장자리 폭이 올바르지 않습니다: ${edgeMask}`);
+  return edgeMask ? 2 * Math.ceil(edgeMask / 2) + EDGE_BLEED_PX : 0;
+}
+
+export function recordFilters(edgeMask = 0) {
+  const fill = edgeFill(edgeMask);
+  if (!fill) return CAPTURE_COLOR_FILTERS;
+  return `${CAPTURE_COLOR_FILTERS},fillborders=left=${fill}:right=${fill}:top=${fill}:bottom=${fill}:mode=smear`;
+}
+
 // 진행은 사람이 읽는 -stats 대신 -progress로 받는다. 같은 값(frame·dup·drop)을
 // 줄 단위 key=value로 주므로 녹화 중 누락을 바로 알릴 수 있다.
-export function recordArgs({ input, profile, withAudio, output }) {
+export function recordArgs({ input, profile, withAudio, output, edgeMask = 0 }) {
   return [
     "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-n",
     ...input,
-    "-r", String(profile.fps), ...captureEncodingArgs(profile),
+    "-r", String(profile.fps), "-vf", recordFilters(edgeMask), ...captureCodecArgs(profile),
     ...(withAudio ? AUDIO_ARGS : ["-an"]),
     // 확장자가 .part라 컨테이너를 스스로 못 고른다.
     "-f", "mp4", "-movflags", "+faststart", output,
@@ -138,7 +160,7 @@ export async function prepareDisplay({ ffmpeg, display, audioDevice = null }) {
  */
 export function startDisplayRecording({
   ffmpeg, ffprobe, display, audioDevice = null, outDir, name,
-  maxDurationMs = null, onEvent = () => {},
+  maxDurationMs = null, edgeMask = 0, onEvent = () => {},
   // 녹화할 입력을 정한다. 테스트는 화면 대신 합성 영상을 넣는다.
   prepare = () => prepareDisplay({ ffmpeg, display, audioDevice }),
 }) {
@@ -191,7 +213,7 @@ export function startDisplayRecording({
   function record(source) {
     return new Promise((resolve, reject) => {
       // stdin은 정지 신호(q)를 보내는 길이다. 터미널 stdin을 물려받으면 SIGTTIN으로 멈춘다.
-      const child = spawn(ffmpeg, recordArgs({ ...source, output: videoPart }), { stdio: ["pipe", "pipe", "pipe"] });
+      const child = spawn(ffmpeg, recordArgs({ ...source, edgeMask, output: videoPart }), { stdio: ["pipe", "pipe", "pipe"] });
       recorder = child;
       children.add(child);
       let stderr = "";
@@ -255,7 +277,9 @@ export function startDisplayRecording({
       fs.renameSync(workFile, finalFile);
       const video = result.streams.find(stream => stream.codec_type === "video");
       const audio = result.streams.find(stream => stream.codec_type === "audio") || null;
-      const sourceInfo = { display: source.display, audio: source.withAudio ? "device" : "silent", audioDevice: source.audioDevice };
+      // 가장자리를 채웠으면 그 폭을 남긴다. 그 픽셀은 화면 그대로가 아니다.
+      const sourceInfo = { display: source.display, audio: source.withAudio ? "device" : "silent", audioDevice: source.audioDevice,
+        ...(edgeMask ? { edgeFill: edgeFill(edgeMask) } : {}) };
       const generatedAt = new Date().toISOString();
       writeCaptureReport(`${finalFile}.capture.json`, {
         schemaVersion: 1, profile: source.profile, source: sourceInfo, encoder: "libx264", preset: "slow",

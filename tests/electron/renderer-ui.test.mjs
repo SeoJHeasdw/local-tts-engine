@@ -414,3 +414,23 @@ test("묶음이 행의 더 보기 메뉴를 잘라 내지 않는다", async () =
   assert.match(css, /\.output-group:has\(\.result-menu\[open\]\) \{ position: relative; z-index: 40; \}/);
   assert.match(css, /\.output-group-body \.output-item:last-child \{[\s\S]*?border-radius/);
 });
+
+// 사이드바가 길어져 한 장짜리 화면은 가까운 화면 안으로 옮겼다. 텍스트 목소리는
+// 새로 만들기의 한 갈래로, 두 화면 머리에서 오가고 사이드바는 새로 만들기를 켠다.
+test("텍스트 목소리는 사이드바가 아니라 새로 만들기 안에서 연다", async () => {
+  const [html, script] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(renderer, "app.js"), "utf8"),
+  ]);
+  const nav = html.match(/<nav id="main-nav"[\s\S]*?<\/nav>/)[0];
+  assert.doesNotMatch(nav, /data-view="voice"/);
+  assert.equal(nav.match(/class="nav-item/g).length, 6);
+  assert.match(nav, /data-view="new"[^>]*><span>◉<\/span><b>새로 만들기<\/b>/);
+  for (const view of ["new", "voice"]) {
+    const section = html.match(new RegExp(`<section class="page-view[^"]*" id="view-${view}">[\\s\\S]*?</header>`))[0];
+    assert.match(section, /class="create-tabs"[\s\S]*data-view="new"[\s\S]*data-view="voice"/, `${view} 화면 머리에 두 갈래가 있다`);
+    assert.match(section, new RegExp(`class="selected" data-view="${view}" aria-current="page"`));
+  }
+  assert.match(script, /const NAV_OWNER = \{ voice: "new" \}/);
+  assert.match(script, /\.nav-item\[data-view="\$\{NAV_OWNER\[view\] \|\| view\}"\]/);
+});

@@ -35,6 +35,7 @@
   --ink:       #11150d;   /* lime 위에 얹는 글자색 */
   --lime-glow: rgba(154, 211, 53, .12);
   --aqua:      #8debd2;
+  --iris:      #a99bff;   /* 앱 데모 */
   --warn:      #ffc05b;
   --danger:    #ff837d;
 
@@ -42,6 +43,9 @@
   --lime-wash: rgba(201, 255, 91, .04);
   --lime-soft: rgba(201, 255, 91, .10);
   --lime-edge: rgba(201, 255, 91, .22);
+  --iris-wash: rgba(169, 155, 255, .05);
+  --iris-soft: rgba(169, 155, 255, .12);
+  --iris-edge: rgba(169, 155, 255, .26);
   --aqua-wash: rgba(141, 235, 210, .05);
   --aqua-soft: rgba(141, 235, 210, .10);
   --aqua-edge: rgba(141, 235, 210, .20);
@@ -51,6 +55,10 @@
   --dngr-wash: rgba(255, 131, 125, .05);
   --dngr-soft: rgba(255, 131, 125, .11);
   --dngr-edge: rgba(255, 131, 125, .26);
+
+  /* ---- 그림 위에 얹는 글자. 미리보기처럼 무엇이 비칠지 모르는 곳이라 테마와 무관하다 ---- */
+  --scrim:    rgba(8, 10, 7, .74);
+  --on-scrim: #f1f4ec;
 
   /* ---- 타이포: 7단. 바닥이 11px이다 (이전에는 9px) ---- */
   --fs-micro: 11px;  /* 모노 배지, 최소 메타 */
@@ -141,6 +149,10 @@
   --line-2:    rgba(22, 26, 18, .22);
   --line-3:    #c3c9b6;
 
+  --iris:      #5b4bd6;
+  --iris-wash: rgba(91, 75, 214, .05);
+  --iris-soft: rgba(91, 75, 214, .12);
+  --iris-edge: rgba(91, 75, 214, .28);
   --lime:      #4e7010;
   --lime-hi:   #3d5a0b;
   --ink:       #ffffff;
@@ -383,6 +395,20 @@ input:focus, select:focus, textarea:focus {
 .segmented button.selected { background: var(--float); color: var(--text); font-weight: var(--fw-medium); box-shadow: var(--shadow-sm); }
 .scope-tabs { grid-template-columns: repeat(3, 1fr); }
 
+/* 새로 만들기의 두 갈래. 텍스트 목소리는 한 장짜리 화면이라 사이드바에 따로 두지 않고
+   강의 영상과 이 자리에서 오간다. 화면 제목 위, 전에 eyebrow가 있던 자리다. */
+.create-tabs {
+  display: inline-flex; gap: var(--s0); margin-bottom: var(--s3); padding: var(--s0);
+  border: 1px solid var(--line); border-radius: var(--r-full); background: var(--well);
+}
+.create-tabs button {
+  height: 28px; padding: 0 var(--s3); border: 0; border-radius: var(--r-full);
+  background: transparent; color: var(--text-3); cursor: pointer;
+  font-size: var(--fs-xs); font-weight: var(--fw-semi);
+}
+.create-tabs button:hover { color: var(--text); }
+.create-tabs button.selected { background: var(--lime-soft); color: var(--lime); }
+
 .check-row { display: flex; align-items: center; gap: var(--s3); cursor: pointer; }
 .check-row input {
   appearance: none; width: 18px; height: 18px; flex: none;
@@ -446,6 +472,7 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .primary-small { background: var(--lime); color: var(--ink); }
 .primary-small:hover:not(:disabled) { background: var(--lime-hi); }
+.primary-small:disabled { opacity: .45; cursor: default; }
 .secondary-small, .refresh-button { border-color: var(--line); background: var(--raised); color: var(--text-2); }
 .secondary-small:hover:not(:disabled), .refresh-button:hover { border-color: var(--line-2); color: var(--text); }
 
@@ -677,12 +704,62 @@ button:disabled { cursor: not-allowed; }
 }
 .record-live .job-controls .primary-small { flex: 1; }
 
-.record-done { min-height: 320px; padding: var(--s5); }
-.record-done #record-done-summary { white-space: pre-line; overflow-wrap: anywhere; }
-.record-done-warnings { width: 100%; margin-top: var(--s4); }
-.record-done .complete-actions { flex-wrap: wrap; justify-content: center; }
-.record-done[data-tone="warn"] .complete-icon { background: var(--warn-wash); color: var(--warn); box-shadow: none; }
-.record-done[data-tone="failed"] .complete-icon { background: var(--dngr-wash); color: var(--danger); box-shadow: none; }
+/* 녹화하는 화면에는 녹화 중에 아무것도 그릴 수 없다 — 그린 것은 모두 녹화된다. 그래서
+   무엇이 찍히는지는 OBS처럼 앱 안의 미리보기가 보인다. 틀은 세는 동안 붉은 선,
+   녹화 중에는 붉은 띠로 두 단계를 가른다. */
+.record-monitor {
+  position: relative; margin: 0; aspect-ratio: 16 / 10; overflow: hidden;
+  border-radius: var(--r-md); background: var(--well);
+  box-shadow: 0 0 0 1px var(--line-2);
+  transition: box-shadow var(--motion-normal) var(--motion-ease);
+}
+.record-monitor img { display: block; width: 100%; height: 100%; object-fit: contain; transition: opacity var(--motion-normal); }
+.record-monitor img[src=""], .record-monitor img:not([src]) { visibility: hidden; }
+.record-monitor:is([data-state="countdown"], [data-state="starting"]) img { opacity: .5; }
+.record-monitor[data-state="countdown"] { box-shadow: 0 0 0 2px var(--danger); }
+.record-monitor[data-state="live"] { box-shadow: 0 0 0 2px var(--danger), 0 0 0 7px var(--dngr-soft); }
+.record-monitor-tag {
+  position: absolute; top: var(--s3); left: var(--s3);
+  display: inline-flex; align-items: center; gap: var(--s2);
+  padding: var(--s1) var(--s3); border-radius: var(--r-full);
+  background: var(--scrim); color: var(--on-scrim);
+  font: var(--fw-bold) var(--fs-micro) var(--mono); letter-spacing: .08em;
+}
+.record-monitor-tag i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-4); }
+.record-monitor:is([data-state="countdown"], [data-state="live"]) .record-monitor-tag i { background: var(--danger); }
+.record-monitor[data-state="live"] .record-monitor-tag i { animation: rec-blink 1.25s infinite; }
+@keyframes rec-blink { 50% { opacity: .25; } }
+.record-countdown {
+  position: absolute; inset: 0; margin: auto; width: 96px; height: 96px;
+  display: grid; place-items: center; border-radius: 50%;
+  background: var(--scrim); color: var(--on-scrim); box-shadow: 0 0 0 3px var(--danger);
+  font: var(--fw-bold) 48px / 1 var(--mono); font-variant-numeric: tabular-nums;
+}
+.record-monitor figcaption {
+  position: absolute; inset: auto 0 0; padding: var(--s5) var(--s3) var(--s2);
+  background: linear-gradient(transparent, var(--scrim)); color: var(--on-scrim);
+  font-size: var(--fs-xs); line-height: var(--lh-snug);
+}
+
+/* 방금 끝난 녹화. 설정을 대신하지 않고 그 위에 붙는다 — 다시 찍는 길은 늘 아래에 보인다.
+   색은 결과의 상태를 따른다: 저장(라임) · 경고(호박) · 실패(빨강). */
+.record-result {
+  --tone: var(--lime); --tone-wash: var(--lime-wash); --tone-soft: var(--lime-soft); --tone-edge: var(--lime-edge);
+  display: grid; gap: var(--s3); padding: var(--s4) var(--s5);
+  border-color: var(--tone-edge);
+  background: linear-gradient(90deg, var(--tone-wash), transparent 60%), var(--surface);
+}
+.record-result[data-tone="warn"] { --tone: var(--warn); --tone-wash: var(--warn-wash); --tone-soft: var(--warn-soft); --tone-edge: var(--warn-edge); }
+.record-result[data-tone="failed"] { --tone: var(--danger); --tone-wash: var(--dngr-wash); --tone-soft: var(--dngr-soft); --tone-edge: var(--dngr-edge); }
+.record-result-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s3); }
+.record-result-icon {
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
+  background: var(--tone-soft); color: var(--tone); font-weight: var(--fw-bold);
+}
+.record-result-copy strong { display: block; font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.record-result-copy small { display: block; margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); white-space: pre-line; overflow-wrap: anywhere; }
+.record-result-actions { display: flex; flex-wrap: wrap; gap: var(--s2); padding-left: calc(36px + var(--s3)); }
+.record-result-actions:not(:has(button:not(.hidden))) { display: none; }
 /* 녹화는 다른 화면을 보는 동안에도 돈다. 메뉴에서 녹화 중임을 놓치지 않게 한다. */
 .nav-item.recording span { color: var(--danger); animation: pulse 1.25s infinite; }
 
@@ -850,34 +927,58 @@ button:disabled { cursor: not-allowed; }
 .result-search > span { color: var(--text-4); font-size: var(--fs-lg); }
 .result-search input { width: 100%; height: var(--h-sm); border: 0; outline: 0; background: transparent; color: var(--text); padding: 0 var(--s1); font-size: var(--fs-sm); }
 .result-search input:focus { box-shadow: none; }
-.result-filters { display: flex; gap: var(--s1); }
+.result-filters { display: flex; flex-wrap: wrap; gap: var(--s1); }
 .result-filters button {
+  display: inline-flex; align-items: center; gap: var(--s2);
   height: var(--h-sm); padding: 0 var(--s3); border: 0; border-radius: var(--r-sm);
-  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-sm);
+  background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-sm); white-space: nowrap;
 }
 .result-filters button:hover { color: var(--text-2); }
 .result-filters button.selected { background: var(--float); color: var(--text); font-weight: var(--fw-medium); }
+.result-filters button small { color: var(--text-4); font: var(--fw-semi) var(--fs-micro) var(--mono); font-variant-numeric: tabular-nums; }
+.result-filters button.selected small { color: var(--text-3); }
+.kind-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--kind); }
 .result-count-summary { flex: 0 0 auto; padding-right: var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
+
+/* 결과 종류마다 색을 하나씩 둔다. 강의는 라임, 화면 녹화는 녹화의 빨강, 앱 데모는
+   보라, 목소리는 청록, 편집은 호박색이다. 아이콘 칸·왼쪽 띠·옅은 바탕·종류 표시가 같은
+   색을 쓰므로 줄을 읽기 전에 색으로 먼저 갈린다. 거르기 단추의 점도 같은 색이다. */
+:is(.output-item, .kind-dot) { --kind: var(--lime); --kind-wash: var(--lime-wash); --kind-soft: var(--lime-soft); --kind-edge: var(--lime-edge); }
+:is(.output-item, .kind-dot)[data-kind="record"] { --kind: var(--danger); --kind-wash: var(--dngr-wash); --kind-soft: var(--dngr-soft); --kind-edge: var(--dngr-edge); }
+:is(.output-item, .kind-dot)[data-kind="demo"] { --kind: var(--iris); --kind-wash: var(--iris-wash); --kind-soft: var(--iris-soft); --kind-edge: var(--iris-edge); }
+:is(.output-item, .kind-dot)[data-kind="voice"] { --kind: var(--aqua); --kind-wash: var(--aqua-wash); --kind-soft: var(--aqua-soft); --kind-edge: var(--aqua-edge); }
+:is(.output-item, .kind-dot)[data-kind="edit"] { --kind: var(--warn); --kind-wash: var(--warn-wash); --kind-soft: var(--warn-soft); --kind-edge: var(--warn-edge); }
 
 .output-list { display: grid; gap: var(--s2); }
 .output-item {
   position: relative; display: grid; grid-template-columns: 42px minmax(160px, 1fr) auto auto;
-  align-items: center; gap: var(--s3); min-height: 70px; padding: var(--s3);
-  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+  align-items: center; gap: var(--s3); min-height: 70px; padding: var(--s3) var(--s3) var(--s3) var(--s4);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: linear-gradient(90deg, var(--kind-wash), transparent 45%), var(--surface);
   transition: border-color var(--motion-fast), background var(--motion-fast);
 }
-.output-item:hover,.output-item:focus-within { border-color: var(--line-2); background: var(--raised); }
+/* 왼쪽 띠. 모서리 둥근 곳은 피해 세로 가운데에만 둔다. */
+.output-item::before {
+  content: ""; position: absolute; left: -1px; top: var(--s4); bottom: var(--s4); width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--kind);
+}
+.output-item:hover,.output-item:focus-within { border-color: var(--kind-edge); background: linear-gradient(90deg, var(--kind-soft), transparent 55%), var(--raised); }
 .output-item:has(.result-menu[open]) { z-index: 40; }
 
 .output-type {
-  display: grid; place-items: center; width: 38px; height: 38px;
-  border-radius: var(--r-sm); background: var(--float); color: var(--lime); font-size: var(--fs-md);
+  display: grid; place-items: center; width: 40px; height: 40px;
+  border-radius: var(--r-md); background: var(--kind-soft); color: var(--kind);
+  box-shadow: inset 0 0 0 1px var(--kind-edge);
 }
-.output-type.voice { color: var(--aqua); background: var(--aqua-soft); }
-.output-type.edit { color: var(--warn); background: var(--warn-soft); }
-.output-copy strong, .output-copy small { display: block; }
-.output-copy strong { font-size: var(--fs-md); font-weight: var(--fw-semi); }
-.output-copy small { color: var(--text-3); font-size: var(--fs-xs); margin-top: var(--s1); }
+.output-copy { min-width: 0; }
+.output-copy strong { display: block; font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.output-meta { display: flex; align-items: center; gap: var(--s2); min-width: 0; margin-top: var(--s1); }
+.output-copy small { display: block; min-width: 0; color: var(--text-3); font-size: var(--fs-xs); }
+.kind-tag {
+  flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 var(--s2);
+  border-radius: var(--r-sm); background: var(--kind-soft); color: var(--kind);
+  font-size: var(--fs-micro); font-weight: var(--fw-semi); white-space: nowrap;
+}
 
 /* 이후 수정본이 있는 줄은 '지금 쓸 파일'이 아닐 수 있다. 지우지는 않되 옅게 둔다. */
 .output-item.has-newer .output-copy strong { color: var(--text-2); }
@@ -1233,7 +1334,6 @@ button:disabled { cursor: not-allowed; }
   .progress-card { position: relative; min-height: auto; }
   :root { --sidebar-w: 200px; }
   .results-toolbar { align-items: stretch; flex-direction: column; }
-  .result-filters { display: grid; grid-template-columns: repeat(5, 1fr); }
   .output-item { grid-template-columns: 42px 1fr auto; }
   .output-status { display: none; }
   .item-actions { grid-column: 2 / 4; justify-content: flex-end; }
@@ -1763,6 +1863,9 @@ button:disabled { cursor: not-allowed; }
 .output-group-body { display: grid; gap: 1px; background: var(--line); }
 .output-group-body .output-item { border: 0; border-radius: 0; background: var(--surface); }
 .output-group-body .output-item:hover { background: var(--raised); }
+/* 묶음은 모두 강의다. 띠는 줄마다 긋지 않고 머리글에 한 번 둔다. */
+.output-group-body .output-item::before { display: none; }
+.output-group-head { box-shadow: inset 3px 0 0 var(--lime); }
 
 /* 걸린 낱말은 문장 안에서 바로 짚여야 한다. 색만으로 말하지 않고 밑줄을 함께
    두어, 색을 구분하기 어려워도 어디를 보라는 것인지 남는다. */
@@ -1776,17 +1879,22 @@ button:disabled { cursor: not-allowed; }
 
 
 
-/* 앱 데모 화면. 장면 카드가 대본·후보·길이를 한 줄기로 보여 준다. */
-.demo-scene-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
-.demo-scene-list li { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
-.demo-scene-list small, .demo-videos .muted { color: var(--text-muted, #8a8f98); }
-.demo-scenes { display: grid; gap: 12px; margin: 12px 0; }
-.demo-scene header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-.demo-scene header small { color: var(--text-muted, #8a8f98); }
-.demo-screen-text pre { white-space: pre-wrap; max-height: 140px; overflow: auto; font-size: 12px; opacity: .8; }
-.demo-candidates { display: grid; gap: 6px; margin-top: 8px; }
-.demo-candidate { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; }
-.demo-candidate.on { background: rgba(120, 160, 255, .12); }
-.demo-candidate audio { height: 28px; margin-left: auto; }
-.demo-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
-.demo-videos { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+/* 앱 데모 화면. 뼈대는 화면 녹화·목소리 만들기와 같고, 장면 카드만 여기서 더한다. */
+.demo-summary { display: grid; gap: var(--s1); }
+.demo-summary strong { font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.demo-summary span { color: var(--text-2); font-size: var(--fs-sm); }
+.demo-summary small { color: var(--text-3); font: var(--fs-xs) var(--mono); word-break: break-all; }
+.demo-chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
+.demo-chip {
+  display: inline-flex; align-items: baseline; gap: var(--s2); padding: var(--s1) var(--s3);
+  border: 1px solid var(--line); border-radius: var(--r-full); background: var(--well);
+  color: var(--text-2); font-size: var(--fs-xs);
+}
+.demo-chip.slow { border-color: var(--lime-edge); background: var(--lime-wash); color: var(--text); }
+.demo-chip b { color: var(--text-3); font-weight: var(--fw-semi); }
+.demo-scenes { display: grid; gap: var(--s4); margin: var(--s4) 0; }
+.demo-scene-length { color: var(--text-3); font-size: var(--fs-xs); }
+.demo-screen-text { margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; color: var(--text-3); font: var(--fs-xs) var(--mono); }
+.demo-videos { display: grid; gap: var(--s1); margin: 0; padding: 0; list-style: none; color: var(--text-3); font-size: var(--fs-sm); }
+.demo-videos a { color: var(--text-2); }
+

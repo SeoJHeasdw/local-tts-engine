@@ -60,6 +60,37 @@ export function createAppDemoService({
     };
   }
 
+  /**
+   * 고를 수 있는 시나리오를 찾아 온다.
+   *
+   * 시나리오는 그 앱의 저장소가 가진다(`<저장소>/demo/scenarios/*.json`). 그래서 이
+   * 작업 폴더의 형제 저장소들을 한 겹만 훑는다 — 엔진이 어느 앱인지 아는 것이 아니라
+   * "옆에 있는 저장소가 내놓은 시나리오"를 줍는 것이다. 읽으면서 검증하므로 동사
+   * 오타는 목록에서 바로 드러난다. 그 밖의 자리는 파일 고르기로 연다.
+   */
+  async function listDemoScenarios({ limit = 40 } = {}) {
+    const neighbourhood = path.resolve(ROOT, "../..");
+    const found = [];
+    const orgs = await fs.readdir(neighbourhood, { withFileTypes: true }).catch(() => []);
+    for (const org of orgs.filter(entry => entry.isDirectory() && !entry.name.startsWith("."))) {
+      const repos = await fs.readdir(path.join(neighbourhood, org.name), { withFileTypes: true }).catch(() => []);
+      for (const repo of repos.filter(entry => entry.isDirectory() && !entry.name.startsWith("."))) {
+        const dir = path.join(neighbourhood, org.name, repo.name, "demo", "scenarios");
+        const files = await fs.readdir(dir).catch(() => []);
+        for (const name of files.filter(file => file.endsWith(".json")).sort()) {
+          if (found.length >= limit) return found;
+          const file = path.join(dir, name);
+          try {
+            found.push({ ...await readDemoScenario(file), from: `${org.name}/${repo.name}` });
+          } catch (error) {
+            found.push({ file, from: `${org.name}/${repo.name}`, name, scenes: [], error: error.message });
+          }
+        }
+      }
+    }
+    return found;
+  }
+
   /** 이미 있는 결과 폴더를 이어 받는다. CLI로 찍은 것도 화면에서 그대로 잇는다. */
   async function pickDemoProject() {
     const settings = await readAppSettings();
@@ -87,6 +118,15 @@ export function createAppDemoService({
     const script = await read("script.json");
     if (!scenes) throw new Error("촬영 기록(demo/scenes.json)이 없습니다.");
     const texts = new Map((script?.scenes || []).map(scene => [scene.id, scene]));
+    const lengths = new Map();
+    for (const scene of script?.scenes || []) {
+      for (const relative of scene.voice?.candidates || []) {
+        try {
+          const meta = JSON.parse(await fs.readFile(path.join(demoDir, relative.replace(/\.wav$/, ".json")), "utf8"));
+          lengths.set(relative, meta.durationMs ?? null);
+        } catch { lengths.set(relative, null); }
+      }
+    }
     const videos = (await fs.readdir(outDir).catch(() => []))
       .filter(name => name.endsWith(".mp4"))
       .sort()
@@ -115,6 +155,8 @@ export function createAppDemoService({
             file: relative,
             name: path.basename(relative, ".wav"),
             url: pathToFileURL(path.join(demoDir, relative)).href,
+            // 후보를 고를 때 길이를 함께 본다. 장면보다 길면 편집이 덜 되돌린다.
+            durationMs: lengths.get(relative) ?? null,
           })),
         };
       }),
@@ -227,7 +269,7 @@ export function createAppDemoService({
   }
 
   return {
-    pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, saveDemoScript,
+    listDemoScenarios, pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, saveDemoScript,
     startDemoRecord, startDemoVoice, startDemoRender,
   };
 }

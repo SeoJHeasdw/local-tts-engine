@@ -2,6 +2,10 @@ import { VIDEO_QUALITIES } from "../../shared/video-quality.mjs";
 
 // 화면 녹화. 디스플레이 하나를 원래 해상도 그대로 녹화한다. 정지는 결과를 남기고
 // 취소는 버린다. 내레이션은 여기서 붙이지 않고 다듬기의 구간 음성 교체로 넣는다.
+//
+// 무엇이 녹화되는지는 두 곳에서 보인다. main이 녹화할 화면을 빨간 테두리로 감싸
+// 세고(record-countdown) 정지할 때까지 그 테두리를 둔다. 앱 안에서는 그 화면을 1초마다
+// 떠서 비춘다(record-preview).
 
 // 화면 이름(Capture screen N)만으로는 어느 모니터인지, 덱과 그대로 합쳐지는지 알 수
 // 없다. 합치기는 크기가 덱과 같을 때만 복사로 끝나므로 그 사실을 화면 옆에 적는다.
@@ -39,6 +43,8 @@ export function createRecordingController({
   let since = null;
   let clock = null;
   let latestTarget = null;
+  // 녹화 중인 화면. 미리보기 설명과, 첫 미리보기가 오기 전에 비출 썸네일을 여기서 얻는다.
+  let recordingDisplay = null;
   // 음성 포함은 매번 끔으로 시작한다. 화면 속 소리까지 녹음할 일은 드물다.
   let audioOn = false;
   let withAudio = false;
@@ -50,10 +56,13 @@ export function createRecordingController({
     $('.nav-item[data-view="record"]')?.classList.toggle("recording", phase === "recording");
   }
 
+  // 녹화 중에는 진행 카드만 보인다. 그 밖에는 언제나 녹화 설정이 보이고, 방금 끝난 녹화는
+  // 그 위의 결과 카드로 남는다. 완료 화면이 설정을 대신하던 때는 다시 찍는 길을 찾아 헤맸고,
+  // 다른 화면에 다녀와도 완료 화면 그대로라 당황했다(2026-09-21 사용자 지적).
   function show(panel) {
-    $("#record-form").classList.toggle("hidden", panel !== "form");
+    $("#record-form").classList.toggle("hidden", panel === "live");
     $("#record-live").classList.toggle("hidden", panel !== "live");
-    $("#record-done").classList.toggle("hidden", panel !== "done");
+    if (panel === "live") $("#record-done").classList.add("hidden");
   }
 
   function renderDisplays(message = "") {
@@ -83,8 +92,10 @@ export function createRecordingController({
       }
       const size = document.createElement("strong");
       size.textContent = display.error ? "찍을 수 없음" : `${display.width}×${display.height}`;
+      // 모니터 이름이 있으면 그것으로 적는다. "Capture screen 1"은 어느 모니터인지 말하지 않는다.
       const name = document.createElement("small");
-      name.textContent = display.name;
+      name.textContent = display.label || display.name;
+      card.title = display.name;
       const hint = document.createElement("em");
       const { tone, text } = display.error ? { tone: "warn", text: display.error.split("\n")[0] } : displayHint(display);
       hint.dataset.tone = tone;
@@ -168,6 +179,20 @@ export function createRecordingController({
     clock = setInterval(tick, 500);
   }
 
+  function displayCaption(display, note) {
+    if (!display) return note;
+    const size = display.width ? `${display.width}×${display.height}` : "";
+    return [display.label || display.name, size, note].filter(Boolean).join(" · ");
+  }
+
+  // 미리보기 틀의 상태: 세는 중(countdown) → 시작하는 중(starting) → 녹화 중(live) → 저장 중(finishing).
+  function monitor(stateName, { tag, caption } = {}) {
+    $("#record-monitor").dataset.state = stateName;
+    if (tag) $("#record-monitor-tag-text").textContent = tag;
+    if (caption !== undefined) $("#record-monitor-caption").textContent = caption;
+    $("#record-countdown").classList.toggle("hidden", stateName !== "countdown");
+  }
+
   function live(label) {
     $("#record-phase").textContent = label;
     $("#record-stop").disabled = phase !== "recording";
@@ -176,7 +201,8 @@ export function createRecordingController({
   }
 
   function finishedPanel({ ok, title, summary, warnings = [] }) {
-    show("done");
+    show("form");
+    $("#record-done").classList.remove("hidden");
     $("#record-done").dataset.tone = ok ? (warnings.length ? "warn" : "ready") : "failed";
     $("#record-done-icon").textContent = ok && !warnings.length ? "✓" : "!";
     $("#record-done-title").textContent = title;
@@ -184,6 +210,8 @@ export function createRecordingController({
     $("#record-done-warnings").textContent = warnings.join("\n");
     $("#record-done-warnings").classList.toggle("hidden", !warnings.length);
     for (const id of ["#record-review", "#record-open", "#record-reveal"]) $(id).classList.toggle("hidden", !latestTarget);
+    // 방금 녹화한 뒤라 썸네일이 옛 화면이다. 다음 녹화를 고르기 전에 새로 찍는다.
+    loadDisplays();
   }
 
   function reset() {
@@ -204,16 +232,41 @@ export function createRecordingController({
       $("#record-log").textContent = "";
       $("#record-elapsed").textContent = "0:00";
       $("#record-warning").classList.add("hidden");
+      $("#record-mirror").classList.add("hidden");
+      recordingDisplay = displays.find(display => display.name === event.options?.display) || null;
+      $("#record-preview").src = recordingDisplay?.thumbnail || "";
+      monitor("starting", { tag: "준비", caption: displayCaption(recordingDisplay, "녹화할 화면") });
       show("live");
       lock();
       live("녹화할 화면을 준비하고 있습니다");
       status("녹화 준비 중", "running");
+    } else if (event.type === "record-countdown") {
+      if (phase !== "starting") return;
+      if (event.label && recordingDisplay) recordingDisplay = { ...recordingDisplay, label: event.label };
+      if (event.remaining > 0) {
+        $("#record-countdown").textContent = String(event.remaining);
+        monitor("countdown", { tag: "곧 녹화", caption: displayCaption(recordingDisplay, "녹화할 화면") });
+        live(event.framed
+          ? `${event.remaining}초 뒤 녹화합니다 · 빨간 테두리를 두른 화면이 녹화됩니다. 테두리는 정지하면 사라지고 영상에는 담기지 않습니다`
+          : `${event.remaining}초 뒤 녹화합니다`);
+      } else {
+        monitor("starting", { tag: "시작 중" });
+        live("녹화를 시작하고 있습니다");
+      }
     } else if (event.type === "record-phase" && event.phase === "recording") {
       if (phase !== "starting") return;
       phase = "recording";
       startClock();
+      monitor("live", { tag: "REC", caption: displayCaption(recordingDisplay, "1초마다 새로 비춥니다") });
       live(`녹화 중 · ${withAudio ? "음성 포함" : "음성 없음"}`);
       status("녹화 중", "running");
+    } else if (event.type === "record-preview") {
+      if (phase !== "recording") return;
+      $("#record-preview").src = event.image;
+      $("#record-mirror").classList.toggle("hidden", !event.mirrored);
+    } else if (event.type === "record-preview-paused") {
+      if (phase !== "recording") return;
+      monitor("live", { caption: displayCaption(recordingDisplay, "녹화 품질을 지키려고 미리보기를 멈췄습니다") });
     } else if (event.type === "record-phase" && event.phase === "progress") {
       if (!event.dup && !event.drop) return;
       $("#record-warning").textContent = `프레임 복제 ${event.dup} · 누락 ${event.drop}. 인코딩이 화면 변화를 따라가지 못하고 있습니다.`;
@@ -223,11 +276,13 @@ export function createRecordingController({
       phase = "finishing";
       tick();
       stopClock();
+      monitor("finishing", { tag: "저장 중" });
       live(withAudio ? "녹화를 마무리하고 검증하는 중" : "녹화를 마무리하고 무음 트랙을 붙이는 중");
       status("녹화 마무리 중", "running");
     } else if (event.type === "cancelling") {
       phase = "cancelling";
       stopClock();
+      monitor("finishing", { tag: "취소 중" });
       live("녹화를 취소하는 중 · 결과를 버립니다");
     } else if (event.type === "log") {
       const log = $("#record-log");
@@ -264,6 +319,11 @@ export function createRecordingController({
   // 녹화 중에 앱 창을 다시 열었을 때. 녹화가 언제 시작됐는지는 작업 시작 시각으로 갈음한다.
   function restore(job) {
     phase = job.stage === "record" ? "recording" : "starting";
+    recordingDisplay = displays.find(display => display.name === job.options?.display) || null;
+    monitor(phase === "recording" ? "live" : "starting", {
+      tag: phase === "recording" ? "REC" : "준비",
+      caption: displayCaption(recordingDisplay, phase === "recording" ? "1초마다 새로 비춥니다" : "녹화할 화면"),
+    });
     show("live");
     lock();
     if (phase === "recording") startClock(Date.parse(job.startedAt) || now());
@@ -314,10 +374,7 @@ export function createRecordingController({
   $("#record-review").addEventListener("click", () => latestTarget && review.openReview(latestTarget));
   $("#record-open").addEventListener("click", () => latestTarget && api.open(latestTarget));
   $("#record-reveal").addEventListener("click", () => latestTarget && api.reveal(latestTarget));
-  $("#record-again").addEventListener("click", () => {
-    show("form");
-    loadDisplays();
-  });
+  $("#record-dismiss").addEventListener("click", () => $("#record-done").classList.add("hidden"));
 
   return { opened, loadDisplays, handleEvent, restore, get phase() { return phase; } };
 }

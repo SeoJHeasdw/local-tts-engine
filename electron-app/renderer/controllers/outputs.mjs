@@ -1,7 +1,7 @@
 import { animateLayout } from "../motion.mjs";
-import { filterOutputItems, visibleVoiceFindings, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs, outputGroupKey, outputVersionLinks } from "../view-utils.mjs";
+import { filterOutputItems, visibleVoiceFindings, outputIcon, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs, outputGroupKey, outputVersionLinks } from "../view-utils.mjs";
 
-export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, document = globalThis.document }) {
+export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, appDemo, document = globalThis.document }) {
   let outputItems = [];
 
   let outputFilter = "all";
@@ -10,7 +10,7 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
     if (item.root === "voice") return "텍스트 목소리";
     if (item.root === "edit") {
       return { merge: "합친 영상", trim: "자른 영상", voice: "목소리 교체", "voice-page": "페이지 목소리 교체", "voice-batch": "목소리 교체",
-        "record-display": "화면 녹화" }[item.operation] || "편집 영상";
+        "record-display": "화면 녹화", "app-demo": "앱 데모" }[item.operation] || "편집 영상";
     }
     if (item.root === "pilot") return "강의 음성";
     return item.video ? "완성 강의 영상" : "강의 자막·음성";
@@ -19,6 +19,11 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
   function renderOutputSummary() {
     $("#results-count").textContent = String(outputItems.length);
     $("#result-count-summary").textContent = `${outputItems.length}개`;
+    // 종류마다 몇 개인지 거르기 단추에 적는다. 녹화가 있는지 눌러 봐야 알 수 있으면 안 된다.
+    for (const button of $$("#result-filters [data-output-filter]")) {
+      const count = button.querySelector("small");
+      if (count) count.textContent = String(filterOutputItems(outputItems, "", button.dataset.outputFilter).length);
+    }
   }
 
   function closeResultMenus({ restoreFocus = false } = {}) {
@@ -86,9 +91,11 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
         const row = document.createElement("article");
         row.className = "output-item";
         row.dataset.state = state.key;
+        // 종류가 줄의 색을 정한다(styles.css의 [data-kind]). 묶음 안의 줄은 모두 강의다.
+        row.dataset.kind = kind;
         row.innerHTML = `
-          <div class="output-type ${kind}">${kind === "edit" ? "✂" : item.video ? "▶" : "♪"}</div>
-          <div class="output-copy"><strong></strong><small></small></div>
+          <div class="output-type ${kind}">${outputIcon(kind, { video: item.video })}</div>
+          <div class="output-copy"><strong></strong><div class="output-meta"><span class="kind-tag"></span><small></small></div></div>
           <div class="output-status" aria-label="결과 상태"><span class="state-pill ${state.tone}"></span></div>
           <div class="item-actions">
             <button class="open-button" type="button">열기</button>
@@ -110,9 +117,11 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
           title.classList.add("renamable");
           title.addEventListener("dblclick", () => editOutputName(title, item, target));
         }
+        const kindTag = row.querySelector(".kind-tag");
+        if (compact) kindTag.remove();
+        else kindTag.textContent = outputLabel(item);
         const newer = versions.get(item.key) || [];
         row.querySelector("small").textContent = [
-          compact ? "" : outputLabel(item),
           formatDuration(item.durationMs),
           compact ? "" : formatDate(item.updatedAt),
           findings.length ? voiceFindingSummaryLine(findings) : "",
@@ -152,7 +161,23 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
             showToast(approved ? "청취 승인을 취소했습니다." : "직접 들은 결과로 표시했습니다.");
           } catch (error) { showToast(error.message, "error"); }
         });
-        if (item.video) {
+        if (kind === "demo") {
+          // 앱 데모에는 페이지 타임라인이 없어 다듬기가 할 일이 없다. 장면·배율·대본·
+          // 후보를 한 쪽에 모은 그 결과의 검수 화면이 이어서 볼 자리다.
+          const open = row.querySelector(".open-button");
+          open.textContent = "검수 화면";
+          open.addEventListener("click", () => api.openDemoReview(target)
+            .catch((error) => showToast(error.message, "error")));
+          const resume = document.createElement("button");
+          resume.type = "button";
+          resume.className = "resume-demo-button";
+          resume.textContent = "앱 데모에서 이어서";
+          resume.addEventListener("click", async () => {
+            closeResultMenus();
+            try { await appDemo.resume(target); } catch (error) { showToast(error.message, "error"); }
+          });
+          row.querySelector(".result-menu div").prepend(resume);
+        } else if (item.video) {
           row.querySelector(".open-button").textContent = findings.length ? "다듬기" : "열기";
           row.querySelector(".open-button").addEventListener("click", () => review.openReview(target));
         } else {

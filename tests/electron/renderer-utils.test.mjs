@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  outputIcon,
+  OUTPUT_KINDS,
   buildChapterRanges,
   findingExcerpt,
   findingSeek,
@@ -406,4 +408,30 @@ test("수정본이 나온 원본은 그 사실을 함께 적는다", () => {
   assert.equal(links.get("render:l04")[0].key, "edit:v2", "가장 최근 수정본이 앞에 선다");
   assert.equal(links.has("render:l05"), false);
   assert.equal(links.has("edit:v2"), false, "수정본 자신은 원본이 아니다");
+});
+
+// 앱 데모와 화면 녹화는 이어서 할 일이 달라 목록에서 갈라 보여야 한다.
+test('결과 종류는 편집 안에서도 앱 데모·화면 녹화를 따로 센다', () => {
+  assert.equal(outputKind({ root: 'edit', operation: 'app-demo' }), 'demo');
+  assert.equal(outputKind({ root: 'edit', operation: 'record-display' }), 'record');
+  assert.equal(outputKind({ root: 'edit', operation: 'merge' }), 'edit');
+  assert.equal(outputKind({ root: 'voice' }), 'voice');
+  assert.equal(outputKind({ root: 'render' }), 'lecture');
+});
+
+// 목록은 종류마다 아이콘·색·거르기 단추가 하나씩이다. 녹화와 앱 데모도 따로 거른다.
+test('결과 종류마다 아이콘과 거르기가 있고, 녹화·앱 데모는 편집에 섞이지 않는다', () => {
+  const items = [
+    { name: 'bob', root: 'edit', operation: 'record-display' },
+    { name: 'rice', root: 'edit', operation: 'app-demo' },
+    { name: 'merged', root: 'edit', operation: 'merge' },
+  ];
+  assert.deepEqual(OUTPUT_KINDS, ['lecture', 'record', 'demo', 'voice', 'edit']);
+  assert.deepEqual(filterOutputItems(items, '', 'record').map(item => item.name), ['bob']);
+  assert.deepEqual(filterOutputItems(items, '', 'demo').map(item => item.name), ['rice']);
+  assert.deepEqual(filterOutputItems(items, '', 'edit').map(item => item.name), ['merged']);
+  const icons = OUTPUT_KINDS.map(kind => outputIcon(kind));
+  assert.equal(new Set(icons).size, OUTPUT_KINDS.length, '종류마다 아이콘이 다르다');
+  for (const icon of icons) assert.match(icon, /^<svg [^>]*aria-hidden="true"/);
+  assert.equal(outputIcon('lecture', { video: false }), outputIcon('voice'), '영상 없는 강의 결과는 음성으로 그린다');
 });

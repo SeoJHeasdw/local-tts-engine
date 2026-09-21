@@ -42,9 +42,35 @@ export function summarizePageRange(pages = [], startPage = 1, endPage = startPag
 }
 
 export function outputKind(item = {}) {
-  if (item.root === "edit") return "edit";
+  if (item.root === "edit") {
+    // 앱 데모와 화면 녹화는 강의 편집과 만드는 방법도 이어서 할 일도 다르다.
+    // 목록에서 한눈에 갈라 보이게 종류를 따로 둔다.
+    if (item.operation === "app-demo") return "demo";
+    if (item.operation === "record-display") return "record";
+    return "edit";
+  }
   if (item.root === "voice") return "voice";
   return "lecture";
+}
+
+/** 목록이 가르는 결과 종류. 거르기 단추·줄의 색·아이콘이 이 이름을 함께 쓴다. */
+export const OUTPUT_KINDS = ["lecture", "record", "demo", "voice", "edit"];
+
+const ICON_PATHS = {
+  // 받침대 위 화면에 재생 표시. 강의 영상이다.
+  lecture: '<rect x="2.75" y="3.75" width="14.5" height="10" rx="2"/><path d="M7.5 17h5M10 13.75V17"/><path d="M8.6 6.9v3.8l3.2-1.9z" fill="currentColor" stroke="none"/>',
+  // 받침대 위 화면에 녹화 점.
+  record: '<rect x="2.75" y="3.75" width="14.5" height="10" rx="2"/><path d="M7.5 17h5M10 13.75V17"/><circle cx="10" cy="8.75" r="2.3" fill="currentColor" stroke="none"/>',
+  // 앱 창과 그 위의 커서. 자동으로 조작하며 찍은 것이다.
+  demo: '<rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2"/><path d="M2.75 7.25h14.5"/><path d="M9 9.4v5.3l1.45-1.35 1.05 2.1 1-.47-1.03-2.08h2.03z" fill="currentColor" stroke="none"/>',
+  edit: '<circle cx="5.5" cy="6" r="2.25"/><circle cx="5.5" cy="14" r="2.25"/><path d="M7.4 7.2 16 13.5M7.4 12.8 16 6.5"/>',
+  voice: '<path d="M3.5 10h0M6 7.5v5M8.75 4.5v11M11.5 6.5v7M14.25 8v4M16.75 10h0"/>',
+};
+
+/** 결과 종류의 아이콘. 왼쪽 사각형에 그린다. 영상 없이 음성만 남은 강의 결과는 파형이다. */
+export function outputIcon(kind, { video = true } = {}) {
+  const shape = kind === "lecture" && !video ? ICON_PATHS.voice : ICON_PATHS[kind] || ICON_PATHS.lecture;
+  return `<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${shape}</svg>`;
 }
 
 export function filterOutputItems(items = [], query = "", filter = "all") {
@@ -54,7 +80,7 @@ export function filterOutputItems(items = [], query = "", filter = "all") {
       .some((value) => String(value || "").toLocaleLowerCase("ko-KR").includes(needle));
     if (!matchesQuery) return false;
     if (filter === "pending") return item.review?.status !== "approved";
-    if (["lecture", "voice", "edit"].includes(filter)) return outputKind(item) === filter;
+    if (OUTPUT_KINDS.includes(filter)) return outputKind(item) === filter;
     return true;
   });
 }

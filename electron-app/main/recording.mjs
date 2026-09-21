@@ -9,21 +9,33 @@ import { normalizeEditName } from "../shared/index.mjs";
 // 디스플레이 수동 녹화. 결과는 편집 결과와 같은 자리·모양으로 남아 최근 결과와
 // 다듬기가 그대로 받는다. 정지는 정상 완료라 여기서 따로 다루고, 취소는 다른
 // 작업과 같은 중지 경로(cancelJobProcesses)를 쓴다.
+//
+// monitor는 무엇이 녹화되는지 보이게 하는 쪽이다(record-monitor.mjs). 녹화할 화면을
+// 테두리로 감싸 세고, 다 센 뒤에 작업자를 띄운다. 테두리는 정지할 때까지 남으므로
+// 작업자에게 그 폭을 넘겨 녹화에서 지우게 한다.
 export function createRecordingService({
   emit,
   fs = nativeFs,
   jobSnapshot,
+  monitor = null,
   readAppSettings,
   requireRuntimeTool,
   runProcess,
   state,
 }) {
   const recording = () => state.activeJob?.kind === "record" && ["running", "cancelling"].includes(state.activeJob.state);
+  // 목록에서 읽은 원본 크기. 녹화할 화면을 Electron 화면으로 옮길 때 순서를 확인한다.
+  const sizes = new Map();
 
   function listRecordingSources() {
     // 목록을 얻으려면 화면마다 한 프레임씩 찍는다. 녹화 중에는 그럴 이유가 없다.
     if (recording()) throw new Error("녹화 중에는 화면을 다시 찾지 않습니다.");
-    return listDisplays(requireRuntimeTool("ffmpeg", "FFmpeg"));
+    return listDisplays(requireRuntimeTool("ffmpeg", "FFmpeg")).then(listing => {
+      for (const display of listing.displays) {
+        if (!display.error) sizes.set(display.name, { width: display.width, height: display.height });
+      }
+      return monitor ? { ...listing, displays: monitor.describe(listing.displays) } : listing;
+    });
   }
 
   function recordingOptions(raw = {}) {
@@ -75,6 +87,12 @@ export function createRecordingService({
     ];
     if (options.audioDevice) args.push("--audio", options.audioDevice);
     try {
+      const shown = monitor
+        ? await monitor.countdown(job, { display: options.display, size: sizes.get(options.display) || null })
+        : { ready: true, edgeMask: 0 };
+      // 세는 동안 취소하면 작업자를 띄우지 않는다.
+      if (job.cancelled || !shown.ready) throw new Error("사용자가 녹화를 취소했습니다.");
+      if (shown.edgeMask) args.push("--edge-mask", String(shown.edgeMask));
       await runProcess("record", tools.node, args);
       const report = JSON.parse(await fs.readFile(path.join(outputDir, "validation-report.json"), "utf8"));
       if (state.activeJob !== job) return;

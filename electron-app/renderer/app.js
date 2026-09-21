@@ -837,13 +837,14 @@ function handleTextVoiceEvent(event) {
   }
 }
 
-const outputs = createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review });
+const appDemo = createAppDemoController({ $, $$, api, showToast, setIconStatus,
+  goToView: (view) => navigateToView(view) });
+appDemo.bind();
+
+const outputs = createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, appDemo });
 
 const recording = createRecordingController({ $, api, showToast, setIconStatus, formatDuration, review, outputs,
   suggestName: suggestedRecordingName });
-
-const appDemo = createAppDemoController({ $, $$, api, showToast, setIconStatus });
-appDemo.bind();
 
 function renderSettings(settings) {
   appSettings = settings;
@@ -1691,12 +1692,14 @@ let renderedView = "new";
 let navigationVersion = 0;
 const viewScrollPositions = new Map();
 const viewHistory = createViewHistory('new');
+// 텍스트 목소리는 새로 만들기의 한 갈래다. 사이드바에는 따로 없고 새로 만들기가 켜진다.
+const NAV_OWNER = { voice: "new" };
 function navigateToView(view, traversal = false) {
   if (view === currentView) return;
   if (!traversal) viewHistory.visit(view);
   $('#window-back').disabled = !viewHistory.canBack;
   $('#window-forward').disabled = !viewHistory.canForward;
-  const button = $(`.nav-item[data-view="${view}"]`);
+  const button = $(`.nav-item[data-view="${NAV_OWNER[view] || view}"]`);
   viewScrollPositions.set(renderedView, window.scrollY);
   currentView = view;
   const version = ++navigationVersion;
@@ -1714,7 +1717,7 @@ function navigateToView(view, traversal = false) {
   if (view !== "review") review.reviewPlayer.pause();
   if (view === "results") outputs.loadOutputs();
   if (view === "record") recording.opened();
-  if (view === "demo") appDemo.opened();
+  if (view === "demo") void appDemo.opened();
 }
 $$('[data-view]').forEach(button => button.addEventListener('click', () => navigateToView(button.dataset.view)));
 $('#window-back').addEventListener('click', () => navigateToView(viewHistory.back(), true));

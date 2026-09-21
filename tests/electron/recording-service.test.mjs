@@ -7,7 +7,7 @@ import { createRecordingService } from '../../electron-app/main/recording.mjs';
 import { dateFolder } from '../../electron-app/main/paths.mjs';
 
 // 녹화 작업자 자리에는 흉내 낸 실행을 넣는다. 실제 작업자는 record-display 검사가 맡는다.
-async function fixture(t, worker) {
+async function fixture(t, worker, { monitor = null } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'recording-service-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const events = [];
@@ -16,6 +16,7 @@ async function fixture(t, worker) {
   const service = createRecordingService({
     emit: event => events.push(event),
     jobSnapshot: () => ({ id: state.activeJob.id, kind: state.activeJob.kind, state: state.activeJob.state }),
+    monitor,
     readAppSettings: async () => ({ paths: { outputRoot: root } }),
     requireRuntimeTool: key => `/tools/${key}`,
     runProcess: async (stage, executable, args) => {
@@ -89,6 +90,44 @@ test('취소한 녹화는 폴더째 버리고, 검증에 걸린 녹화는 남긴
   await empty.service.startRecording({ name: 'bob-empty', display: 'Capture screen 7' });
   await empty.settled();
   await assert.rejects(fs.stat(empty.outputDir('bob-empty')), { code: 'ENOENT' }, '빈 폴더는 남기지 않는다');
+});
+
+// 다 센 뒤에 작업자를 띄운다. 테두리는 녹화 내내 남으므로 그 폭을 작업자에게 넘겨 지우게 한다.
+test('녹화할 화면을 다 센 뒤에 작업자를 띄우고, 세는 동안 취소하면 띄우지 않는다', async t => {
+  const order = [];
+  let service = null;
+  // 세는 동안에는 정지할 녹화가 없다. 정지 요청은 거절된다.
+  const counting = { countdown: async (job, target) => {
+    order.push(['countdown', target, job.stage, service.finishRecording()]);
+    return { ready: true, edgeMask: 6 };
+  } };
+  const started = await fixture(t, async args => {
+    order.push(['worker', flag(args, 'edge-mask')]);
+    await fs.writeFile(path.join(flag(args, 'out-dir'), 'validation-report.json'), '{}');
+  }, { monitor: counting });
+  service = started.service;
+  await service.startRecording({ name: 'bob-count', display: 'Capture screen 1' });
+  await started.settled();
+  assert.deepEqual(order, [['countdown', { display: 'Capture screen 1', size: null }, 'starting', false], ['worker', '6']]);
+
+  const cancelled = await fixture(t, async () => { throw new Error('작업자를 띄우면 안 된다'); }, {
+    monitor: { countdown: async job => { job.cancelled = true; return { ready: false, edgeMask: 0 }; } },
+  });
+  await cancelled.service.startRecording({ name: 'bob-early', display: 'Capture screen 1' });
+  await cancelled.settled();
+  assert.equal(cancelled.calls.length, 0);
+  assert.equal(cancelled.events.at(-1).type, 'record-failed');
+  assert.equal(cancelled.events.at(-1).cancelled, true);
+  await assert.rejects(fs.stat(cancelled.outputDir('bob-early')), { code: 'ENOENT' }, '세다 취소한 녹화는 폴더도 남기지 않는다');
+});
+
+test('테두리를 띄우지 못했으면 녹화 가장자리를 채우지 않는다', async t => {
+  const { service, calls, settled } = await fixture(t, async args => {
+    await fs.writeFile(path.join(flag(args, 'out-dir'), 'validation-report.json'), '{}');
+  }, { monitor: { countdown: async () => ({ ready: true, edgeMask: 0 }) } });
+  await service.startRecording({ name: 'bob-plain', display: 'Capture screen 1' });
+  await settled();
+  assert.ok(!calls[0].args.includes('--edge-mask'));
 });
 
 test('이름·화면·실행 중 작업·기존 결과를 시작 전에 막는다', async t => {

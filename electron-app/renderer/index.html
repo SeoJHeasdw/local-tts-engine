@@ -22,10 +22,9 @@
         </div>
 
         <nav id="main-nav" aria-label="주 메뉴">
-          <button class="nav-item active" type="button" data-view="new" aria-current="page"><span>◉</span><b>새 영상</b></button>
+          <button class="nav-item active" type="button" data-view="new" aria-current="page"><span>◉</span><b>새로 만들기</b></button>
           <button class="nav-item" type="button" data-view="record"><span>●</span><b>화면 녹화</b></button>
           <button class="nav-item" type="button" data-view="demo"><span>▶</span><b>앱 데모</b></button>
-          <button class="nav-item" type="button" data-view="voice"><span>♪</span><b>목소리 만들기</b></button>
           <button class="nav-item" type="button" data-view="review"><span>◆</span><b>다듬기</b><em id="polish-count" class="hidden">0</em></button>
           <button class="nav-item" type="button" data-view="edit"><span>✂</span><b>영상 편집</b></button>
           <button class="nav-item" type="button" data-view="results"><span>▤</span><b>최근 결과</b><em id="results-count">0</em></button>
@@ -46,7 +45,10 @@
         <section class="page-view" id="view-new">
         <header class="topbar">
           <div>
-            <p class="eyebrow">새 작업</p>
+            <div class="create-tabs" role="group" aria-label="만들 것">
+              <button type="button" class="selected" data-view="new" aria-current="page">강의 영상</button>
+              <button type="button" data-view="voice">텍스트 목소리</button>
+            </div>
             <h1>강의 영상 만들기</h1>
             <p class="lede">한 번 누르면 음성, 자막, 촬영, 최종 검증까지 이어집니다.</p>
           </div>
@@ -206,6 +208,24 @@
           </header>
 
           <section class="record-workspace" id="record-workspace">
+            <!-- 방금 끝난 녹화. 녹화 설정을 대신하지 않고 그 위에 붙는다. 다시 찍는 길은 늘 아래에 보인다. -->
+            <section class="card record-result hidden" id="record-done" aria-live="polite">
+              <div class="record-result-head">
+                <span class="record-result-icon" id="record-done-icon" aria-hidden="true">✓</span>
+                <div class="record-result-copy">
+                  <strong id="record-done-title">녹화를 저장했습니다</strong>
+                  <small id="record-done-summary"></small>
+                </div>
+                <button type="button" class="icon-button" id="record-dismiss" aria-label="방금 녹화 알림 닫기">×</button>
+              </div>
+              <p class="record-done-warnings hidden" id="record-done-warnings"></p>
+              <div class="record-result-actions">
+                <button type="button" class="primary-small" id="record-review">다듬기에서 내레이션 넣기</button>
+                <button type="button" class="secondary-small" id="record-open">영상 열기</button>
+                <button type="button" class="secondary-small" id="record-reveal">Finder에서 보기</button>
+              </div>
+            </section>
+
             <form class="card record-card" id="record-form">
               <div class="card-heading">
                 <div><h2>어느 화면을 녹화할까요?</h2></div>
@@ -224,28 +244,22 @@
             </form>
 
             <section class="card record-live hidden" id="record-live" aria-live="polite">
+              <figure class="record-monitor" id="record-monitor" data-state="starting">
+                <img id="record-preview" alt="녹화하는 화면 미리보기">
+                <span class="record-monitor-tag"><i aria-hidden="true"></i><span id="record-monitor-tag-text">준비</span></span>
+                <b class="record-countdown hidden" id="record-countdown" aria-hidden="true">3</b>
+                <figcaption id="record-monitor-caption">녹화할 화면</figcaption>
+              </figure>
               <div class="record-clock">
                 <span class="record-dot" aria-hidden="true"></span>
                 <strong id="record-elapsed">0:00</strong>
                 <small id="record-phase">녹화할 화면을 준비하고 있습니다</small>
               </div>
+              <p class="record-warning hidden" id="record-mirror" role="status">이 앱 창이 녹화하는 화면 위에 있어 함께 녹화되고 있습니다. 창을 다른 화면으로 옮기세요.</p>
               <p class="record-warning hidden" id="record-warning" role="status"></p>
               <div class="job-controls">
                 <button class="primary-small" id="record-stop" type="button" disabled>정지하고 저장</button>
                 <button class="cancel-button" id="record-cancel" type="button">취소</button>
-              </div>
-            </section>
-
-            <section class="card complete-panel record-done hidden" id="record-done">
-              <div class="complete-icon" id="record-done-icon">✓</div>
-              <h3 id="record-done-title">녹화를 저장했습니다</h3>
-              <p id="record-done-summary"></p>
-              <p class="record-done-warnings hidden" id="record-done-warnings"></p>
-              <div class="complete-actions">
-                <button type="button" class="primary-small" id="record-review">다듬기에서 내레이션 넣기</button>
-                <button type="button" class="secondary-small" id="record-open">영상 열기</button>
-                <button type="button" class="secondary-small" id="record-reveal">Finder에서 보기</button>
-                <button type="button" class="secondary-small" id="record-again">새 녹화</button>
               </div>
             </section>
 
@@ -267,45 +281,56 @@
           </header>
 
           <section class="record-workspace">
-            <section class="card">
+            <section class="card record-card" id="demo-setup">
               <div class="card-heading">
                 <div><h2>무엇을 찍을까요?</h2></div>
-                <div class="demo-actions">
-                  <button type="button" class="secondary-small" id="demo-open" data-demo-action>결과 폴더 열기</button>
-                  <button type="button" class="secondary-small" id="demo-pick" data-demo-action>시나리오 고르기</button>
-                </div>
+                <button type="button" class="secondary-small" id="demo-pick" data-demo-action>시나리오 고르기</button>
               </div>
-              <div id="demo-scenario"></div>
-              <label class="field full"><span>결과 이름</span><input id="demo-name" autocomplete="off" spellcheck="false" placeholder="비우면 시나리오 이름"><small>영문 소문자·숫자·하이픈.</small></label>
+              <div id="demo-scenario" class="demo-scenario"></div>
+              <details class="advanced-options full">
+                <summary><span>세부 설정</span><small>결과 이름</small></summary>
+                <div>
+                  <label class="field full"><span>결과 이름</span><input id="demo-name" autocomplete="off" spellcheck="false" placeholder="비우면 시나리오 이름"><small>영문 소문자·숫자·하이픈.</small></label>
+                </div>
+              </details>
               <button class="primary-button full" id="demo-record-start" type="button" data-demo-action disabled><span>촬영 시작</span><span aria-hidden="true">●</span></button>
+              <button type="button" class="secondary-small" id="demo-open" data-demo-action>이미 찍어 둔 결과 이어서 하기</button>
             </section>
 
-            <section class="card hidden" id="demo-progress" aria-live="polite">
-              <div class="record-clock"><span class="record-dot" aria-hidden="true"></span><strong id="demo-progress-label"></strong></div>
-              <div class="job-controls"><button class="cancel-button" id="demo-cancel" type="button">중지</button></div>
+            <section class="card record-live hidden" id="demo-progress" aria-live="polite">
+              <div class="record-clock">
+                <span class="record-dot" aria-hidden="true"></span>
+                <strong id="demo-progress-label"></strong>
+                <small id="demo-progress-note">끝나면 이 화면이 다음 단계를 엽니다</small>
+              </div>
+              <div class="job-controls">
+                <button class="cancel-button" id="demo-cancel" type="button">중지</button>
+              </div>
             </section>
 
             <section class="hidden" id="demo-project">
-              <div class="card">
+              <section class="card record-card">
                 <div class="card-heading">
-                  <div><h2 id="demo-project-name"></h2><p id="demo-project-meta" class="muted"></p></div>
+                  <div><h2 id="demo-project-name"></h2></div>
                   <a class="secondary-small hidden" id="demo-review" href="#" target="_blank">검수 화면 열기</a>
                 </div>
-                <p id="demo-step-hint"></p>
-                <ul id="demo-videos" class="demo-videos"></ul>
-              </div>
+                <p class="lede" id="demo-project-meta"></p>
+                <p class="context-advice" id="demo-step-hint"></p>
+                <ul class="demo-videos" id="demo-videos"></ul>
+              </section>
 
               <div id="demo-scenes" class="demo-scenes"></div>
 
-              <div class="card">
-                <div class="demo-actions">
+              <section class="card record-card">
+                <div class="card-heading">
+                  <div><h2>다음 단계</h2></div>
                   <button type="button" class="secondary-small" id="demo-save" data-demo-action>대본 저장</button>
-                  <label class="field"><span>후보 수</span><select id="demo-candidates"><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
-                  <button type="button" class="primary-small" id="demo-voice-start" data-demo-action>목소리 후보 만들기</button>
-                  <label class="field"><span>화질</span><select id="demo-quality"><option value="standard">1080p</option><option value="high" selected>1440p</option><option value="ultra">4K</option></select></label>
-                  <button type="button" class="primary-small" id="demo-render-start" data-demo-action>완성본 만들기</button>
                 </div>
-              </div>
+                <label class="field full"><span>비교할 후보 수</span><input id="demo-candidates" type="number" min="1" max="8" value="3"><small>확정한 장면마다 이만큼 만들고 직접 듣고 고릅니다.</small></label>
+                <button class="primary-button full" id="demo-voice-start" type="button" data-demo-action><span>목소리 후보 만들기</span><span aria-hidden="true">♪</span></button>
+                <label class="field full"><span>완성본 화질</span><select id="demo-quality"><option value="standard">1080p</option><option value="high" selected>1440p · 기본</option><option value="ultra">4K</option></select><small>화질마다 다른 파일로 남아 나란히 견줄 수 있습니다.</small></label>
+                <button class="primary-button full" id="demo-render-start" type="button" data-demo-action><span>완성본 만들기</span><span aria-hidden="true">→</span></button>
+              </section>
             </section>
 
             <details class="log-panel">
@@ -318,7 +343,10 @@
         <section class="page-view hidden" id="view-voice">
           <header class="topbar">
             <div>
-              <p class="eyebrow">목소리</p>
+              <div class="create-tabs" role="group" aria-label="만들 것">
+                <button type="button" data-view="new">강의 영상</button>
+                <button type="button" class="selected" data-view="voice" aria-current="page">텍스트 목소리</button>
+              </div>
               <h1>텍스트로 목소리 만들기</h1>
               <p class="lede">같은 문장을 여러 버전으로 동시에 만든 뒤 직접 듣고 고릅니다.</p>
             </div>
@@ -568,10 +596,12 @@
             <label class="result-search"><span aria-hidden="true">⌕</span><input id="result-search" type="search" placeholder="결과 이름 검색" autocomplete="off"></label>
             <div class="result-filters" id="result-filters">
               <button type="button" class="selected" data-output-filter="all">전체</button>
-              <button type="button" data-output-filter="lecture">강의</button>
-              <button type="button" data-output-filter="voice">목소리</button>
-              <button type="button" data-output-filter="edit">편집</button>
-              <button type="button" data-output-filter="pending">확인 필요</button>
+              <button type="button" data-output-filter="lecture"><i class="kind-dot" data-kind="lecture" aria-hidden="true"></i>강의<small>0</small></button>
+              <button type="button" data-output-filter="record"><i class="kind-dot" data-kind="record" aria-hidden="true"></i>화면 녹화<small>0</small></button>
+              <button type="button" data-output-filter="demo"><i class="kind-dot" data-kind="demo" aria-hidden="true"></i>앱 데모<small>0</small></button>
+              <button type="button" data-output-filter="voice"><i class="kind-dot" data-kind="voice" aria-hidden="true"></i>목소리<small>0</small></button>
+              <button type="button" data-output-filter="edit"><i class="kind-dot" data-kind="edit" aria-hidden="true"></i>편집<small>0</small></button>
+              <button type="button" data-output-filter="pending">확인 필요<small>0</small></button>
             </div>
             <span class="result-count-summary" id="result-count-summary">0개</span>
           </section>

@@ -84,12 +84,14 @@ test('찍어 둔 결과 폴더를 화면에서 이어 받는다', async t => {
 test('결과 폴더에서 대본·후보·완성본을 한 벌로 모은다', async t => {
   const { service, outDir, demoDir } = await studio(t, { scenes: scenesFile, script: scriptFile });
   await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-01.wav'), '');
+  await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-01.json'), JSON.stringify({ durationMs: 6520 }));
   await fs.writeFile(path.join(outDir, 'rice-first-run-high.mp4'), '');
   const project = await service.readDemoProject(outDir);
   assert.equal(project.scenario, 'rice-first-run');
   assert.equal(project.scenes[0].screenText, '코어 온라인');
   assert.equal(project.scenes[0].timeScale, 0.25);
   assert.equal(project.scenes[0].candidates.length, 2);
+  assert.equal(project.scenes[0].candidates[0].durationMs, 6520, '후보 길이를 함께 준다');
   assert.match(project.scenes[0].candidates[0].url, /^file:\/\/.*candidate-01\.wav$/);
   assert.deepEqual(project.videos.map(video => video.name), ['rice-first-run-high.mp4']);
   assert.equal(project.reviewUrl, null, '검수 화면이 없으면 지어내지 않는다');
@@ -154,4 +156,16 @@ test('다음에 할 일은 결과 폴더의 상태만 보고 정한다', () => {
 test('느리게 찍은 장면의 길이는 되돌린 뒤로 보여 준다', () => {
   assert.deepEqual(sceneSeconds({ startMs: 0, endMs: 20000, timeScale: 0.25 }), { src: 20, out: 5 });
   assert.deepEqual(sceneSeconds({ startMs: 0, endMs: 2000 }), { src: 2, out: 2 });
+});
+
+test('옆 저장소의 demo/scenarios를 훑어 고를 거리를 만든다', async t => {
+  const { service } = await studio(t);
+  const found = await service.listDemoScenarios();
+  // 이 저장소의 형제 저장소에 실제로 있는 시나리오를 읽는다. 읽으면서 검증한다.
+  assert.ok(Array.isArray(found));
+  for (const item of found) {
+    assert.ok(item.file.endsWith('.json'));
+    assert.ok(item.from.includes('/'), '어느 저장소가 내놓았는지 함께 준다');
+    if (!item.error) assert.ok(item.scenes.length > 0);
+  }
 });

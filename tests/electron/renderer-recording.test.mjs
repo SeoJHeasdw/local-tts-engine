@@ -172,3 +172,75 @@ test('실패는 원인을 보여 주고, 음성 포함은 다음 녹화에서 �
   assert.equal($('#record-audio').checked, false);
   assert.equal($('#record-audio-field').classList.contains('hidden'), true);
 });
+
+// 테두리는 녹화에 찍히므로 세는 동안만 뜬다. 녹화 중에 무엇이 찍히는지는 미리보기가 보인다.
+test('시작 직전에는 녹화할 화면을 세어 보이고, 녹화 중에는 그 화면을 비춘다', async () => {
+  const { $, controller, cards } = fixture({ displays: [
+    { name: 'Capture screen 1', label: 'DELL P2419HC', width: 1920, height: 1080, thumbnail: 'data:image/jpeg;base64,BB' },
+  ] });
+  await controller.loadDisplays();
+  assert.equal(cards()[0].children[2].textContent, 'DELL P2419HC', '화면 번호 대신 모니터 이름을 적는다');
+
+  controller.handleEvent({ type: 'record-started', options: { display: 'Capture screen 1', audioDevice: null } });
+  assert.equal($('#record-preview').src, 'data:image/jpeg;base64,BB', '첫 미리보기 전에는 목록의 썸네일을 비춘다');
+  controller.handleEvent({ type: 'record-countdown', remaining: 3, label: 'DELL P2419HC', framed: true });
+  assert.equal($('#record-monitor').dataset.state, 'countdown');
+  assert.equal($('#record-countdown').textContent, '3');
+  assert.equal($('#record-countdown').classList.contains('hidden'), false);
+  assert.match($('#record-phase').textContent, /3초 뒤 녹화합니다 · 빨간 테두리/);
+  assert.equal($('#record-monitor-caption').textContent, 'DELL P2419HC · 1920×1080 · 녹화할 화면');
+  assert.equal($('#record-stop').disabled, true, '세는 동안에는 정지할 녹화가 없다');
+  controller.handleEvent({ type: 'record-preview', image: 'data:image/jpeg;base64,EARLY' });
+  assert.equal($('#record-preview').src, 'data:image/jpeg;base64,BB', '녹화 전에 온 미리보기는 쓰지 않는다');
+
+  controller.handleEvent({ type: 'record-countdown', remaining: 0, framed: true });
+  assert.equal($('#record-monitor').dataset.state, 'starting');
+  assert.equal($('#record-countdown').classList.contains('hidden'), true);
+  assert.match($('#record-phase').textContent, /시작하고 있습니다/);
+
+  controller.handleEvent({ type: 'record-phase', phase: 'recording' });
+  assert.equal($('#record-monitor').dataset.state, 'live');
+  assert.equal($('#record-monitor-tag-text').textContent, 'REC');
+  controller.handleEvent({ type: 'record-preview', image: 'data:image/jpeg;base64,LIVE', mirrored: true });
+  assert.equal($('#record-preview').src, 'data:image/jpeg;base64,LIVE');
+  assert.equal($('#record-mirror').classList.contains('hidden'), false, '앱 창도 함께 녹화되고 있음을 알린다');
+  controller.handleEvent({ type: 'record-preview', image: 'data:image/jpeg;base64,NEXT', mirrored: false });
+  assert.equal($('#record-mirror').classList.contains('hidden'), true);
+
+  controller.handleEvent({ type: 'record-preview-paused' });
+  assert.match($('#record-monitor-caption').textContent, /녹화 품질을 지키려고 미리보기를 멈췄습니다/);
+
+  controller.handleEvent({ type: 'record-finishing' });
+  assert.equal($('#record-monitor').dataset.state, 'finishing');
+  assert.equal($('#record-monitor-tag-text').textContent, '저장 중');
+});
+
+// 완료 화면이 녹화 설정을 대신하면 다시 찍는 길을 찾아 헤맨다(2026-09-21 사용자 지적).
+// 방금 녹화는 설정 위의 결과 카드로 두고, 설정은 늘 보이게 한다.
+test('녹화가 끝나도 녹화 설정은 그대로 보이고, 방금 녹화는 그 위 결과 카드로 남는다', async () => {
+  const { $, controller, calls, fire } = fixture();
+  await controller.loadDisplays();
+  assert.equal(calls.list, 1);
+  controller.handleEvent({ type: 'record-started', options: { display: 'Capture screen 1' } });
+  assert.equal($('#record-form').classList.contains('hidden'), true, '녹화 중에는 진행 카드만 보인다');
+  controller.handleEvent({ type: 'record-phase', phase: 'recording' });
+  controller.handleEvent({ type: 'record-complete', report: {
+    target: { root: 'edit', day: '2026-09-21', name: 'bob-one' }, durationMs: 5000,
+    source: { display: { width: 1920, height: 1080 }, audio: 'silent' }, warnings: [],
+  } });
+  assert.equal($('#record-done').classList.contains('hidden'), false);
+  assert.equal($('#record-form').classList.contains('hidden'), false, '다시 찍는 길이 바로 아래에 있다');
+  assert.equal($('#record-live').classList.contains('hidden'), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.list, 2, '방금 녹화한 화면의 썸네일을 새로 찍는다');
+  assert.equal($('#record-start').disabled, false);
+
+  await fire('#record-dismiss', 'click');
+  assert.equal($('#record-done').classList.contains('hidden'), true);
+
+  controller.handleEvent({ type: 'record-failed', cancelled: false, message: '화면을 찾지 못했습니다.' });
+  assert.equal($('#record-done').classList.contains('hidden'), false, '실패도 같은 자리에 알린다');
+  assert.equal($('#record-form').classList.contains('hidden'), false);
+  controller.handleEvent({ type: 'record-started', options: { display: 'Capture screen 1' } });
+  assert.equal($('#record-done').classList.contains('hidden'), true, '새 녹화를 시작하면 지난 결과 카드를 걷는다');
+});

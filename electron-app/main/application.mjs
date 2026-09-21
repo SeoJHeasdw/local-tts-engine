@@ -4,6 +4,7 @@ import { createCatalogService } from "./catalog.mjs";
 import { createMediaService } from "./media.mjs";
 import { createProductionService } from "./production.mjs";
 import { createRecordingService } from "./recording.mjs";
+import { createRecordMonitorService } from "./record-monitor.mjs";
 import { createAppDemoService } from "./app-demo.mjs";
 import { createVoicesService } from "./voices.mjs";
 import { createEditingComposeService } from "./editing/compose.mjs";
@@ -22,6 +23,7 @@ import { resumeJobProcesses, stopJobProcesses } from "./job-process.mjs";
 export function createStudio({
   app, BrowserWindow, ipcMain, dialog, shell,
   powerMonitor = null, powerSaveBlocker = null, Notification = null,
+  screen = null, desktopCapturer = null,
 }) {
   const state = { activeJob: null, mainWindow: null, catalogCache: null, catalogCacheRoot: null, runtimeTools: {} };
   const { readAppSettings, saveAppSettings, applyVoiceSettings } = createSettingsService({
@@ -29,10 +31,12 @@ export function createStudio({
   });
   // 작업 사건은 모두 emit 하나를 지난다. 잠 막기와 완료 알림은 그 길목에서
   // 함께 판단한다 — 시작·끝을 따로 세어 두면 어느 한쪽에서 새기 쉽다.
+  // 녹화 미리보기도 같은 길목에서 녹화 사건을 따라 켜고 끈다.
   let attention = null;
+  let monitor = null;
   const { emit, jobSnapshot, requireRuntimeTool, assertRuntime, runProcess, runUtility } = createRuntimeService({
     state,
-    onEvent: (payload) => { attention?.watch(payload); },
+    onEvent: (payload) => { attention?.watch(payload); monitor?.watch(payload); },
   });
   attention = createAttentionService({
     powerSaveBlocker, Notification, readAppSettings, state,
@@ -46,11 +50,14 @@ export function createStudio({
   const { writeActiveJob, clearActiveJob, readActiveJob, finishedUnitNames, launchPipeline } = createProductionService({
     emit, ffprobe, jobSnapshot, loadCatalog, requireRuntimeTool, runProcess, state,
   });
+  monitor = createRecordMonitorService({
+    BrowserWindow, screen, desktopCapturer, emit, state,
+  });
   const { listRecordingSources, startRecording, finishRecording } = createRecordingService({
-    emit, jobSnapshot, readAppSettings, requireRuntimeTool, runProcess, state,
+    emit, jobSnapshot, monitor, readAppSettings, requireRuntimeTool, runProcess, state,
   });
   const {
-    pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, saveDemoScript,
+    listDemoScenarios, pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, saveDemoScript,
     startDemoRecord, startDemoVoice, startDemoRender,
   } = createAppDemoService({
     dialog, emit, jobSnapshot, readAppSettings, requireRuntimeTool, runProcess, state,
@@ -86,7 +93,7 @@ export function createStudio({
     applyVoiceSettings, assertRuntime, chosenRecord, clearActiveJob,
     deleteOutput, dialog, emit, findVideoTimeline, finishRecording,
     finishedUnitNames, ipcMain, jobSnapshot, launchPipeline,
-    listOutputs, listRecordingSources, loadCatalog, pickDemoProject, pickDemoScenario,
+    listDemoScenarios, listOutputs, listRecordingSources, loadCatalog, pickDemoProject, pickDemoScenario,
     readActiveJob, readAppSettings, readDemoProject, readDemoScenario,
     registerSelected, renameOutput, requireRuntimeTool, resolveOutputFile,
     runFineTune, runTextVoiceCandidates, runVideoEdit, saveAppSettings, saveDemoScript,
@@ -120,6 +127,7 @@ export function createStudio({
 
   function stop() {
     attention.release();
+    monitor.stop();
     if (state.activeJob?.paused) resumeJobProcesses(state.activeJob);
     stopJobProcesses(state.activeJob);
   }

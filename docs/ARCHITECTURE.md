@@ -12,6 +12,7 @@
 | `electron-app/main/runtime.mjs`, `job-process.mjs` | 프로세스 실행·진행 이벤트·중지·일시정지 |
 | `electron-app/main/production.mjs` | 입력 고정 → 합성 → 자막 → 촬영 → 검증·발행 |
 | `electron-app/main/recording.mjs` | 디스플레이 수동 녹화의 시작·정지·결과 기록 |
+| `electron-app/main/record-monitor.mjs` | 녹화할 화면 표시: 세기·가장자리 테두리 창, 녹화 중 미리보기 |
 | `electron-app/main/capture/` | 화면 촬영: 규격·인코딩·프레임 전송·사이트 서버, 디스플레이 목록·녹화, 앱 조작 |
 | `electron-app/main/workers/` | 별도 프로세스로 도는 입력 고정·자막·촬영·녹화·앱 데모 진입점 |
 | `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보와 학습 작업 |
@@ -20,6 +21,7 @@
 | `electron-app/renderer/app.js` | 초기화·화면 전환·제작 진행 |
 | `electron-app/renderer/job-pace.mjs` | 단계별 실측으로 내는 이 편·전체 남은 시간 |
 | `electron-app/renderer/controllers/` | 검수·클립 편집·최근 결과·화면 녹화 화면 |
+| `electron-app/renderer/record-countdown.*` | 녹화할 화면 가운데에 세는 동안만 뜨는 숫자 창 |
 | `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산·촬영 규격·자막 cue·데모 시나리오와 편집 계획 |
 | `src/local_tts_engine/course_pilot.py` | 강의 생성 CLI 조립 |
 | `src/local_tts_engine/course/` | 대본 입력·청킹·오디오·정렬·직렬화 |
@@ -107,6 +109,19 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 정지 신호를 그룹에 보내면 ffmpeg가 SIGUSR1로 죽어 파일을 닫지 못한다. 정지에는 강제
 종료 시계가 없고 `job.cancelled`를 쓰지 않는다. ffmpeg는 늘 파이프 stdin으로 띄운다.
 작업자는 단계를 `[record] {"phase":…}` 줄로 알리고 실행기가 `record-phase` 사건으로 바꾼다.
+
+무엇이 녹화되는지는 `record-monitor.mjs`가 보인다. 녹화 서비스는 작업자를 띄우기 전에
+`countdown`을 부르고, 모니터는 고른 화면 가장자리에 불투명 막대 창 넷(3pt)과 가운데 숫자
+창을 띄워 3초를 센다. 다 세면 숫자 창만 걷고 `{ ready, edgeMask }`를 돌려준다. 테두리는
+녹화에 찍히므로(공유 제외 창도 avfoundation에 담긴다) 서비스가 `--edge-mask`로 그 픽셀 폭을
+작업자에 넘기고, 작업자가 그보다 조금 넓게 가장자리를 채워 지운다. 모니터는 emit 길목에서
+녹화 사건을 따라 `record-finishing`·`cancelling`·`record-complete`·`record-failed`에 테두리를
+걷고, `record-phase: recording`부터 1초마다 그 화면을 떠 `record-preview`로 보낸다. 녹화가
+프레임을 복제·누락하기 시작하면 미리보기를 멈추고 `record-preview-paused`를 보낸다.
+
+`Capture screen N`은 avfoundation 목록 순서이고 Electron `screen.getAllDisplays()`도 같은
+순서(주 화면이 먼저)였다. 순서로 찾되 원본 픽셀 크기로 확인하고, 어긋나면 크기가 유일한
+화면만 받는다. 모르면 테두리 없이 세고 가장자리도 채우지 않는다.
 
 결과는 `editOutputRoot/<날짜>/<이름>/`에 `<이름>.mp4`, `.capture.json`, 편집 결과와 같은
 모양의 `validation-report.json`(`operation: "record-display"`, `warnings`)으로 남아

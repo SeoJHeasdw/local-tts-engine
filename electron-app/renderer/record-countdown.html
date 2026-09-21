@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'">
+    <title>녹화할 화면</title>
+    <link rel="stylesheet" href="./record-countdown.css">
+    <script type="module" src="./record-countdown.js"></script>
+  </head>
+  <body>
+    <!-- 녹화할 화면 가운데에 세는 동안만 뜬다. 녹화가 시작되기 전에 걷히므로 영상에 담기지 않는다.
+         테두리는 main이 가장자리에 띄우는 막대 창이다. -->
+    <div class="badge" role="status">
+      <b id="count">3</b>
+      <span class="copy"><strong>이 화면을 녹화합니다</strong><small id="label">정지하면 빨간 테두리가 사라집니다</small></span>
+    </div>
+  </body>
+</html>

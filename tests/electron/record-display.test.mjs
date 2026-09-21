@@ -7,10 +7,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ffmpegErrorText, parseAvfoundationDevices, parseDisplaySize, resolveDevice, screenDevices } from '../../electron-app/main/capture/displays.mjs';
 import {
-  avfoundationInput, createProgressReader, displayProfile, recordArgs, recordingChecks, recordingWarnings,
+  avfoundationInput, createProgressReader, displayProfile, edgeFill, recordArgs, recordFilters, recordingChecks, recordingWarnings,
   silentTrackArgs, startDisplayRecording,
 } from '../../electron-app/main/capture/record-display.mjs';
-import { captureEncodingArgs } from '../../electron-app/main/capture/encoding.mjs';
+import { CAPTURE_COLOR_FILTERS, captureEncodingArgs } from '../../electron-app/main/capture/encoding.mjs';
 
 const exec = promisify(execFile);
 
@@ -193,4 +193,40 @@ test('같은 이름의 녹화가 있으면 덮어쓰지 않는다', { timeout: 3
   const session = startDisplayRecording({ ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', outDir, name: 'bob-demo', prepare: syntheticSource() });
   await assert.rejects(session.done, /이미 있습니다/);
   assert.equal(await fs.readFile(path.join(outDir, 'bob-demo.mp4'), 'utf8'), 'previous');
+});
+
+// 녹화하는 동안 화면 가장자리에 빨간 테두리가 떠 있다(record-monitor.mjs). 녹화는 그 폭을
+// 안쪽 픽셀로 채워 지운다. 회색 바탕에 4px 빨간 테두리를 그린 합성 화면으로 실제 녹화한다.
+test('녹화 중 테두리가 덮은 가장자리를 안쪽 픽셀로 채워 녹화에서 지운다', { timeout: 30_000 }, async t => {
+  assert.equal(recordFilters(0), CAPTURE_COLOR_FILTERS, '테두리가 없으면 덱과 같은 필터 그대로다');
+  assert.equal(recordFilters(6), `${CAPTURE_COLOR_FILTERS},fillborders=left=10:right=10:top=10:bottom=10:mode=smear`,
+    '색 변환 뒤에 채우므로 채도가 번진 만큼 더 넓게 채운다');
+  assert.deepEqual([3, 4, 6].map(edgeFill), [8, 8, 10], '채도는 두 픽셀씩 묶이므로 짝수로 올린다');
+  assert.throws(() => recordFilters(2.5), /가장자리 폭/);
+
+  const framed = () => syntheticSource({
+    input: ['-re', '-f', 'lavfi', '-i', 'color=c=0x808080:size=320x180:rate=25,drawbox=x=0:y=0:w=iw:h=ih:color=red:t=4,format=bgr0'],
+  });
+  async function record(name, edgeMask) {
+    const outDir = await workspace(t);
+    const session = startDisplayRecording({ ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', outDir: `${outDir}-${name}`, name, edgeMask,
+      prepare: framed(), onEvent: event => { if (event.phase === 'recording') setTimeout(session.stop, 600); } });
+    const report = await session.done;
+    const { stdout } = await exec('ffmpeg', ['-v', 'error', '-i', report.videoPath, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+      { encoding: 'buffer', maxBuffer: 1 << 24 });
+    const pixel = (x, y) => [...stdout.subarray((y * 320 + x) * 3, (y * 320 + x) * 3 + 3)];
+    return { report, pixel };
+  }
+  const reddish = ([r, g, b]) => r - Math.max(g, b) > 24;
+
+  const plain = await record('plain', 0);
+  assert.ok(reddish(plain.pixel(1, 90)), '채우지 않으면 테두리가 녹화에 남는다');
+
+  const masked = await record('masked', 4);
+  const edges = [];
+  for (let at = 0; at < 14; at++) edges.push([at, 90], [319 - at, 90], [160, at], [160, 179 - at], [at, at]);
+  for (const [x, y] of edges) assert.ok(!reddish(masked.pixel(x, y)), `(${x},${y}) ${masked.pixel(x, y)}`);
+  assert.equal(masked.report.summary.ok, true, '크기·규격·색 태그는 그대로다');
+  assert.equal(masked.report.source.edgeFill, 8, '채운 폭을 보고서에 남긴다');
+  assert.equal(plain.report.source.edgeFill, undefined);
 });
