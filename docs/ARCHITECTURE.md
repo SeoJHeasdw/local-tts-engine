@@ -18,9 +18,9 @@
 | `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보와 학습 작업 |
 | `electron-app/main/editing/` | 합치기·페이지 교체·구간 편집·미리듣기 |
 | `electron-app/main/`의 나머지 서비스 | 경로·설정·목록·파일·미디어·결과·IPC·창 관리 |
-| `electron-app/renderer/app.js` | 초기화·화면 전환·제작 진행 |
+| `electron-app/renderer/app.js` | 초기화·화면 전환·제작 진행, 새로 만들기 갈래 탭과 실행 중 갈래 표시 |
 | `electron-app/renderer/job-pace.mjs` | 단계별 실측으로 내는 이 편·전체 남은 시간 |
-| `electron-app/renderer/controllers/` | 검수·클립 편집·최근 결과·화면 녹화 화면 |
+| `electron-app/renderer/controllers/` | 검수·클립 편집·최근 결과·화면 녹화·앱 데모 화면 |
 | `electron-app/renderer/record-countdown.*` | 녹화할 화면 가운데에 세는 동안만 뜨는 숫자 창 |
 | `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산·촬영 규격·자막 cue·데모 시나리오와 편집 계획 |
 | `src/local_tts_engine/course_pilot.py` | 강의 생성 CLI 조립 |
@@ -92,6 +92,18 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 실패 시 입력을 보존하고 성공·중지·이어하기 기록 삭제 때 정리한다. 이어하기는 완료
 레슨의 실제 파일·화질·판본·해시를 검사한다. 실패 레슨의 음성·정렬·촬영은 새로 실행한다.
 새 작업은 과거 완성본을 자동으로 건너뛰지 않으며 앱의 생성 캐시는 항상 꺼져 있다.
+
+## 새로 만들기 화면
+
+강의 영상·텍스트 목소리·화면 녹화·앱 데모는 새로 만들기의 네 갈래다. 사이드바에는 새로
+만들기 하나만 있고 갈래는 `#create-bar`의 탭 한 벌에서 오간다. 작업 화면(`view-new`·
+`view-voice`·`view-record`·`view-demo`)과 컨트롤러는 갈래마다 따로다 — 강의는 한 번 눌러
+끝까지, 녹화는 사람이 시작·정지, 앱 데모는 촬영 → 대본 → 후보 → 렌더로 진행 모양이 달라서다.
+
+작업은 앱 전체에서 한 번에 하나다(`state.activeJob`). 화면은 작업 사건을
+`renderer/view-utils.mjs`의 `jobActivity`로 읽어 어느 갈래가 도는지 알고, 다른 갈래의 시작
+단추에만 `inert`를 건다. 설정·대본은 미리 써 둘 수 있다. 창을 다시 열면 `getStatus`의
+`activeJob.kind`로 같은 판정을 되살린다. 편집·학습은 갈래가 아니며 제 대화상자가 화면을 막는다.
 
 ## 화면 녹화
 

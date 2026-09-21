@@ -51,9 +51,9 @@ export function createRecordingController({
 
   const busy = () => ["starting", "recording", "finishing", "cancelling"].includes(phase);
 
+  // 녹화 중임을 사이드바와 갈래 탭에 표시하는 것은 app.js가 phase를 읽어 한다.
   function status(label, tone = "idle") {
     setIconStatus("#record-top-status", label, tone);
-    $('.nav-item[data-view="record"]')?.classList.toggle("recording", phase === "recording");
   }
 
   // 녹화 중에는 진행 카드만 보인다. 그 밖에는 언제나 녹화 설정이 보이고, 방금 끝난 녹화는

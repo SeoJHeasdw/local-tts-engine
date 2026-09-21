@@ -6,7 +6,7 @@ import { createAppDemoController } from "./controllers/app-demo.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
-import { buildChapterRanges, createViewHistory, completionFindings, completionSummary, etaLabel, shortPath, summarizePageRange, summarizeVoiceFindings, unitLabel, voiceFindingReason } from "./view-utils.mjs";
+import { CREATE_VIEWS, buildChapterRanges, createViewHistory, completionFindings, completionSummary, etaLabel, shortPath, summarizePageRange, summarizeVoiceFindings, jobActivity, jobView, unitLabel, voiceFindingReason } from "./view-utils.mjs";
 import { createJobPace } from "./job-pace.mjs";
 
 const api = window.ttsStudio;
@@ -1068,11 +1068,20 @@ function handleTrainingEvent(event) {
 }
 
 function handleJobEvent(event) {
-  if (["log", "progress", "stage", "record-phase"].includes(event.type)) return renderJobEvent(event);
+  const activity = jobActivity(event);
+  if (activity) runningView = activity.running ? activity.view : null;
+  // 녹화는 단계마다 사이드바 표시가 바뀐다(준비 → 녹화 중 → 마무리).
+  const repaint = activity || (event.jobKind === "record" && event.type !== "log");
+  const render = () => {
+    renderJobEvent(event);
+    if (repaint) paintCreateActivity();
+  };
+  if (["log", "progress", "stage", "record-phase"].includes(event.type)) return render();
   const container = event.jobKind === "record" ? $("#record-workspace")
-    : ["edit", "text-voice", "training"].includes(event.jobKind)
-      ? $("#edit-job-dialog .job-modal-body") : $("#job-workspace");
-  return animateLayout(container, () => renderJobEvent(event));
+    : String(event.jobKind || "").startsWith("demo-") ? $("#view-demo .record-workspace")
+      : ["edit", "text-voice", "training"].includes(event.jobKind)
+        ? $("#edit-job-dialog .job-modal-body") : $("#job-workspace");
+  return animateLayout(container, render);
 }
 
 function renderJobEvent(event) {
@@ -1354,6 +1363,7 @@ async function initialize() {
   for (const issue of status.setupIssues || []) appendLog(`[환경] ${issue}\n`);
   setBusy(false);
   if (["running", "cancelling"].includes(status.activeJob?.state)) {
+    runningView = jobView(status.activeJob.kind);
     if (status.activeJob.kind === "edit") {
       openJobDialog("영상 편집 중");
       setEditBusy(true);
@@ -1361,6 +1371,8 @@ async function initialize() {
       openJobDialog("파인튜닝 학습 중");
     } else if (status.activeJob.kind === "record") {
       recording.restore(status.activeJob);
+    } else if (String(status.activeJob.kind).startsWith("demo-")) {
+      appDemo.restore(status.activeJob);
     } else if (status.activeJob.kind === "text-voice") {
       candidatePurpose = "text";
       openJobDialog("텍스트 목소리 후보 생성 중");
@@ -1377,9 +1389,10 @@ async function initialize() {
   if (status.activeJob?.kind === "create" && ["failed", "cancelled"].includes(status.activeJob.state)) {
     handleJobEvent({ type: "failed", cancelled: status.activeJob.state === "cancelled", message: status.activeJob.error || "이전 작업이 종료됐습니다." });
   }
+  paintCreateActivity();
   await outputs.loadOutputs();
   const initialView = new URLSearchParams(window.location.search).get("view");
-  if (["record", "voice", "review", "edit", "results"].includes(initialView)) {
+  if (["record", "demo", "voice", "review", "edit", "results"].includes(initialView)) {
     $(`[data-view='${initialView}']`).click();
   } else if (initialView === "results-group-menu") {
     // 묶음 안의 행에서 연 메뉴는 묶음 밖까지 나와야 한다. 잘리는지는 그 자리를
@@ -1692,8 +1705,47 @@ let renderedView = "new";
 let navigationVersion = 0;
 const viewScrollPositions = new Map();
 const viewHistory = createViewHistory('new');
-// 텍스트 목소리는 새로 만들기의 한 갈래다. 사이드바에는 따로 없고 새로 만들기가 켜진다.
-const NAV_OWNER = { voice: "new" };
+// 새로 만들기의 갈래(텍스트 목소리·화면 녹화·앱 데모)는 사이드바에 따로 없고 새로 만들기가 켜진다.
+const NAV_OWNER = Object.fromEntries(CREATE_VIEWS.map(view => [view, "new"]));
+// 사이드바의 새로 만들기는 마지막으로 본 갈래로 돌아간다. 앱 데모 대본을 쓰다 최근 결과에
+// 다녀왔는데 강의 영상이 열리면 제자리를 다시 찾아야 한다.
+let lastCreateView = "new";
+// 지금 작업이 도는 갈래. 작업은 앱 전체에서 한 번에 하나라(main의 activeJob) 다른 갈래는
+// 준비까지만 하고 시작은 기다린다. 막는 것은 시작 단추뿐이다 — 대본·설정은 미리 써 둘 수 있다.
+let runningView = null;
+const CREATE_STARTERS = {
+  new: ["#start-button", "#resume-continue"],
+  voice: ["#start-text-voices"],
+  record: ["#record-start"],
+  demo: ["#demo-record-start", "#demo-voice-start", "#demo-render-start"],
+};
+const RUNNING_NOTE = {
+  new: "강의 영상을 만드는 중입니다",
+  voice: "텍스트 목소리 후보를 만드는 중입니다",
+  record: "화면을 녹화하는 중입니다",
+  demo: "앱 데모 작업이 진행 중입니다",
+};
+function paintCreateActivity() {
+  const recordingNow = recording.phase === "recording";
+  for (const tab of $$("#create-bar [data-view]")) {
+    tab.classList.toggle("running", tab.dataset.view === runningView);
+    tab.classList.toggle("recording", tab.dataset.view === "record" && recordingNow);
+  }
+  // 다른 화면을 보는 동안에도 작업이 도는 것을 놓치지 않게 사이드바에 남긴다. 녹화는 빨강이다.
+  const home = $('.nav-item[data-view="new"]');
+  home.classList.toggle("running", Boolean(runningView) && !recordingNow);
+  home.classList.toggle("recording", recordingNow);
+  for (const [view, selectors] of Object.entries(CREATE_STARTERS)) {
+    const blocked = Boolean(runningView) && view !== runningView;
+    for (const selector of selectors) $(selector).inert = blocked;
+  }
+  const away = Boolean(runningView) && CREATE_VIEWS.includes(currentView) && currentView !== runningView;
+  $("#create-busy").classList.toggle("hidden", !away);
+  $("#create-busy").dataset.view = runningView || "";
+  // 녹화는 몇 초마다 사건을 보낸다. 같은 글을 다시 쓰면 화면 낭독기가 같은 말을 되풀이한다.
+  const note = away ? `${RUNNING_NOTE[runningView]} · 끝나면 여기서도 시작할 수 있습니다` : "";
+  if (away && $("#create-busy-text").textContent !== note) $("#create-busy-text").textContent = note;
+}
 function navigateToView(view, traversal = false) {
   if (view === currentView) return;
   if (!traversal) viewHistory.visit(view);
@@ -1712,14 +1764,32 @@ function navigateToView(view, traversal = false) {
     });
     renderedView = view;
     for (const page of $$(".page-view")) page.classList.toggle("hidden", page.id !== `view-${view}`);
+    $("#create-bar").classList.toggle("hidden", !CREATE_VIEWS.includes(view));
+    for (const tab of $$("#create-bar [data-view]")) {
+      tab.classList.toggle("selected", tab.dataset.view === view);
+      if (tab.dataset.view === view) tab.setAttribute("aria-current", "page");
+      else tab.removeAttribute("aria-current");
+    }
+    paintCreateActivity();
     window.scrollTo({ top: viewScrollPositions.get(view) || 0, behavior: "instant" });
   });
+  if (CREATE_VIEWS.includes(view)) lastCreateView = view;
   if (view !== "review") review.reviewPlayer.pause();
   if (view === "results") outputs.loadOutputs();
   if (view === "record") recording.opened();
   if (view === "demo") void appDemo.opened();
 }
-$$('[data-view]').forEach(button => button.addEventListener('click', () => navigateToView(button.dataset.view)));
+$$('[data-view]').forEach(button => button.addEventListener('click', () => {
+  const view = button.dataset.view;
+  navigateToView(view === "new" && button.matches(".nav-item") ? lastCreateView : view);
+}));
+// 누르면 안내가 사라지므로 초점을 그 갈래의 탭으로 옮긴다. 두면 키보드 초점이 사라진 단추에 남는다.
+$('#create-busy-open').addEventListener('click', () => {
+  if (!runningView) return;
+  const view = runningView;
+  navigateToView(view);
+  $(`#create-bar [data-view="${view}"]`).focus();
+});
 $('#window-back').addEventListener('click', () => navigateToView(viewHistory.back(), true));
 $('#window-forward').addEventListener('click', () => navigateToView(viewHistory.forward(), true));
 initialize().catch((error) => {

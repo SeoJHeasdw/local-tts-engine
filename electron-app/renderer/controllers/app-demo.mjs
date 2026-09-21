@@ -258,6 +258,10 @@ export function createAppDemoController({
       renderProject();
       status(busy() ? "실행 중" : "대기", busy() ? "busy" : "idle");
     },
+    /** 앱 데모 작업 중에 창을 다시 열었을 때. 결과 폴더는 작업이 끝나는 사건에 함께 온다. */
+    restore(job) {
+      setRunning(job.kind);
+    },
     /** 다른 화면이나 CLI가 만든 결과 폴더를 그대로 이어 받는다. */
     async open(outDir) {
       project = await api.readDemoProject(outDir);

@@ -415,22 +415,61 @@ test("묶음이 행의 더 보기 메뉴를 잘라 내지 않는다", async () =
   assert.match(css, /\.output-group-body \.output-item:last-child \{[\s\S]*?border-radius/);
 });
 
-// 사이드바가 길어져 한 장짜리 화면은 가까운 화면 안으로 옮겼다. 텍스트 목소리는
-// 새로 만들기의 한 갈래로, 두 화면 머리에서 오가고 사이드바는 새로 만들기를 켠다.
-test("텍스트 목소리는 사이드바가 아니라 새로 만들기 안에서 연다", async () => {
+// 새로 만들기는 입구 하나다. 강의 영상·텍스트 목소리·화면 녹화·앱 데모는 화면 위의 한 벌
+// 탭에서 오가고, 작업 화면은 갈래마다 따로 둔다. 사이드바에는 새로 만들기만 남는다.
+test("새로 만들기의 네 갈래는 사이드바가 아니라 한 벌의 탭에서 연다", async () => {
   const [html, script] = await Promise.all([
     fs.readFile(path.join(renderer, "index.html"), "utf8"),
     fs.readFile(path.join(renderer, "app.js"), "utf8"),
   ]);
   const nav = html.match(/<nav id="main-nav"[\s\S]*?<\/nav>/)[0];
-  assert.doesNotMatch(nav, /data-view="voice"/);
-  assert.equal(nav.match(/class="nav-item/g).length, 6);
-  assert.match(nav, /data-view="new"[^>]*><span>◉<\/span><b>새로 만들기<\/b>/);
-  for (const view of ["new", "voice"]) {
-    const section = html.match(new RegExp(`<section class="page-view[^"]*" id="view-${view}">[\\s\\S]*?</header>`))[0];
-    assert.match(section, /class="create-tabs"[\s\S]*data-view="new"[\s\S]*data-view="voice"/, `${view} 화면 머리에 두 갈래가 있다`);
-    assert.match(section, new RegExp(`class="selected" data-view="${view}" aria-current="page"`));
+  assert.deepEqual([...nav.matchAll(/class="nav-item[^"]*" type="button" data-view="(\w+)"/g)].map(match => match[1]),
+    ["new", "review", "edit", "results"]);
+  assert.match(nav, /data-view="new"[^>]*><span><svg[^>]*aria-hidden="true"[\s\S]*?<\/svg><\/span><b>새로 만들기<\/b>/);
+
+  // 탭은 page-view 밖에 한 벌만 있고, 갈래 화면마다 따로 들고 있지 않다.
+  assert.equal(html.match(/class="create-tabs"/g).length, 1);
+  const bar = html.match(/<div class="create-bar" id="create-bar">[\s\S]*?<\/div>\s*<p class="create-busy/)[0];
+  assert.deepEqual([...bar.matchAll(/data-view="(\w+)"/g)].map(match => match[1]), ["new", "voice", "record", "demo"]);
+  assert.ok(html.indexOf('id="create-bar"') < html.indexOf('id="view-new"'));
+  for (const view of ["new", "voice", "record", "demo"]) {
+    const header = html.match(new RegExp(`<section class="page-view[^"]*" id="view-${view}">[\\s\\S]*?</header>`))[0];
+    assert.doesNotMatch(header, /create-tabs|class="eyebrow"/, `${view} 화면 머리는 탭을 따로 두지 않는다`);
   }
-  assert.match(script, /const NAV_OWNER = \{ voice: "new" \}/);
+
+  assert.match(script, /const NAV_OWNER = Object\.fromEntries\(CREATE_VIEWS\.map\(view => \[view, "new"\]\)\)/);
   assert.match(script, /\.nav-item\[data-view="\$\{NAV_OWNER\[view\] \|\| view\}"\]/);
+  // 사이드바의 새로 만들기는 마지막으로 본 갈래로 돌아간다.
+  assert.match(script, /view === "new" && button\.matches\("\.nav-item"\) \? lastCreateView : view/);
+});
+
+// 탭을 옮길 때 화면이 위아래로 흔들리면 피로하다(2026-09-21 사용자 지적). 갈래 탭은 제자리에
+// 있고, 본문은 움직이지 않고 글만 바뀐다.
+test("새로 만들기 탭은 전환 중 움직이지 않고 본문도 위아래로 흔들리지 않는다", async () => {
+  const css = await fs.readFile(path.join(renderer, "styles.css"), "utf8");
+  assert.match(css, /#create-bar \{ view-transition-name: create-bar; \}/);
+  assert.match(css, /::view-transition-group\(create-bar\) \{ animation: none; \}/);
+  assert.match(css, /::view-transition-old\(create-bar\):not\(:only-child\) \{ animation: none; opacity: 0; \}/);
+  assert.match(css, /::view-transition-new\(create-bar\):not\(:only-child\) \{ animation: none; \}/);
+  for (const name of ["page-leave", "page-enter"]) {
+    const frames = css.match(new RegExp(`@keyframes ${name} \\{[^\\n]*\\}`))[0];
+    assert.doesNotMatch(frames, /transform/, `${name}는 자리를 옮기지 않는다`);
+  }
+  // 네 갈래의 설정 카드는 폭이 같다. 다르면 탭을 옮길 때 카드 가장자리가 들고 난다.
+  assert.match(css, /\.workspace\.job-idle \{ grid-template-columns: minmax\(500px, 760px\);/);
+  assert.match(css, /\.voice-lab-workspace \{ max-width: 760px;/);
+  assert.match(css, /\.record-workspace \{ max-width: 760px;/);
+});
+
+// 접은 사이드바에서도 무슨 메뉴인지 알 수 있어야 한다. 이름은 지우지 않고 말풍선으로 옮긴다.
+test("접은 사이드바는 이름을 지우지 않고 말풍선으로 보인다", async () => {
+  const [html, css] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(renderer, "styles.css"), "utf8"),
+  ]);
+  const nav = html.match(/<nav id="main-nav"[\s\S]*?<\/nav>/)[0];
+  assert.equal(nav.match(/<span><svg /g).length, 4, "메뉴 아이콘은 한 벌의 선 아이콘이다");
+  assert.doesNotMatch(css, /\.sidebar-collapsed \.nav-item b \{ display: none; \}/);
+  assert.doesNotMatch(css, /\.sidebar-collapsed \.local-card-copy, \.sidebar-collapsed \.local-runtime \{ display: none; \}/);
+  assert.match(css, /\.sidebar-collapsed \.nav-item:is\(:hover, :focus-visible\) b/);
 });

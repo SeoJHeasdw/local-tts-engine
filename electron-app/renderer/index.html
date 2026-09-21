@@ -22,16 +22,14 @@
         </div>
 
         <nav id="main-nav" aria-label="주 메뉴">
-          <button class="nav-item active" type="button" data-view="new" aria-current="page"><span>◉</span><b>새로 만들기</b></button>
-          <button class="nav-item" type="button" data-view="record"><span>●</span><b>화면 녹화</b></button>
-          <button class="nav-item" type="button" data-view="demo"><span>▶</span><b>앱 데모</b></button>
-          <button class="nav-item" type="button" data-view="review"><span>◆</span><b>다듬기</b><em id="polish-count" class="hidden">0</em></button>
-          <button class="nav-item" type="button" data-view="edit"><span>✂</span><b>영상 편집</b></button>
-          <button class="nav-item" type="button" data-view="results"><span>▤</span><b>최근 결과</b><em id="results-count">0</em></button>
+          <button class="nav-item active" type="button" data-view="new" aria-current="page"><span><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.25"/><path d="M10 6.9v6.2M6.9 10h6.2"/></svg></span><b>새로 만들기</b></button>
+          <button class="nav-item" type="button" data-view="review"><span><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 5.5C9 9 10.5 10.5 14 11c-3.5.5-5 2-5.5 5.5C8 13 6.5 11.5 3 11c3.5-.5 5-2 5.5-5.5Z"/><path d="M15 2.75v4M13 4.75h4"/></svg></span><b>다듬기</b><em id="polish-count" class="hidden">0</em></button>
+          <button class="nav-item" type="button" data-view="edit"><span><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="6" r="2.25"/><circle cx="5.5" cy="14" r="2.25"/><path d="M7.5 7.1 16.25 14.5M7.5 12.9 16.25 5.5"/></svg></span><b>영상 편집</b></button>
+          <button class="nav-item" type="button" data-view="results"><span><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.25 11.25 5.1 4.9a1.75 1.75 0 0 1 1.7-1.15h6.4a1.75 1.75 0 0 1 1.7 1.15l1.85 6.35"/><path d="M3.25 11.25v3.25A1.75 1.75 0 0 0 5 16.25h10a1.75 1.75 0 0 0 1.75-1.75v-3.25h-3.9l-1.1 1.9h-3.5l-1.1-1.9Z"/></svg></span><b>최근 결과</b><em id="results-count">0</em></button>
         </nav>
 
         <button class="local-card" id="open-model-settings" type="button" data-tooltip="환경 확인 중" aria-label="Voice Studio 설정 열기">
-          <span class="local-glyph" aria-hidden="true">♪</span>
+          <span class="local-glyph" aria-hidden="true"><svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7.25" y="2.75" width="5.5" height="9.25" rx="2.75"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.25"/></svg></span>
           <span class="local-card-copy">
             <strong id="sidebar-model">제작 목소리</strong>
             <small id="sidebar-adapter">프로필 확인 중</small>
@@ -42,13 +40,21 @@
       <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="사이드바 너비 조절" aria-valuemin="180" aria-valuemax="420" aria-valuenow="226" title="끌어서 너비 조절 · 두 번 눌러 기본 너비"></div>
 
       <main>
+        <!-- 새로 만들기의 네 갈래. 입구는 하나이고 작업 화면은 갈래마다 따로다. 작업은 앱 전체에서
+             한 번에 하나만 돌아서, 다른 갈래가 돌고 있으면 여기서 알리고 그 갈래로 보낸다. -->
+        <div class="create-bar" id="create-bar">
+          <div class="create-tabs" role="group" aria-label="만들 것">
+            <button type="button" class="selected" data-view="new" aria-current="page">강의 영상</button>
+            <button type="button" data-view="voice">텍스트 목소리</button>
+            <button type="button" data-view="record">화면 녹화</button>
+            <button type="button" data-view="demo">앱 데모</button>
+          </div>
+          <p class="create-busy hidden" id="create-busy" role="status"><i aria-hidden="true"></i><span id="create-busy-text"></span><button type="button" id="create-busy-open">보러 가기 →</button></p>
+        </div>
+
         <section class="page-view" id="view-new">
         <header class="topbar">
           <div>
-            <div class="create-tabs" role="group" aria-label="만들 것">
-              <button type="button" class="selected" data-view="new" aria-current="page">강의 영상</button>
-              <button type="button" data-view="voice">텍스트 목소리</button>
-            </div>
             <h1>강의 영상 만들기</h1>
             <p class="lede">한 번 누르면 음성, 자막, 촬영, 최종 검증까지 이어집니다.</p>
           </div>
@@ -200,7 +206,6 @@
         <section class="page-view hidden" id="view-record">
           <header class="topbar">
             <div>
-              <p class="eyebrow">화면 녹화</p>
               <h1>디스플레이 녹화</h1>
               <p class="lede">고른 화면 하나를 원래 해상도 그대로 녹화합니다. 내레이션은 다듬기에서 붙입니다.</p>
             </div>
@@ -273,7 +278,6 @@
         <section class="page-view hidden" id="view-demo">
           <header class="topbar">
             <div>
-              <p class="eyebrow">앱 데모</p>
               <h1>앱 데모 촬영</h1>
               <p class="lede">직접 만든 앱을 자동으로 조작하며 찍고, 찍은 화면을 보고 대본을 씁니다. 강의와 반대로 화면이 먼저입니다.</p>
             </div>
@@ -343,10 +347,6 @@
         <section class="page-view hidden" id="view-voice">
           <header class="topbar">
             <div>
-              <div class="create-tabs" role="group" aria-label="만들 것">
-                <button type="button" data-view="new">강의 영상</button>
-                <button type="button" class="selected" data-view="voice" aria-current="page">텍스트 목소리</button>
-              </div>
               <h1>텍스트로 목소리 만들기</h1>
               <p class="lede">같은 문장을 여러 버전으로 동시에 만든 뒤 직접 듣고 고릅니다.</p>
             </div>

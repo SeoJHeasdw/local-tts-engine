@@ -21,6 +21,15 @@ const FINISHED = {
   "voice-candidates-ready": { tone: "done", title: "후보 준비됨", body: () => "만든 목소리 후보를 듣고 고르세요." },
   "text-voices-ready": { tone: "done", title: "후보 준비됨", body: () => "만든 목소리 후보를 듣고 고르세요." },
   "text-voice-failed": { tone: "fail", title: "목소리 만들기 실패", body: (event) => event.message || "원인을 확인해 주세요." },
+  // 앱 데모는 촬영·목소리·렌더가 단계마다 몇 분씩 걸리고, 끝나면 다음 단계는 사람이 한다.
+  "demo-complete": { tone: "done", title: "앱 데모", body: (event) => DEMO_NEXT[event.step] || "다음 단계를 진행하세요." },
+  "demo-failed": { tone: "fail", title: "앱 데모 실패", body: (event) => event.cancelled ? "작업을 중지했습니다." : event.message || "원인을 확인해 주세요." },
+};
+
+const DEMO_NEXT = {
+  "demo-record": "촬영을 마쳤습니다. 장면마다 대본을 쓰세요.",
+  "demo-voice": "목소리 후보가 나왔습니다. 듣고 고르세요.",
+  "demo-render": "완성본을 만들었습니다.",
 };
 
 function summarize(event, fallback) {

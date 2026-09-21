@@ -24,7 +24,7 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
       append(...items) { this.children.push(...items); },
       replaceChildren(...items) { this.children = items; },
       querySelector: () => element(), querySelectorAll: () => [], closest() { return this; },
-      getBoundingClientRect: () => ({ height: 0, width: 0 }), pause() {}, click() {},
+      getBoundingClientRect: () => ({ height: 0, width: 0 }), pause() {}, click() {}, remove() {},
     };
   };
   const query = selector => {
@@ -178,4 +178,34 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   assert.equal(query('#job-state').textContent, '제작 실패');
   assert.equal(query('#complete-panel .complete-actions').classList.contains('hidden'), true);
   assert.match(query('#complete-summary').textContent, /완성된 영상 없음/);
+
+  // 새로 만들기의 갈래는 작업 하나를 나눠 쓴다. 한 갈래가 돌면 나머지 갈래의 시작 단추만
+  // 막고, 보고 있는 갈래 화면 위에서 무엇이 도는지 알린다. 끝나면 모두 풀린다.
+  const starters = ['#start-button', '#start-text-voices', '#record-start', '#demo-record-start', '#demo-voice-start', '#demo-render-start'];
+  for (const selector of starters) assert.equal(query(selector).inert, false, `${selector}는 작업이 없으면 열려 있다`);
+  assert.equal(query('#create-busy').classList.contains('hidden'), true);
+
+  jobListener({ type: 'record-started', jobKind: 'record', options: { display: 'Capture screen 0' } });
+  assert.equal(query('#record-start').inert, false, '도는 갈래는 제 화면이 막는다');
+  for (const selector of ['#start-button', '#start-text-voices', '#demo-record-start']) assert.equal(query(selector).inert, true, selector);
+  assert.equal(query('#create-busy').classList.contains('hidden'), false, '강의 영상 화면에서 녹화 중임을 알린다');
+  assert.match(query('#create-busy-text').textContent, /화면을 녹화하는 중/);
+  assert.equal(query('.nav-item[data-view="new"]').classList.contains('running'), true);
+  jobListener({ type: 'record-phase', jobKind: 'record', phase: 'recording' });
+  assert.equal(query('.nav-item[data-view="new"]').classList.contains('recording'), true, '녹화 중에는 사이드바가 빨강이다');
+  jobListener({ type: 'log', jobKind: 'record', text: 'frame=1\n' });
+  jobListener({ type: 'record-failed', jobKind: 'record', cancelled: true, message: '취소' });
+  for (const selector of starters) assert.equal(query(selector).inert, false, `${selector}는 녹화가 끝나면 풀린다`);
+  assert.equal(query('#create-busy').classList.contains('hidden'), true);
+  assert.equal(query('.nav-item[data-view="new"]').classList.contains('recording'), false);
+
+  jobListener({ type: 'demo-started', jobKind: 'demo-voice', step: 'demo-voice' });
+  assert.equal(query('#start-button').inert, true);
+  assert.equal(query('#demo-voice-start').inert, false);
+  assert.match(query('#create-busy-text').textContent, /앱 데모 작업이 진행 중/);
+  jobListener({ type: 'demo-failed', jobKind: 'demo-voice', step: 'demo-voice', message: '실패' });
+  // 끝난 뒤 늦게 온 로그가 다시 막지 않는다.
+  jobListener({ type: 'log', jobKind: 'demo-voice', text: 'late\n' });
+  for (const selector of starters) assert.equal(query(selector).inert, false, selector);
+  assert.equal(query('.nav-item[data-view="new"]').classList.contains('running'), false);
 });

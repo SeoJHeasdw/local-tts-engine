@@ -162,6 +162,40 @@ export function completionSummary(report, durationLabel) {
   return `${prefix}${durationLabel}${units > 1 ? ' 합계' : ''} · ${files} · ${voice}`;
 }
 
+// 새로 만들기의 네 갈래. 사이드바에는 새로 만들기 하나만 두고 갈래는 화면 위 탭에서
+// 오간다. 작업 화면은 갈래마다 따로다 — 강의는 한 번 눌러 끝까지, 녹화는 사람이 시작·정지,
+// 앱 데모는 촬영 → 대본 → 후보 → 렌더로 도는 모양이 서로 달라서다.
+export const CREATE_VIEWS = ['new', 'voice', 'record', 'demo'];
+
+const JOB_VIEWS = { create: 'new', 'text-voice': 'voice', record: 'record' };
+
+/** 작업 종류가 어느 갈래의 것인지. 편집·학습은 새로 만들기의 갈래가 아니다. */
+export function jobView(kind = '') {
+  if (String(kind).startsWith('demo-')) return 'demo';
+  return JOB_VIEWS[kind] || null;
+}
+
+// 끝난 뒤에도 로그가 늦게 올 수 있어서, 시작과 끝은 사건 이름으로만 가른다.
+const JOB_STARTS = new Set(['started', 'text-voice-started', 'record-started', 'demo-started']);
+const JOB_ENDS = new Set([
+  'complete', 'partial-complete', 'failed', 'text-voices-ready', 'text-voice-failed',
+  'record-complete', 'record-failed', 'demo-complete', 'demo-failed',
+]);
+
+/**
+ * 사건 하나가 어느 갈래의 작업을 시작하거나 끝내면 `{ view, running }`, 아니면 null.
+ * 작업은 앱 전체에서 한 번에 하나만 돈다(main의 activeJob). 화면은 이것으로 어느 갈래가
+ * 돌고 있는지 알고, 나머지 갈래의 시작만 막는다.
+ */
+export function jobActivity(event = {}) {
+  // main은 작업이 없을 때 보낸 사건을 강의 제작으로 적는다. 화면도 같은 기본값을 쓴다.
+  const view = jobView(event.jobKind || 'create');
+  if (!view) return null;
+  if (JOB_STARTS.has(event.type)) return { view, running: true };
+  if (JOB_ENDS.has(event.type)) return { view, running: false };
+  return null;
+}
+
 export function createViewHistory(initial = 'new') {
   let items = [initial], index = 0;
   return {

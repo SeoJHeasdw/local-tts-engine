@@ -87,6 +87,16 @@ test('무엇으로 끝났는지에 따라 알림의 말이 달라진다', async 
 
   await attention.watch({ type: 'training-complete', adapter: { label: 'jaeho-ko-r16-v2' } });
   assert.match(shown.at(-1).body, /jaeho-ko-r16-v2/);
+
+  // 앱 데모는 단계마다 끝나고 다음 단계는 사람이 한다. 무엇을 할 차례인지 알린다.
+  await attention.watch({ type: 'demo-complete', step: 'demo-record' });
+  assert.equal(shown.at(-1).title, '앱 데모');
+  assert.match(shown.at(-1).body, /대본/);
+  await attention.watch({ type: 'demo-complete', step: 'demo-voice' });
+  assert.match(shown.at(-1).body, /듣고 고르세요/);
+  await attention.watch({ type: 'demo-failed', step: 'demo-render', message: 'ffmpeg 종료 1' });
+  assert.equal(shown.at(-1).title, '앱 데모 실패');
+  assert.match(shown.at(-1).body, /ffmpeg/);
 });
 
 test('진행 중 사건은 알림을 띄우지 않는다', async () => {
