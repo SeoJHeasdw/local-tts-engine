@@ -131,3 +131,53 @@ test('잘못된 촬영 기록은 계획을 만들지 않는다', () => {
     { id: 'a', startMs: 0, endMs: 4000, steps: [] }, { id: 'b', startMs: 3000, endMs: 5000, steps: [] },
   ], 5000)), /겹칩니다/);
 });
+
+// 데모 모드로 ¼ 속도로 찍은 장면은 기다림만 감아서는 안 된다. 그러면 같은 장면에서
+// 사람이 누르는 자리는 ¼ 속도로, 기다림만 제 속도로 흘러 어긋난다.
+test('느리게 찍은 장면은 통째로 되돌리고 기다림을 따로 감지 않는다', () => {
+  const scenes = {
+    schemaVersion: 1, viewport: { width: 1920, height: 1080, scale: 2 }, durationMs: 24000,
+    scenes: [
+      { id: 'awakening', startMs: 0, endMs: 20000, timeScale: 0.25, steps: [
+        { verb: 'pause', startMs: 0, endMs: 2000 },
+        { verb: 'click', startMs: 2000, endMs: 2600, point: { x: 960, y: 540 } },
+        { verb: 'waitFor', startMs: 2600, endMs: 20000 },
+      ] },
+      { id: 'chat', startMs: 20000, endMs: 24000, timeScale: 1, steps: [
+        { verb: 'waitFor', startMs: 20000, endMs: 24000 },
+      ] },
+    ],
+  };
+  const plan = buildEditPlan(scenes);
+  const slowed = plan.segments.filter(segment => segment.sceneId === 'awakening');
+  assert.equal(slowed.length, 1, '느린 장면은 구간을 쪼개지 않는다');
+  assert.equal(slowed[0].kind, 'slowed');
+  assert.equal(slowed[0].speed, 4);
+  assert.equal(slowed[0].outFrames, 125, '20초를 5초로 되돌린다');
+  // 느리지 않은 장면의 기다림은 예전처럼 감는다.
+  const chat = plan.segments.filter(segment => segment.sceneId === 'chat');
+  assert.equal(chat[0].kind, 'fast');
+  assert.ok(chat[0].speed > 1.01);
+});
+
+test('느린 장면에 긴 내레이션이 오면 멈추지 않고 덜 되돌린다', () => {
+  const scenes = {
+    schemaVersion: 1, viewport: { width: 1920, height: 1080, scale: 2 }, durationMs: 20000,
+    scenes: [{ id: 'awakening', startMs: 0, endMs: 20000, timeScale: 0.25, steps: [
+      { verb: 'waitFor', startMs: 0, endMs: 20000 },
+    ] }],
+  };
+  // 4배로 되돌리면 5초인데 내레이션이 8초다. 3D가 멈춘 채 말이 이어지면 고장 난 것처럼
+  // 보이므로 배율을 낮춰 그림이 계속 흐르게 한다.
+  const plan = buildEditPlan(scenes, { narration: { awakening: { durationMs: 8000, file: 'a.wav' } } });
+  const scene = plan.scenes[0];
+  const segment = plan.segments[0];
+  assert.equal(scene.holdMs, 0, '멈춰 채우지 않는다');
+  assert.ok(segment.speed > 1 && segment.speed < 4, `배율 ${segment.speed}`);
+  assert.ok(scene.outEndMs - scene.outStartMs >= 8800);
+
+  // 내레이션이 찍은 길이보다도 길면 그때는 멈춰서 채운다. 찍은 것보다 느리게 틀지 않는다.
+  const long = buildEditPlan(scenes, { narration: { awakening: { durationMs: 30000, file: 'a.wav' } } });
+  assert.equal(long.segments[0].speed, 1);
+  assert.ok(long.scenes[0].holdMs > 0);
+});

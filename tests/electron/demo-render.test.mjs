@@ -267,3 +267,18 @@ test('고른 음성 파일이 없으면 어느 장면인지 말하고 멈춘다'
   await assert.rejects(renderAppDemo({ outDir, name: 'demo-fixture', quality: 'standard' }),
     /장면 ask의 고른 음성을 찾지 못했습니다/);
 });
+
+test('화질마다 다른 파일로 내보내 1440p와 4K를 나란히 둔다', { timeout: 300_000 }, async t => {
+  const { outDir } = await fixtureRecording(t, {
+    scenes: [{ id: 'ask', startMs: 0, endMs: 3000, steps: [] }],
+    narration: { ask: { durationMs: 1200, text: '한 문장' } },
+  });
+  const high = await renderAppDemo({ outDir, name: 'demo-fixture', quality: 'high' });
+  const ultra = await renderAppDemo({ outDir, name: 'demo-fixture', quality: 'ultra' });
+  assert.equal(path.basename(high.videoPath), 'demo-fixture-high.mp4');
+  assert.equal(path.basename(ultra.videoPath), 'demo-fixture-ultra.mp4');
+  // 뒤에 낸 화질이 앞의 것을 지우지 않는다. 검수 화면은 둘을 함께 받는다.
+  const files = (await fs.readdir(outDir)).filter(name => name.endsWith('.mp4')).sort();
+  assert.deepEqual(files, ['demo-fixture-high.mp4', 'demo-fixture-ultra.mp4']);
+  assert.equal(collectReview(outDir).videos.length, 2);
+});

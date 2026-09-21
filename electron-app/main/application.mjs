@@ -4,6 +4,7 @@ import { createCatalogService } from "./catalog.mjs";
 import { createMediaService } from "./media.mjs";
 import { createProductionService } from "./production.mjs";
 import { createRecordingService } from "./recording.mjs";
+import { createAppDemoService } from "./app-demo.mjs";
 import { createVoicesService } from "./voices.mjs";
 import { createEditingComposeService } from "./editing/compose.mjs";
 import { createEditingPagesService } from "./editing/pages.mjs";
@@ -49,6 +50,12 @@ export function createStudio({
     emit, jobSnapshot, readAppSettings, requireRuntimeTool, runProcess, state,
   });
   const {
+    pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, saveDemoScript,
+    startDemoRecord, startDemoVoice, startDemoRender,
+  } = createAppDemoService({
+    dialog, emit, jobSnapshot, readAppSettings, requireRuntimeTool, runProcess, state,
+  });
+  const {
     generateReplacementVoice, runVoiceCandidates, runTextVoiceCandidates, selectTextVoice,
     runFineTune,
   } = createVoicesService({
@@ -79,11 +86,12 @@ export function createStudio({
     applyVoiceSettings, assertRuntime, chosenRecord, clearActiveJob,
     deleteOutput, dialog, emit, findVideoTimeline, finishRecording,
     finishedUnitNames, ipcMain, jobSnapshot, launchPipeline,
-    listOutputs, listRecordingSources, loadCatalog, readActiveJob, readAppSettings,
+    listOutputs, listRecordingSources, loadCatalog, pickDemoProject, pickDemoScenario,
+    readActiveJob, readAppSettings, readDemoProject, readDemoScenario,
     registerSelected, renameOutput, requireRuntimeTool, resolveOutputFile,
-    runFineTune, runTextVoiceCandidates, runVideoEdit, saveAppSettings,
+    runFineTune, runTextVoiceCandidates, runVideoEdit, saveAppSettings, saveDemoScript,
     selectTextVoice, setClearedFindings, setOutputReview, shell,
-    startRecording, state, writeActiveJob,
+    startDemoRecord, startDemoRender, startDemoVoice, startRecording, state, writeActiveJob,
   });
   const { createWindow } = createWindowService({
     BrowserWindow, app, state,

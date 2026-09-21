@@ -74,7 +74,41 @@ function shareFastFrames(cuts, target, maxSpeed) {
   return new Map(fast.map((cut, at) => [cut, frames[at]]));
 }
 
+// 느리게 찍은 장면은 통째로 되돌린다. 기다림만 감으면 같은 장면이 두 속도로 흘러
+// 화면이 어긋난다 — ¼로 찍은 3D는 4배로 돌려야 원래 속도가 되고, 그때 촬영이 받은
+// 서로 다른 그림이 모두 쓰여 부드러워진다.
+function planSlowedScene(scene, narrationMs, options, frameMs) {
+  const at = ms => Math.round(ms / frameMs);
+  const from = at(scene.startMs);
+  const to = at(scene.endMs);
+  if (!(to > from)) fail(`장면 ${scene.id}의 길이가 0입니다.`);
+  const srcFrames = to - from;
+  const needed = narrationMs > 0
+    ? Math.ceil((options.narrationLeadMs + narrationMs + options.narrationTailMs) / frameMs)
+    : 0;
+  // 되돌린 길이가 내레이션보다 짧으면 덜 되돌린다. 3D가 멈춘 채로 말이 이어지는
+  // 것보다 조금 느리게 흐르는 편이 낫다. 찍은 속도보다 빨라지지는 않는다.
+  const restored = Math.max(1, Math.round(srcFrames * scene.timeScale));
+  const outFrames = Math.min(srcFrames, Math.max(restored, needed));
+  const holdFrames = Math.max(0, needed - outFrames);
+  return {
+    segments: [{
+      sceneId: scene.id,
+      kind: "slowed",
+      srcStartFrame: from,
+      srcEndFrame: to,
+      outFrames,
+      speed: Number((srcFrames / outFrames).toFixed(6)),
+    }],
+    holdFrames,
+    outFrames: outFrames + holdFrames,
+  };
+}
+
 function planScene(scene, narrationMs, options, frameMs) {
+  if (scene.timeScale !== undefined && scene.timeScale < 1) {
+    return planSlowedScene(scene, narrationMs, options, frameMs);
+  }
   const cuts = sceneCuts(scene, frameMs, options.minFastMs);
   const normalFrames = cuts.filter(cut => !cut.fast).reduce((sum, cut) => sum + (cut.to - cut.from), 0);
   const fastFrames = cuts.filter(cut => cut.fast).reduce((sum, cut) => sum + (cut.to - cut.from), 0);

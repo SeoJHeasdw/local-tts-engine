@@ -40,8 +40,12 @@ export function createIpcService({
   listOutputs,
   listRecordingSources,
   loadCatalog,
+  pickDemoProject,
+  pickDemoScenario,
   readActiveJob,
   readAppSettings,
+  readDemoProject,
+  readDemoScenario,
   registerSelected,
   renameOutput,
   requireRuntimeTool,
@@ -50,10 +54,14 @@ export function createIpcService({
   runTextVoiceCandidates,
   runVideoEdit,
   saveAppSettings,
+  saveDemoScript,
   selectTextVoice,
   setClearedFindings,
   setOutputReview,
   shell,
+  startDemoRecord,
+  startDemoRender,
+  startDemoVoice,
   startRecording,
   state,
   writeActiveJob,
@@ -482,6 +490,48 @@ export function createIpcService({
     ipcMain.handle("studio:start-recording", async (event, rawOptions = {}) => {
       guard(event);
       return startRecording(rawOptions);
+    });
+
+    // 앱 데모는 촬영 → 목소리 → 렌더 세 단계다. 화면과 CLI가 같은 작업자·같은 결과
+    // 폴더를 쓰므로, 어느 쪽에서 시작했든 다른 쪽에서 이어갈 수 있다.
+    ipcMain.handle("studio:pick-demo-scenario", async (event) => {
+      guard(event);
+      return pickDemoScenario();
+    });
+
+    ipcMain.handle("studio:pick-demo-project", async (event) => {
+      guard(event);
+      return pickDemoProject();
+    });
+
+    ipcMain.handle("studio:read-demo-scenario", async (event, file) => {
+      guard(event);
+      return readDemoScenario(String(file || ""));
+    });
+
+    ipcMain.handle("studio:read-demo-project", async (event, outDir) => {
+      guard(event);
+      return readDemoProject(String(outDir || ""));
+    });
+
+    ipcMain.handle("studio:save-demo-script", async (event, outDir, scenes) => {
+      guard(event);
+      return saveDemoScript(String(outDir || ""), Array.isArray(scenes) ? scenes : []);
+    });
+
+    ipcMain.handle("studio:start-demo-record", async (event, options = {}) => {
+      guard(event);
+      return startDemoRecord(options);
+    });
+
+    ipcMain.handle("studio:start-demo-voice", async (event, options = {}) => {
+      guard(event);
+      return startDemoVoice(options);
+    });
+
+    ipcMain.handle("studio:start-demo-render", async (event, options = {}) => {
+      guard(event);
+      return startDemoRender(options);
     });
 
     // 녹화의 정지는 결과를 남기는 정상 완료다. 결과를 버리는 중지(studio:cancel)와 다르다.

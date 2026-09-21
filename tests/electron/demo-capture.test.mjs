@@ -7,8 +7,8 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { losslessRecordArgs, readScenario, recordAppDemo, stitchScenes } from '../../electron-app/main/capture/record-app.mjs';
-import { describeTarget, launchDemoApp } from '../../electron-app/main/capture/app-page.mjs';
-import { glidePath, installCursorOverlay, moveCursor } from '../../electron-app/main/capture/cursor-overlay.mjs';
+import { describeTarget, launchDemoApp, sceneMotion } from '../../electron-app/main/capture/app-page.mjs';
+import { glideCursor, installCursorOverlay, moveCursor } from '../../electron-app/main/capture/cursor-overlay.mjs';
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -85,13 +85,6 @@ test('대상 설명은 실패한 자리를 알아볼 수 있게 적는다', () =
   assert.equal(describeTarget({ kind: 'placeholder', value: '메시지' }), 'placeholder="메시지"');
 });
 
-test('커서는 가속하고 감속하며 끝점에 정확히 닿는다', () => {
-  const path_ = glidePath({ x: 0, y: 0 }, { x: 100, y: 50 }, { steps: 10 });
-  assert.equal(path_.length, 10);
-  assert.deepEqual(path_.at(-1), { x: 100, y: 50 });
-  const steps = path_.map((at, index) => at.x - (path_[index - 1]?.x ?? 0));
-  assert.ok(steps[0] < steps[4] && steps.at(-1) < steps[4], '가운데가 가장 빠르다');
-});
 
 // 실제 Electron 앱을 띄워 시나리오를 돌린다. 브라우저·ffmpeg·앱이 모두 실제다.
 test('픽스처 앱을 찍어 무손실 원본과 장면 기록을 남긴다', { timeout: 180_000 }, async t => {
@@ -191,7 +184,37 @@ test('그려진 커서는 페이지가 받은 마우스 사건이 아니라 우�
 
     await moveCursor(app.page, 300, 300);
     assert.equal(await placed(), 'translate(300px, 300px)');
+
+    // 커서 이동은 페이지 안에서 그린다. 바깥에서 한 점씩 보내면 4K에서 왕복이
+    // 200ms라 커서가 기어가고, 되돌린 영상에서 뚝뚝 끊긴다.
+    const before = await app.page.evaluate(() => window.__appDemoCursor.drawn);
+    const started = Date.now();
+    await glideCursor(app.page, { x: 300, y: 300 }, { x: 560, y: 120 }, 320);
+    const took = Date.now() - started;
+    const drawn = await app.page.evaluate(() => window.__appDemoCursor.drawn) - before;
+    assert.equal(await placed(), 'translate(560px, 120px)', '끝점에 정확히 닿는다');
+    assert.ok(drawn >= 10, `한 번 움직이는 동안 ${drawn}번만 그렸다`);
+    assert.ok(took >= 300, `${took}ms만에 끝났다 — 준 시간만큼 움직여야 한다`);
   } finally {
     await app.close();
   }
+});
+
+// 느린 장면에서 커서가 제 속도로 움직이면, 편집이 4배로 되돌릴 때 커서만 네 배로
+// 빨라져 뚝뚝 끊긴다(확대 구간에서 특히). 우리가 그리는 움직임도 같이 늘린다.
+test('¼ 속도로 찍는 장면에서는 커서·클릭·타이핑도 네 배로 늘어난다', () => {
+  const normal = sceneMotion(1);
+  const slow = sceneMotion(0.25);
+  assert.equal(normal.stretch, 1);
+  assert.equal(slow.stretch, 4);
+  // 점을 더 많이 찍는다. 되돌린 뒤 쓸 수 있는 서로 다른 그림이 그만큼 늘어난다.
+  assert.equal(slow.glideMs, normal.glideMs * 4, '커서가 움직이는 시간이 네 배다');
+  assert.equal(slow.tapMs, normal.tapMs * 4);
+  assert.equal(slow.clickHoldMs, normal.clickHoldMs * 4);
+  assert.equal(slow.typeDelayMs.min, normal.typeDelayMs.min * 4);
+  assert.equal(slow.hoverMs, normal.hoverMs * 4);
+});
+
+test('배율을 적지 않았거나 올바르지 않으면 실제 속도로 움직인다', () => {
+  for (const value of [undefined, 1, 0, -1, 2]) assert.equal(sceneMotion(value).stretch, 1);
 });

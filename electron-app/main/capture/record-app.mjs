@@ -109,8 +109,11 @@ export async function recordAppDemo({ scenarioFile, outDir, name, fps = 25, onEv
       frame,
       fps,
       durationMs,
+      // 인코더가 실시간을 못 따라가면 촬영이 중단된다. 성공한 촬영도 얼마나
+      // 여유가 있었는지 남겨야 다음 촬영 길이를 근거로 정할 수 있다.
       frames: { written: frames.written, duplicated: frames.duplicated, received: frames.received,
-        longestStall: frames.longestStall, reordered: frames.reordered },
+        longestStall: frames.longestStall, reordered: frames.reordered,
+        peakBacklogBytes: frames.peakBacklog, peakBufferedBytes: frames.peakBufferedBytes },
       raw: rawFile,
       scenes,
       generatedAt: new Date().toISOString(),

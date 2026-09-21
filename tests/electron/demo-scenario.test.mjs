@@ -80,3 +80,22 @@ test('자리표시자는 실행 시점에 풀고 모르는 표시는 조용히 �
   assert.deepEqual(resolved, { prepare: ['bash', '/cfg/bundle.sh', '/tmp/w/app'], env: { HOME: '/tmp/w/home' } });
   assert.throws(() => resolvePlaceholders('{home}/x', { work: '/tmp/w' }), /알 수 없는 자리표시자/);
 });
+
+// 앱이 화면을 느리게 그린다는 사실은 앱만 안다. 시나리오가 적고 편집이 되돌린다.
+test('장면의 timeScale은 0보다 크고 1 이하만 받는다', () => {
+  const base = {
+    schemaVersion: 1, name: 'rice-core-flow',
+    app: { kind: 'web', url: 'http://localhost:5173', ready: { selector: 'main' } },
+    scenes: [{ id: 'awakening', timeScale: 0.25, steps: [{ pause: 500 }] }],
+  };
+  assert.equal(normalizeScenario(structuredClone(base)).scenes[0].timeScale, 0.25);
+  // 적지 않으면 실제 속도다.
+  const plain = structuredClone(base);
+  delete plain.scenes[0].timeScale;
+  assert.equal(normalizeScenario(plain).scenes[0].timeScale, 1);
+  for (const bad of [0, -1, 1.5, 'half']) {
+    const broken = structuredClone(base);
+    broken.scenes[0].timeScale = bad;
+    assert.throws(() => normalizeScenario(broken), /timeScale/);
+  }
+});

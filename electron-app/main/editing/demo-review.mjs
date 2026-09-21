@@ -330,12 +330,16 @@ function segmentBlocks(plan) {
 
 // 가장 긴 기다림 한 곳을 실제 값으로 말한다. "빠른 것 같다"에서 멈추지 않게.
 function longestWait(plan) {
-  const waits = plan.segments.filter(segment => segment.speed > 1.01);
-  if (!waits.length) return "감은 기다림이 없다. 화면이 계속 움직였다.";
+  const slowed = plan.segments.filter(segment => segment.kind === "slowed");
+  const restored = slowed.length
+    ? ` 느리게 찍은 장면 ${slowed.length}개는 ${(slowed[0].speed).toFixed(1)}배로 되돌렸다.`
+    : "";
+  const waits = plan.segments.filter(segment => segment.speed > 1.01 && segment.kind !== "slowed");
+  if (!waits.length) return `감은 기다림이 없다. 화면이 계속 움직였다.${restored}`;
   const longest = waits.reduce((best, segment) =>
     segment.srcEndMs - segment.srcStartMs > best.srcEndMs - best.srcStartMs ? segment : best);
   return `기다림을 감는 배율. 가장 긴 기다림은 ${seconds(longest.srcEndMs - longest.srcStartMs)}를 `
-    + `${seconds(longest.outFrames * 1000 / plan.fps)}로 줄였다.`;
+    + `${seconds(longest.outFrames * 1000 / plan.fps)}로 줄였다.${restored}`;
 }
 
 /** 검수 화면 한 쪽. 데이터만 받아 문자열을 낸다. */

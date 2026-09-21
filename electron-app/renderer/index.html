@@ -24,6 +24,7 @@
         <nav id="main-nav" aria-label="주 메뉴">
           <button class="nav-item active" type="button" data-view="new" aria-current="page"><span>◉</span><b>새 영상</b></button>
           <button class="nav-item" type="button" data-view="record"><span>●</span><b>화면 녹화</b></button>
+          <button class="nav-item" type="button" data-view="demo"><span>▶</span><b>앱 데모</b></button>
           <button class="nav-item" type="button" data-view="voice"><span>♪</span><b>목소리 만들기</b></button>
           <button class="nav-item" type="button" data-view="review"><span>◆</span><b>다듬기</b><em id="polish-count" class="hidden">0</em></button>
           <button class="nav-item" type="button" data-view="edit"><span>✂</span><b>영상 편집</b></button>
@@ -251,6 +252,65 @@
             <details class="log-panel">
               <summary>상세 기록</summary>
               <pre id="record-log"></pre>
+            </details>
+          </section>
+        </section>
+
+        <section class="page-view hidden" id="view-demo">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">앱 데모</p>
+              <h1>앱 데모 촬영</h1>
+              <p class="lede">직접 만든 앱을 자동으로 조작하며 찍고, 찍은 화면을 보고 대본을 씁니다. 강의와 반대로 화면이 먼저입니다.</p>
+            </div>
+            <div class="top-status" id="demo-top-status" tabindex="0" data-tooltip="시나리오를 고르세요" aria-label="시나리오를 고르세요"><span class="pulse"></span><span class="sr-only">대기</span></div>
+          </header>
+
+          <section class="record-workspace">
+            <section class="card">
+              <div class="card-heading">
+                <div><h2>무엇을 찍을까요?</h2></div>
+                <div class="demo-actions">
+                  <button type="button" class="secondary-small" id="demo-open" data-demo-action>결과 폴더 열기</button>
+                  <button type="button" class="secondary-small" id="demo-pick" data-demo-action>시나리오 고르기</button>
+                </div>
+              </div>
+              <div id="demo-scenario"></div>
+              <label class="field full"><span>결과 이름</span><input id="demo-name" autocomplete="off" spellcheck="false" placeholder="비우면 시나리오 이름"><small>영문 소문자·숫자·하이픈.</small></label>
+              <button class="primary-button full" id="demo-record-start" type="button" data-demo-action disabled><span>촬영 시작</span><span aria-hidden="true">●</span></button>
+            </section>
+
+            <section class="card hidden" id="demo-progress" aria-live="polite">
+              <div class="record-clock"><span class="record-dot" aria-hidden="true"></span><strong id="demo-progress-label"></strong></div>
+              <div class="job-controls"><button class="cancel-button" id="demo-cancel" type="button">중지</button></div>
+            </section>
+
+            <section class="hidden" id="demo-project">
+              <div class="card">
+                <div class="card-heading">
+                  <div><h2 id="demo-project-name"></h2><p id="demo-project-meta" class="muted"></p></div>
+                  <a class="secondary-small hidden" id="demo-review" href="#" target="_blank">검수 화면 열기</a>
+                </div>
+                <p id="demo-step-hint"></p>
+                <ul id="demo-videos" class="demo-videos"></ul>
+              </div>
+
+              <div id="demo-scenes" class="demo-scenes"></div>
+
+              <div class="card">
+                <div class="demo-actions">
+                  <button type="button" class="secondary-small" id="demo-save" data-demo-action>대본 저장</button>
+                  <label class="field"><span>후보 수</span><select id="demo-candidates"><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
+                  <button type="button" class="primary-small" id="demo-voice-start" data-demo-action>목소리 후보 만들기</button>
+                  <label class="field"><span>화질</span><select id="demo-quality"><option value="standard">1080p</option><option value="high" selected>1440p</option><option value="ultra">4K</option></select></label>
+                  <button type="button" class="primary-small" id="demo-render-start" data-demo-action>완성본 만들기</button>
+                </div>
+              </div>
+            </section>
+
+            <details class="log-panel">
+              <summary>상세 기록</summary>
+              <pre id="demo-log"></pre>
             </details>
           </section>
         </section>

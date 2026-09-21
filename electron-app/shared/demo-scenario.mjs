@@ -116,9 +116,16 @@ function normalizeScene(scene, index, seen) {
   seen.add(id);
   if (!Array.isArray(scene.steps) || !scene.steps.length) fail(`${where}(${id})`, "steps가 비어 있습니다.");
   const textFrom = scene.textFrom === undefined ? "main" : requireText(scene.textFrom, `${where}(${id})`, "textFrom");
+  // 앱이 이 장면을 실제보다 느리게 그린다면(데모 모드의 애니메이션 시간 배율) 그
+  // 사실은 앱만 안다. 편집이 되돌릴 수 있게 시나리오가 적는다. 1은 실제 속도다.
+  const timeScale = scene.timeScale === undefined ? 1 : Number(scene.timeScale);
+  if (!(timeScale > 0 && timeScale <= 1)) {
+    fail(`${where}(${id})`, "timeScale은 0보다 크고 1 이하인 수여야 합니다.");
+  }
   return {
     id,
     textFrom,
+    timeScale,
     steps: scene.steps.map((step, at) => normalizeStep(step, `${where}(${id}) 걸음 ${at + 1}`)),
   };
 }

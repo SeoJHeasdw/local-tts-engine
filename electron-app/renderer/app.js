@@ -2,6 +2,7 @@ import { createOutputsController } from "./controllers/outputs.mjs";
 import { createEditorController } from "./controllers/editor.mjs";
 import { createReviewController } from "./controllers/review.mjs";
 import { createRecordingController } from "./controllers/recording.mjs";
+import { createAppDemoController } from "./controllers/app-demo.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
@@ -841,6 +842,9 @@ const outputs = createOutputsController({ $, $$, api, showToast, formatDuration,
 const recording = createRecordingController({ $, api, showToast, setIconStatus, formatDuration, review, outputs,
   suggestName: suggestedRecordingName });
 
+const appDemo = createAppDemoController({ $, $$, api, showToast, setIconStatus });
+appDemo.bind();
+
 function renderSettings(settings) {
   appSettings = settings;
   $("#global-model").value = settings.modelId;
@@ -1073,6 +1077,10 @@ function handleJobEvent(event) {
 function renderJobEvent(event) {
   if (event.jobKind === "record") {
     recording.handleEvent(event);
+    return;
+  }
+  if (String(event.jobKind || "").startsWith("demo-")) {
+    appDemo.handleEvent(event);
     return;
   }
   if (event.jobKind === "text-voice") {
@@ -1706,6 +1714,7 @@ function navigateToView(view, traversal = false) {
   if (view !== "review") review.reviewPlayer.pause();
   if (view === "results") outputs.loadOutputs();
   if (view === "record") recording.opened();
+  if (view === "demo") appDemo.opened();
 }
 $$('[data-view]').forEach(button => button.addEventListener('click', () => navigateToView(button.dataset.view)));
 $('#window-back').addEventListener('click', () => navigateToView(viewHistory.back(), true));

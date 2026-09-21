@@ -27,7 +27,7 @@ function overlaySource() {
           background: rgba(90, 140, 255, .18);
           transform: translate(-9999px, -9999px) scale(.2); opacity: 0;
         }
-        #app-demo-cursor .ring[data-on="true"] { animation: app-demo-tap 420ms ease-out forwards; }
+        #app-demo-cursor .ring[data-on="true"] { animation: app-demo-tap var(--tap, 420ms) ease-out forwards; }
         @keyframes app-demo-tap {
           from { opacity: .95; transform: var(--at) scale(.18); }
           to   { opacity: 0;   transform: var(--at) scale(1); }
@@ -51,11 +51,32 @@ function overlaySource() {
       const ring = layer.querySelector(".ring");
       let at = "translate(-9999px, -9999px)";
       window.__appDemoCursor = {
+        drawn: 0,
         place(x, y) {
           at = `translate(${x}px, ${y}px)`;
           point.style.transform = at;
+          this.drawn++;
         },
-        tap() {
+        // 움직임은 페이지 안에서 그린다. 한 점씩 바깥에서 보내면 CDP 왕복이 4K에서
+        // 한 번에 200ms쯤 걸려(2026-09-21 측정) 커서가 화면을 기어간다. 여기서
+        // requestAnimationFrame으로 그리면 화면이 그리는 만큼 자리가 촘촘하다.
+        glide(from, to, ms) {
+          return new Promise(resolve => {
+            const started = performance.now();
+            const step = now => {
+              const ratio = ms > 0 ? Math.min(1, (now - started) / ms) : 1;
+              const eased = (1 - Math.cos(Math.PI * ratio)) / 2;
+              this.place(from.x + (to.x - from.x) * eased, from.y + (to.y - from.y) * eased);
+              if (ratio < 1) requestAnimationFrame(step);
+              else resolve(this.drawn);
+            };
+            requestAnimationFrame(step);
+          });
+        },
+        tap(ms) {
+          // 느리게 찍는 장면에서는 이 표시도 그만큼 길어야 한다. 편집이 되돌리면
+          // 원래 길이로 보인다.
+          if (ms) ring.style.setProperty("--tap", `${ms}ms`);
           ring.style.setProperty("--at", at);
           ring.dataset.on = "false";
           // 애니메이션을 다시 트는 유일한 방법은 되돌리기를 한 번 강제하는 것이다.
@@ -86,17 +107,23 @@ export async function moveCursor(page, x, y) {
   await page.evaluate(([px, py]) => window.__appDemoCursor?.place(px, py), [x, y]).catch(() => {});
 }
 
-export async function showTap(page) {
-  await page.evaluate(() => window.__appDemoCursor?.tap()).catch(() => {});
+export const TAP_MS = 420;
+
+export async function showTap(page, ms = TAP_MS) {
+  await page.evaluate(value => window.__appDemoCursor?.tap(value), ms).catch(() => {});
 }
 
-// 사람 손의 움직임. 가속하고 감속하며, 프레임마다 한 점씩 옮긴다. 한 번에 뛰면
-// 커서가 순간이동하고 클릭 지점 확대가 어디서 왔는지 알 수 없다.
-export function glidePath(from, to, { steps = 18 } = {}) {
-  const path = [];
-  for (let step = 1; step <= steps; step++) {
-    const ratio = (1 - Math.cos(Math.PI * step / steps)) / 2;
-    path.push({ x: from.x + (to.x - from.x) * ratio, y: from.y + (to.y - from.y) * ratio });
-  }
-  return path;
+/**
+ * 사람 손의 움직임. 가속하고 감속하며 `ms` 동안 `from`에서 `to`로 간다.
+ *
+ * 그림은 페이지 안에서 그리고(왕복 한 번), 실제 마우스는 도착한 뒤 한 번만 옮긴다.
+ * 그래야 hover가 커서가 닿는 순간에 일어나고, 그때까지 그림이 멈추지 않는다.
+ * 돌려주는 값은 이번 이동에서 커서를 몇 번 그렸는지다.
+ */
+export async function glideCursor(page, from, to, ms) {
+  const drawn = await page
+    .evaluate(([a, b, span]) => window.__appDemoCursor?.glide(a, b, span), [from, to, ms])
+    .catch(() => null);
+  await page.mouse.move(to.x, to.y);
+  return drawn;
 }

@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { buildSpanCues, captionsToSrt, captionsToVtt } from "../../shared/captions.mjs";
 import { buildEditPlan } from "../../shared/demo-plan.mjs";
 import { summarizeChecks } from "../../shared/quality.mjs";
-import { videoQuality } from "../../shared/video-quality.mjs";
+import { captureVideoFileName, videoQuality } from "../../shared/video-quality.mjs";
 import { CAPTURE_COLOR_FILTERS, captureCodecArgs, validateCaptureStream, writeCaptureReport } from "../capture/encoding.mjs";
 import { RAW_FILE, SCENES_FILE } from "../capture/record-app.mjs";
 import { writeReviewPage } from "./demo-review.mjs";
@@ -228,7 +228,9 @@ export async function renderAppDemo({
     .map(scene => ({ id: scene.id, ...scene.narration }));
   onEvent({ phase: "rendering", durationMs: plan.durationMs, scenes: plan.scenes.length, narration: placed.length });
 
-  const finalFile = path.join(outDir, `${name}.mp4`);
+  // 화질마다 다른 이름이다. 같은 이름이면 1440p를 내고 4K를 내는 순간 앞의 것이
+  // 사라져, 검수 화면이 준비해 둔 해상도 비교를 할 수가 없다. 이름 규칙은 촬영과 같다.
+  const finalFile = path.join(outDir, captureVideoFileName(name, { videoQuality: profile.id }));
   const workFile = `${finalFile}.${crypto.randomUUID()}.part`;
   let done = false;
   try {

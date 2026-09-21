@@ -7,10 +7,41 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { TYPE_DELAY_MS } from "../../shared/demo-scenario.mjs";
-import { glidePath, installCursorOverlay, moveCursor, showTap } from "./cursor-overlay.mjs";
+import { TAP_MS, glideCursor, installCursorOverlay, moveCursor, showTap } from "./cursor-overlay.mjs";
 import { waitForServer } from "./site.mjs";
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+
+const GLIDE_MS = 320;        // 커서가 한 번 움직이는 데 걸리는 시간
+const HOVER_MS = 200;
+const SCROLL_STEP_MS = 30;
+const CLICK_HOLD_MS = 60;    // 누르고 떼기 사이
+const TYPE_LEAD_MS = 180;
+
+/**
+ * 이 장면에서 **우리가 그리는 움직임**의 길이.
+ *
+ * 앱이 장면을 ¼ 속도로 그리면(`timeScale`) 편집은 그 장면을 4배로 되돌린다. 그때
+ * 커서·클릭 표시·타이핑이 제 속도로 움직였다면 되돌리면서 네 배로 빨라져 뚝뚝
+ * 끊겨 보인다 — 특히 확대 구간에서는 움직인 거리가 1.6배로 커져 더 두드러진다.
+ * 그래서 앱이 느려진 만큼 우리 움직임도 늘린다. 촬영이 받는 그림의 수도 그만큼
+ * 늘어나므로, 되돌린 뒤의 커서는 오히려 더 매끄럽다.
+ */
+export function sceneMotion(timeScale = 1) {
+  const stretch = timeScale > 0 && timeScale <= 1 ? 1 / timeScale : 1;
+  const scale = value => Math.round(value * stretch);
+  return {
+    stretch,
+    glideMs: scale(GLIDE_MS),
+    hoverMs: scale(HOVER_MS),
+    scrollStepMs: scale(SCROLL_STEP_MS),
+    clickHoldMs: scale(CLICK_HOLD_MS),
+    clickJitterMs: scale(40),
+    tapMs: scale(TAP_MS),
+    typeLeadMs: scale(TYPE_LEAD_MS),
+    typeDelayMs: { min: TYPE_DELAY_MS.min * stretch, max: TYPE_DELAY_MS.max * stretch },
+  };
+}
 
 async function loadPlaywright() {
   try {
@@ -204,16 +235,14 @@ export async function runScenes(page, scenario, { clock, onEvent = () => {} }) {
   let cursor = { x: scenario.viewport.width / 2, y: scenario.viewport.height / 2 };
   await moveCursor(page, cursor.x, cursor.y);
 
-  const glide = async to => {
-    for (const at of glidePath(cursor, to, { steps: 18 })) {
-      await moveCursor(page, at.x, at.y);
-      await sleep(14);
-    }
+  const glide = async (to, motion) => {
+    await glideCursor(page, cursor, to, motion.glideMs);
     cursor = to;
   };
 
   const scenes = [];
   for (const scene of scenario.scenes) {
+    const motion = sceneMotion(scene.timeScale);
     const startMs = clock();
     const steps = [];
     onEvent({ phase: "scene", scene: scene.id });
@@ -235,25 +264,25 @@ export async function runScenes(page, scenario, { clock, onEvent = () => {} }) {
           const point = { x: box.x + Math.round(box.w / 2), y: box.y + Math.round(box.h / 2) };
           record.box = box;
           record.point = point;
-          await glide(point);
+          await glide(point, motion);
           if (step.verb === "hover") {
-            await sleep(200);
+            await sleep(motion.hoverMs);
           } else if (step.verb === "scroll") {
             // 한 번에 굴리면 화면이 튄다. 나눠서 굴린다.
             for (let done = 0; done < Math.abs(step.delta); done += 120) {
               await page.mouse.wheel(0, Math.sign(step.delta) * Math.min(120, Math.abs(step.delta) - done));
-              await sleep(30);
+              await sleep(motion.scrollStepMs);
             }
           } else {
             await page.mouse.down();
-            await showTap(page);
-            await sleep(60 + Math.round(random() * 40));
+            await showTap(page, motion.tapMs);
+            await sleep(motion.clickHoldMs + Math.round(random() * motion.clickJitterMs));
             await page.mouse.up();
             if (step.verb === "type") {
-              await sleep(180);
+              await sleep(motion.typeLeadMs);
               for (const char of step.text) {
                 await page.keyboard.type(char);
-                await sleep(TYPE_DELAY_MS.min + random() * (TYPE_DELAY_MS.max - TYPE_DELAY_MS.min));
+                await sleep(motion.typeDelayMs.min + random() * (motion.typeDelayMs.max - motion.typeDelayMs.min));
               }
             }
           }
@@ -269,7 +298,7 @@ export async function runScenes(page, scenario, { clock, onEvent = () => {} }) {
     const screenText = await page.locator(scene.textFrom).first().innerText({ timeout: 2000 })
       .then(text => text.replace(/\n{3,}/g, "\n\n").trim())
       .catch(() => null);
-    scenes.push({ id: scene.id, startMs, endMs: clock(), steps, screenText });
+    scenes.push({ id: scene.id, startMs, endMs: clock(), timeScale: scene.timeScale, steps, screenText });
   }
   return scenes;
 }
