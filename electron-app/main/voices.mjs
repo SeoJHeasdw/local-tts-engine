@@ -194,6 +194,9 @@ export function createVoicesService({
       token: registered[index].token,
       name: `목소리 후보 ${item.index}`,
       durationMs: item.metadata.durationMs,
+      // 영어 구간을 따로 읽었는지는 후보를 고른 뒤에도 물어보게 된다. 목록만
+      // 보고 답할 수 있어야 하므로 없을 때도 null로 남긴다.
+      voiceRouting: item.metadata.voiceRouting ?? null,
       audioUrl: pathToFileURL(item.audioPath).href,
     }));
     await fs.writeFile(path.join(outputDir, "index.json"), `${JSON.stringify({

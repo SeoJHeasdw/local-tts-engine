@@ -59,6 +59,9 @@ export function collectReview(outDir) {
       name: path.basename(relative, ".wav"),
       durationMs: meta?.durationMs ?? null,
       seed: meta?.seed ?? null,
+      // 영어를 따로 읽은 후보인지 화면에서 보인다. 기록이 아예 없는 예전
+      // 후보(undefined)와 영어 구간이 없던 후보(null)는 다른 이야기다.
+      voiceRouting: meta ? meta.voiceRouting ?? null : null,
       selected: texts.get(scene.id)?.voice?.selected === relative,
     };
   });
@@ -262,13 +265,18 @@ addEventListener('keydown', event => {
 });
 `;
 
+function englishParts(routing) {
+  const count = (routing?.segments || []).filter(part => part.language === "English").length;
+  return count ? ` · 영어 ${count}구간` : "";
+}
+
 function candidateList(scene) {
   if (!scene.candidates.length) return "";
   return `<div class="cands">
     <div class="cands-head">목소리 후보 ${scene.candidates.length}개 — 듣고 고른다</div>
     ${scene.candidates.map(item => `<div class="cand${item.selected ? " on" : ""}">
       <span class="cand-name">${escapeHtml(item.name)}${item.selected ? " · 쓰는 중" : ""}</span>
-      <span class="cand-len">${item.durationMs ? seconds(item.durationMs) : ""}</span>
+      <span class="cand-len">${item.durationMs ? seconds(item.durationMs) : ""}${englishParts(item.voiceRouting)}</span>
       <audio controls preload="none" src="${escapeHtml(item.file)}"></audio>
     </div>`).join("")}
   </div>`;

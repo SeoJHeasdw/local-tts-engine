@@ -51,7 +51,7 @@ npm run check
 없기 때문이다. 아직 앱 화면 메뉴는 없고 CLI로만 돈다.
 
 ```bash
-npm run demo -- record config/demo/rice-core-flow.json   # 앱 띄우기 → 조작 → 무손실 녹화
+npm run demo -- record ../../bob/rice/demo/scenarios/rice-core-flow.json   # 앱 띄우기 → 조작 → 무손실 녹화
 npm run demo -- voice  output/edits/<날짜>/<이름>          # 장면마다 목소리 후보
 npm run demo -- render output/edits/<날짜>/<이름>          # 한 번 인코딩 → 자막 → 검증
 ```
@@ -71,7 +71,8 @@ npm run demo -- render output/edits/<날짜>/<이름>          # 한 번 인코�
 
 다시 찍지 않고 고칠 수 있게 무손실 원본(`demo/raw.mkv`)을 남긴다. 대본·목소리·
 배율만 바꿀 때는 `render`만 다시 돌린다. 시나리오 작성법과 동사는
-[아키텍처](docs/ARCHITECTURE.md#앱-데모-촬영)에 있다.
+[아키텍처](docs/ARCHITECTURE.md#앱-데모-촬영)에 있다. 시나리오는 그 앱의 저장소가
+가진다 — RICE는 `bob/rice/demo/scenarios/`이고, 그 앱을 데모로 띄우는 법도 거기 있다.
 
 한국어 제작 음성은 Qwen3-TTS 1.7B Base + `jaeho-ko-r16-v1` LoRA **0.60**이다.
 영어 인용문은 사용자 승인한 `english-speaker-only-v1`으로 따로 생성한다.
@@ -90,7 +91,7 @@ npm run demo -- render output/edits/<날짜>/<이름>          # 한 번 인코�
 | `tests/electron/` | 앱·화면·실제 FFmpeg 연동 검사 |
 | `tests/test_*.py`, `tests/fixtures/` | 엔진 검사와 재현용 텍스트 자료 |
 | `scripts/` | 환경 점검과 수동 검수·복구 CLI |
-| `config/` | 제작 발음 사전, 데이터 연결 설정, 앱 데모 시나리오 |
+| `config/` | 제작 발음 사전, 데이터 연결 설정 |
 | `docs/` | 현재 구조, 검수 계약, 승인·라이선스 근거 |
 
 `electron-app/main.mjs`와 기존 Python CLI 이름은 실행 진입점으로 유지한다.

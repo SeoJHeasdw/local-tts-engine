@@ -136,11 +136,11 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 | `main/editing/demo-render.mjs` | 편집 계획 → ffmpeg 한 번, 음성·자막, 검증·보고서 |
 | `main/editing/demo-review.mjs` | 결과 폴더 → `review.html`. 영상·구간·확대·대본·검증을 한 쪽에 모은다 |
 | `main/workers/demo.mjs` | CLI 진입점: `record`·`voice`·`render` |
-| `config/demo/` | 파일럿 시나리오와 앱별 준비 스크립트 |
 
 **앱을 아는 것은 시나리오 파일뿐이다.** 촬영 엔진은 앱 이름을 모른다. 덱 고유의 조작이
-`deck-page.mjs`에 모이듯 앱 고유의 사정은 시나리오에 모인다. 시나리오가 승인되면 그 앱의
-저장소(`demo/scenarios/<이름>.json`)로 옮기고, 승인 전 파일럿만 여기 `config/demo/`에 둔다.
+`deck-page.mjs`에 모이듯 앱 고유의 사정은 시나리오에 모인다. 시나리오는 그 앱의 저장소가
+가진다(`demo/scenarios/<이름>.json`). 이 저장소에는 시나리오를 두지 않는다 — 앱이 바뀌면
+같이 바뀌어야 하기 때문이다. RICE 시나리오는 `bob/rice/demo/scenarios/rice-core-flow.json`이다.
 
 시나리오의 동사는 `click`·`type`·`press`·`hover`·`scroll`·`waitFor`·`waitGone`·`pause`다.
 대상은 선택자 문자열이거나 `{ role, name, exact }`·`{ placeholder }`·`{ text }`·`{ label }`

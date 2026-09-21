@@ -149,7 +149,10 @@ def generate_candidate(
         "reference": str(reference_path.resolve()),
         "output": str(output_path.resolve()),
         "cleanup": cleanup,
-        **({"voiceRouting": cleanup["voiceRouting"]} if cleanup.get("voiceRouting") else {}),
+        # Always recorded, null included. A missing key cannot say whether the
+        # text held no English or whether the routing simply went unrecorded,
+        # and that is the one thing this field is read to find out.
+        "voiceRouting": cleanup.get("voiceRouting"),
         "normalization": normalization,
         "performance": {
             "modelLoadMs": load_ms,

@@ -18,7 +18,9 @@ finally에서 원래 값을 복원한다. 두 번째 대형 생성 모델을 올
 보호한다. 단어·조사를 별도 영어 클립으로 나누지 않는다. 일반 영어 인용문은
 문장 전체를 보호해 내부 사전 치환을 막은 뒤 따로 생성한다. 언어 경계에는 120ms를
 두고 실제 한국어 RMS를 기준으로 영어에 일정한 게인만 적용한다. 각 언어의 실제
-샘플 범위·길이·게인은 `voiceRouting`에 남긴다. 한국어만 있는 캐시 키는 유지한다.
+샘플 범위·길이·게인은 `voiceRouting`에 남긴다. 영어 구간이 없었던 후보는 그 자리를
+`null`로 남긴다 — 기록이 없는 것과 영어가 없던 것은 다른 이야기다. 한국어만 있는
+캐시 키는 유지한다.
 
 문장 안 영어 철자 방식은 Observation, Anthropic, permission denied(별칭 포함),
 Artificial Analysis, Intelligence Index, Boris Cherny, Y Combinator, RICE에 채택됐다.

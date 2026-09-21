@@ -64,6 +64,21 @@ def verdict(distance: float) -> str:
     return "일치"
 
 
+def clip_name(case_number: int, case_name: str, trial_number: int, label: str, seed_index: int) -> str:
+    """Name one clip so that no two trials can land on the same file.
+
+    macOS compares file names without case, so ``RICE`` and ``Rice`` — exactly
+    the pair this script exists to tell apart — would write to one file and the
+    surviving clips would all belong to whichever trial ran last.  The report
+    would still be right, but anyone listening to the clips afterwards would
+    hear the wrong spelling.  The ordinals carry the identity; the readable
+    part is only there for humans.
+    """
+    safe_case = re.sub(r"[^0-9A-Za-z가-힣]+", "_", case_name).strip("_")
+    safe_label = re.sub(r"[^0-9A-Za-z가-힣]+", "_", label).strip("_")
+    return f"{case_number:02d}-{safe_case}--{trial_number:02d}-{safe_label}--{seed_index}.wav"
+
+
 def expand_trials(case: dict[str, Any]) -> dict[str, Any]:
     """Normalize a case into ``trials`` of {label, text}.
 
@@ -152,14 +167,15 @@ def main(argv: list[str] | None = None) -> int:
 
     results: list[dict[str, Any]] = []
     started = time.perf_counter()
-    for case in cases:
+    for case_number, case in enumerate(cases, start=1):
         target = str(case["target"])
         print(f"\n═══ {case['name']}  목표 소리: {target}", flush=True)
-        for trial in case["trials"]:
+        for trial_number, trial in enumerate(case["trials"], start=1):
             spelling = str(trial["label"])
             sentence = str(trial["text"])
             heard: list[str] = []
             distances: list[float] = []
+            clips: list[str] = []
             for index in range(args.seeds):
                 seed = (args.seed + index * 0x9E3779B1) & 0xFFFFFFFF
                 mx.random.seed(seed)
@@ -174,9 +190,11 @@ def main(argv: list[str] | None = None) -> int:
                 if not pieces:
                     raise RuntimeError(f"{spelling}: 오디오가 생성되지 않았습니다.")
                 audio = np.concatenate(pieces)
-                safe = re.sub(r"[^0-9A-Za-z가-힣]+", "_", spelling).strip("_")
-                clip = args.output_dir / f"{case['name']}--{safe}--{index}.wav"
+                clip = args.output_dir / clip_name(
+                    case_number, str(case["name"]), trial_number, spelling, index
+                )
                 sf.write(clip, audio, 24_000)
+                clips.append(clip.name)
                 text = transcribe(str(clip)).strip()
                 heard.append(text)
                 distances.append(term_distance(target, text))
@@ -187,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"       들림: {text}", flush=True)
             results.append({
                 "name": case["name"], "target": target, "spelling": spelling,
-                "sentence": sentence, "heard": heard,
+                "sentence": sentence, "heard": heard, "clips": clips,
                 "distances": [round(value, 4) for value in distances],
                 "best": round(best, 4), "worst": round(worst, 4),
                 "verdict": verdict(worst),
