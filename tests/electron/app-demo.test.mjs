@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createAppDemoService } from '../../electron-app/main/app-demo.mjs';
+import { dateFolder } from '../../electron-app/main/paths.mjs';
 import { nextStep, sceneSeconds, scenesNeedingVoice, isStale, candidateLabel, defaultVersion, bakedVersion, englishParts } from '../../electron-app/renderer/controllers/demo-polish.mjs';
 
 const SCENARIO = {
@@ -19,7 +20,8 @@ const SCENARIO = {
 async function studio(t, { scenes = null, script = null, cancelRun = false, onRun = null } = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'app-demo-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
-  const outDir = path.join(base, 'edits', '2026-09-21', 'rice-first-run');
+  // 촬영은 오늘 날짜 폴더에 결과를 만든다. 같은 자리를 써야 같은 이름 검사가 뜻이 있다.
+  const outDir = path.join(base, 'edits', dateFolder(), 'rice-first-run');
   const demoDir = path.join(outDir, 'demo');
   await fs.mkdir(path.join(demoDir, 'narration', 'awakening'), { recursive: true });
   if (scenes) await fs.writeFile(path.join(demoDir, 'scenes.json'), JSON.stringify(scenes));
@@ -39,7 +41,9 @@ async function studio(t, { scenes = null, script = null, cancelRun = false, onRu
     },
     emit: event => events.push(event),
     jobSnapshot: () => ({ kind: state.activeJob?.kind }),
-    readAppSettings: async () => ({ paths: { editOutputRoot: path.join(base, 'edits') } }),
+    // 결과 폴더 뿌리는 outputRoot에서 나온다(editOutputRoot = outputRoot/edits). 임시 폴더에 가둔다 —
+    // 가두지 않으면 촬영 검사가 실제 output/edits에 폴더를 만든다.
+    readAppSettings: async () => ({ paths: { outputRoot: base } }),
     requireRuntimeTool: () => '/usr/bin/node',
     // cancelRun: 중지를 누른 것처럼 작업을 중지 표시하고 작업자가 실패로 끝난다.
     runProcess: async (stage, tool, args) => {

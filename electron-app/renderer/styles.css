@@ -377,7 +377,7 @@ h1 { margin: 0; font-size: var(--fs-2xl); font-weight: var(--fw-bold); letter-sp
 .card-heading h2 { font-size: var(--fs-lg); margin: 0; font-weight: var(--fw-semi); letter-spacing: -.02em; }
 
 .field { display: grid; gap: var(--s2); min-width: 0; }
-.field > span, .field legend, .field-line span {
+.field > span, .field legend {
   color: var(--text-2); font-size: var(--fs-sm); font-weight: var(--fw-semi);
 }
 .field small { color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-snug); }
@@ -452,8 +452,6 @@ main [inert] { opacity: .45; }
 .check-row strong { font-size: var(--fs-md); font-weight: var(--fw-semi); }
 .check-row small { margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
 
-.field-line { display: flex; justify-content: space-between; }
-.field-line output { color: var(--lime); font: var(--fw-bold) var(--fs-sm) var(--mono); }
 input[type="range"] {
   appearance: none; width: 100%; height: 4px; border-radius: 4px;
   background: linear-gradient(to right, var(--lime) 0 56%, var(--line-3) 56%);
@@ -1093,10 +1091,8 @@ button:disabled { cursor: not-allowed; }
   background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .modal-head h2 { margin: 0; font-size: var(--fs-xl); font-weight: var(--fw-semi); letter-spacing: -.025em; }
-.modal-subtitle { margin: var(--s2) 0 0; color: var(--text-3); font-size: var(--fs-sm); line-height: var(--lh-snug); }
-.modal-body, .finetune-panel, .job-modal-body { padding: var(--s5); display: grid; gap: var(--s4); }
+.finetune-panel, .job-modal-body { padding: var(--s5); display: grid; gap: var(--s4); }
 .modal-actions { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0 var(--s5) var(--s5); }
-.modal-body .modal-actions { padding: 0; }
 
 .job-modal { width: min(500px, calc(100vw - 48px)); }
 .job-spinner, .job-success, .job-error {
@@ -1262,7 +1258,6 @@ button:disabled { cursor: not-allowed; }
 }
 .profile-guard.experimental { border-color: var(--warn-edge); background: var(--warn-wash); }
 .profile-guard.experimental > span { background: var(--warn-soft); color: var(--warn); }
-.divider { border-top: 1px solid var(--line); }
 
 /* ============================================================================
    토스트
@@ -1319,7 +1314,7 @@ button:disabled { cursor: not-allowed; }
   animation: panel-enter var(--motion-normal) var(--motion-ease);
 }
 :is(.nav-item, .segmented button, .result-filters button, .icon-button, .primary-small,
-    .secondary-small, .primary-button, .path-field button, .candidate-card, .review-pages button,
+    .secondary-small, .primary-button, .candidate-card, .review-pages button,
     .page-stepper, .item-actions button, .transport-confirm, input, select, textarea) {
   transition: background-color var(--motion-fast), border-color var(--motion-fast),
               color var(--motion-fast), box-shadow var(--motion-fast);
@@ -1958,10 +1953,6 @@ button:disabled { cursor: not-allowed; }
 
 
 /* 앱 데모 화면. 뼈대는 화면 녹화·목소리 만들기와 같고, 장면 카드만 여기서 더한다. */
-.demo-summary { display: grid; gap: var(--s1); }
-.demo-summary strong { font-size: var(--fs-md); font-weight: var(--fw-semi); }
-.demo-summary span { color: var(--text-2); font-size: var(--fs-sm); }
-.demo-summary small { color: var(--text-3); font: var(--fs-xs) var(--mono); word-break: break-all; }
 .demo-chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
 .demo-chip {
   display: inline-flex; align-items: baseline; gap: var(--s2); padding: var(--s1) var(--s3);

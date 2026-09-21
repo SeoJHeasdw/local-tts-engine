@@ -1,41 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { installRendererGlobals } from './helpers/renderer-dom.mjs';
 
 test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트까지 연결한다', async t => {
-  const elements = new Map();
-  const listeners = new Map();
-  const timers = [];
-  const element = () => {
-    const classes = new Set();
-    return {
-      value: '', textContent: '', innerHTML: '', dataset: {}, style: { setProperty() {} },
-      disabled: false, children: [], currentTime: 0, duration: 0, scrollTop: 0,
-      classList: {
-        add: (...names) => names.forEach(name => classes.add(name)),
-        remove: (...names) => names.forEach(name => classes.delete(name)),
-        contains: name => classes.has(name),
-        toggle(name, force = !classes.has(name)) { force ? classes.add(name) : classes.delete(name); },
-      },
-      addEventListener() {},
-      attributes: {},
-      setAttribute(key, value) { this.attributes[key] = value; },
-      getAttribute(key) { return this.attributes[key] ?? null; },
-      removeAttribute(key) { delete this.attributes[key]; },
-      append(...items) { this.children.push(...items); },
-      replaceChildren(...items) { this.children = items; },
-      querySelector: () => element(), querySelectorAll: () => [], closest() { return this; },
-      getBoundingClientRect: () => ({ height: 0, width: 0 }), pause() {}, click() {}, remove() {},
-    };
-  };
-  const query = selector => {
-    if (!elements.has(selector)) elements.set(selector, element());
-    return elements.get(selector);
-  };
-  const navItems = ['new', 'review'].map(view => {
-    const item = query(`.nav-item[data-view="${view}"]`);
-    item.dataset.view = view;
-    return item;
-  });
   let jobListener;
   let jobRunning = false;
   const api = {
@@ -46,25 +13,7 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
     // main 은 실행 중인 작업이 있으면 이어할 것이 없다고 답한다.
     getResumable: async () => (jobRunning ? null : { name: 'ch03', title: 'CH03 전체', total: 11, done: 4, remaining: 7 }),
   };
-  const globals = {
-    window: { ttsStudio: api, scrollTo() {}, location: { search: '' } },
-    document: {
-      querySelector: query, querySelectorAll: selector => (selector === '.nav-item' ? navItems : []), createElement: element,
-      documentElement: element(), body: element(),
-      addEventListener: (name, callback) => listeners.set(name, callback),
-    },
-    matchMedia: () => ({ matches: true, addEventListener() {} }),
-    localStorage: { getItem: () => null, setItem() {} },
-    setInterval: callback => { timers.push(callback); return 0; },
-  };
-  const previous = Object.fromEntries(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
-  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
-  t.after(() => {
-    for (const [key, descriptor] of Object.entries(previous)) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else delete globalThis[key];
-    }
-  });
+  const { query, listeners, timers } = installRendererGlobals(t, { api });
   await import('../../electron-app/renderer/app.js');
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(query('#runtime-label').textContent, '전체 기능 준비됨', query('#job-log').textContent);
