@@ -624,21 +624,7 @@ export function createIpcService({
       return true;
     });
 
-    // 앱 데모 결과는 검수 화면이 이어서 볼 자리다. 다듬기는 페이지 타임라인이
-    // 있는 강의 결과의 것이고, 앱 데모에는 그런 것이 없다.
-    ipcMain.handle("studio:open-demo-review", async (event, target) => {
-      guard(event);
-      const { directory } = await resolveOutputFile(target);
-      const page = path.join(directory, "review.html");
-      if (!await fs.stat(page).catch(() => null)) {
-        throw new Error("이 결과에는 검수 화면이 없습니다. 완성본을 먼저 만들어 주세요.");
-      }
-      const error = await shell.openPath(page);
-      if (error) throw new Error(error);
-      return true;
-    });
-
-    // 목록에서 고른 결과를 앱 데모 화면이 이어받을 수 있게 폴더를 알려 준다.
+    // 목록에서 고른 앱 데모 결과를 다듬기가 이어받을 수 있게 폴더를 알려 준다.
     ipcMain.handle("studio:demo-project-dir", async (event, target) => {
       guard(event);
       const { directory } = await resolveOutputFile(target);

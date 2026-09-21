@@ -2,6 +2,15 @@ import path from "node:path";
 import { makeJobName, SLUG_PATTERN } from "./names.mjs";
 import { videoQuality } from "./video-quality.mjs";
 
+// 내 목소리 반영 강도는 0.01 단위다. 설정 막대가 0.001 단위로 움직여 화면에는 0.60으로
+// 보이는데 0.603이 저장됐고, 그 값은 승인값(0.60)이 아니어서 제작 목소리로 치지 않았다
+// (2026-09-21). 저장값은 화면이 보이는 자리까지만 둔다. 읽는 쪽도 같은 규칙으로 읽는다.
+export function settingsAdapterScale(value, fallback = 0.6) {
+  const number = Number(value ?? fallback);
+  const clamped = Math.min(1, Math.max(0.1, Number.isFinite(number) ? number : fallback));
+  return Math.round(clamped * 100) / 100;
+}
+
 export function normalizeOptions(raw = {}) {
   const mode = raw.mode === "bundle" || raw.mode === "page"
     ? "page"

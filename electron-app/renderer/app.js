@@ -3,6 +3,7 @@ import { createEditorController } from "./controllers/editor.mjs";
 import { createReviewController } from "./controllers/review.mjs";
 import { createRecordingController } from "./controllers/recording.mjs";
 import { createAppDemoController } from "./controllers/app-demo.mjs";
+import { createDemoPolishController } from "./controllers/demo-polish.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
@@ -420,7 +421,18 @@ function formatDuration(ms) {
 
 // outputs 는 아래에서 만들어지지만, 이 함수는 화면을 열 때 불린다.
 const review = createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState,
-  neighbours: (target) => outputs.videoNeighbours(target), refreshOutputs: () => outputs.loadOutputs() });
+  neighbours: (target) => outputs.videoNeighbours(target), refreshOutputs: () => outputs.loadOutputs(),
+  onOpen: () => showPolishBench("lecture") });
+
+// 다듬기의 두 작업면. 강의·녹화는 mp4를 직접 고치고 앱 데모는 편집 계획에서 다시 굽는다.
+// 연 결과의 종류가 어느 쪽을 앞에 세울지 정하고, 사이드바의 다듬기는 마지막 것을 연다.
+function showPolishBench(kind) {
+  const demo = kind === "demo";
+  $("#review-lecture").classList.toggle("hidden", demo);
+  $("#review-demo").classList.toggle("hidden", !demo);
+  if (demo) review.reviewPlayer.pause();
+  else demoPolish.pause();
+}
 
 function formatDate(value) {
   if (!value) return "";
@@ -837,11 +849,14 @@ function handleTextVoiceEvent(event) {
   }
 }
 
+const demoPolish = createDemoPolishController({ $, api, showToast,
+  show: () => { showPolishBench("demo"); navigateToView("review"); } });
+
 const appDemo = createAppDemoController({ $, $$, api, showToast, setIconStatus,
-  goToView: (view) => navigateToView(view) });
+  openInPolish: (project) => (project.scenes ? demoPolish.load(project) : demoPolish.open(project.outDir)) });
 appDemo.bind();
 
-const outputs = createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, appDemo });
+const outputs = createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, demoPolish });
 
 const recording = createRecordingController({ $, api, showToast, setIconStatus, formatDuration, review, outputs,
   suggestName: suggestedRecordingName });
@@ -1069,7 +1084,10 @@ function handleTrainingEvent(event) {
 
 function handleJobEvent(event) {
   const activity = jobActivity(event);
-  if (activity) runningView = activity.running ? activity.view : null;
+  if (activity) {
+    runningView = activity.running ? activity.view : null;
+    runningKind = activity.running ? activity.kind : null;
+  }
   // 녹화는 단계마다 사이드바 표시가 바뀐다(준비 → 녹화 중 → 마무리).
   const repaint = activity || (event.jobKind === "record" && event.type !== "log");
   const render = () => {
@@ -1078,7 +1096,8 @@ function handleJobEvent(event) {
   };
   if (["log", "progress", "stage", "record-phase"].includes(event.type)) return render();
   const container = event.jobKind === "record" ? $("#record-workspace")
-    : String(event.jobKind || "").startsWith("demo-") ? $("#view-demo .record-workspace")
+    : event.jobKind === "demo-record" ? $("#view-demo .record-workspace")
+      : String(event.jobKind || "").startsWith("demo-") ? $("#demo-command")
       : ["edit", "text-voice", "training"].includes(event.jobKind)
         ? $("#edit-job-dialog .job-modal-body") : $("#job-workspace");
   return animateLayout(container, render);
@@ -1089,8 +1108,12 @@ function renderJobEvent(event) {
     recording.handleEvent(event);
     return;
   }
-  if (String(event.jobKind || "").startsWith("demo-")) {
+  if (event.jobKind === "demo-record") {
     appDemo.handleEvent(event);
+    return;
+  }
+  if (String(event.jobKind || "").startsWith("demo-")) {
+    demoPolish.handleEvent(event);
     return;
   }
   if (event.jobKind === "text-voice") {
@@ -1364,6 +1387,7 @@ async function initialize() {
   setBusy(false);
   if (["running", "cancelling"].includes(status.activeJob?.state)) {
     runningView = jobView(status.activeJob.kind);
+    runningKind = runningView ? status.activeJob.kind : null;
     if (status.activeJob.kind === "edit") {
       openJobDialog("영상 편집 중");
       setEditBusy(true);
@@ -1371,8 +1395,10 @@ async function initialize() {
       openJobDialog("파인튜닝 학습 중");
     } else if (status.activeJob.kind === "record") {
       recording.restore(status.activeJob);
-    } else if (String(status.activeJob.kind).startsWith("demo-")) {
+    } else if (status.activeJob.kind === "demo-record") {
       appDemo.restore(status.activeJob);
+    } else if (String(status.activeJob.kind).startsWith("demo-")) {
+      demoPolish.restore(status.activeJob);
     } else if (status.activeJob.kind === "text-voice") {
       candidatePurpose = "text";
       openJobDialog("텍스트 목소리 후보 생성 중");
@@ -1710,20 +1736,24 @@ const NAV_OWNER = Object.fromEntries(CREATE_VIEWS.map(view => [view, "new"]));
 // 사이드바의 새로 만들기는 마지막으로 본 갈래로 돌아간다. 앱 데모 대본을 쓰다 최근 결과에
 // 다녀왔는데 강의 영상이 열리면 제자리를 다시 찾아야 한다.
 let lastCreateView = "new";
-// 지금 작업이 도는 갈래. 작업은 앱 전체에서 한 번에 하나라(main의 activeJob) 다른 갈래는
-// 준비까지만 하고 시작은 기다린다. 막는 것은 시작 단추뿐이다 — 대본·설정은 미리 써 둘 수 있다.
+// 지금 작업이 도는 화면과 그 작업의 종류. 작업은 앱 전체에서 한 번에 하나라(main의
+// activeJob) 다른 곳은 준비까지만 하고 시작은 기다린다. 막는 것은 시작 단추뿐이다 —
+// 대본·설정은 미리 써 둘 수 있다. 앱 데모의 목소리·완성본은 다듬기에서 돈다.
 let runningView = null;
+let runningKind = null;
 const CREATE_STARTERS = {
   new: ["#start-button", "#resume-continue"],
   voice: ["#start-text-voices"],
   record: ["#record-start"],
-  demo: ["#demo-record-start", "#demo-voice-start", "#demo-render-start"],
+  demo: ["#demo-record-start"],
 };
 const RUNNING_NOTE = {
-  new: "강의 영상을 만드는 중입니다",
-  voice: "텍스트 목소리 후보를 만드는 중입니다",
+  create: "강의 영상을 만드는 중입니다",
+  "text-voice": "텍스트 목소리 후보를 만드는 중입니다",
   record: "화면을 녹화하는 중입니다",
-  demo: "앱 데모 작업이 진행 중입니다",
+  "demo-record": "앱 데모를 촬영하는 중입니다",
+  "demo-voice": "앱 데모 목소리 후보를 만드는 중입니다",
+  "demo-render": "앱 데모 완성본을 굽는 중입니다",
 };
 function paintCreateActivity() {
   const recordingNow = recording.phase === "recording";
@@ -1732,18 +1762,22 @@ function paintCreateActivity() {
     tab.classList.toggle("recording", tab.dataset.view === "record" && recordingNow);
   }
   // 다른 화면을 보는 동안에도 작업이 도는 것을 놓치지 않게 사이드바에 남긴다. 녹화는 빨강이다.
-  const home = $('.nav-item[data-view="new"]');
-  home.classList.toggle("running", Boolean(runningView) && !recordingNow);
-  home.classList.toggle("recording", recordingNow);
+  const owner = runningView ? NAV_OWNER[runningView] || runningView : null;
+  for (const item of $$(".nav-item")) {
+    item.classList.toggle("running", item.dataset.view === owner && !recordingNow);
+    item.classList.toggle("recording", item.dataset.view === "new" && recordingNow);
+  }
   for (const [view, selectors] of Object.entries(CREATE_STARTERS)) {
     const blocked = Boolean(runningView) && view !== runningView;
     for (const selector of selectors) $(selector).inert = blocked;
   }
+  // 앱 데모의 다듬기 작업면도 다른 작업이 도는 동안에는 굽기·후보 만들기만 막는다.
+  demoPolish.setBlocked(runningView && runningView !== "review" ? RUNNING_NOTE[runningKind] || "다른 작업이 진행 중입니다" : null);
   const away = Boolean(runningView) && CREATE_VIEWS.includes(currentView) && currentView !== runningView;
   $("#create-busy").classList.toggle("hidden", !away);
   $("#create-busy").dataset.view = runningView || "";
   // 녹화는 몇 초마다 사건을 보낸다. 같은 글을 다시 쓰면 화면 낭독기가 같은 말을 되풀이한다.
-  const note = away ? `${RUNNING_NOTE[runningView]} · 끝나면 여기서도 시작할 수 있습니다` : "";
+  const note = away ? `${RUNNING_NOTE[runningKind] || "다른 작업이 진행 중입니다"} · 끝나면 여기서도 시작할 수 있습니다` : "";
   if (away && $("#create-busy-text").textContent !== note) $("#create-busy-text").textContent = note;
 }
 function navigateToView(view, traversal = false) {
@@ -1774,7 +1808,7 @@ function navigateToView(view, traversal = false) {
     window.scrollTo({ top: viewScrollPositions.get(view) || 0, behavior: "instant" });
   });
   if (CREATE_VIEWS.includes(view)) lastCreateView = view;
-  if (view !== "review") review.reviewPlayer.pause();
+  if (view !== "review") { review.reviewPlayer.pause(); demoPolish.pause(); }
   if (view === "results") outputs.loadOutputs();
   if (view === "record") recording.opened();
   if (view === "demo") void appDemo.opened();
@@ -1787,6 +1821,8 @@ $$('[data-view]').forEach(button => button.addEventListener('click', () => {
 $('#create-busy-open').addEventListener('click', () => {
   if (!runningView) return;
   const view = runningView;
+  // 앱 데모의 목소리·완성본은 다듬기의 앱 데모 작업면에서 돈다. 그 작업면을 앞에 세운다.
+  if (view === "review") return demoPolish.reveal();
   navigateToView(view);
   $(`#create-bar [data-view="${view}"]`).focus();
 });
@@ -1799,7 +1835,11 @@ initialize().catch((error) => {
 
 
 // One audible source at a time when comparing the original with candidates.
+// 한 짝(data-pair)으로 묶인 둘은 함께 튼다 — 앱 데모 후보를 영상에 맞춰 듣는 자리다.
 document.addEventListener('play', event => {
   if (!event.target.matches('audio,video')) return;
-  $$('audio,video').forEach(media => { if (media !== event.target) media.pause(); });
+  const pair = event.target.dataset.pair;
+  $$('audio,video').forEach(media => {
+    if (media !== event.target && !(pair && media.dataset.pair === pair)) media.pause();
+  });
 }, true);

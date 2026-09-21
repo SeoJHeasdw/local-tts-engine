@@ -31,6 +31,11 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
     if (!elements.has(selector)) elements.set(selector, element());
     return elements.get(selector);
   };
+  const navItems = ['new', 'review'].map(view => {
+    const item = query(`.nav-item[data-view="${view}"]`);
+    item.dataset.view = view;
+    return item;
+  });
   let jobListener;
   let jobRunning = false;
   const api = {
@@ -44,7 +49,7 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   const globals = {
     window: { ttsStudio: api, scrollTo() {}, location: { search: '' } },
     document: {
-      querySelector: query, querySelectorAll: () => [], createElement: element,
+      querySelector: query, querySelectorAll: selector => (selector === '.nav-item' ? navItems : []), createElement: element,
       documentElement: element(), body: element(),
       addEventListener: (name, callback) => listeners.set(name, callback),
     },
@@ -181,7 +186,7 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
 
   // 새로 만들기의 갈래는 작업 하나를 나눠 쓴다. 한 갈래가 돌면 나머지 갈래의 시작 단추만
   // 막고, 보고 있는 갈래 화면 위에서 무엇이 도는지 알린다. 끝나면 모두 풀린다.
-  const starters = ['#start-button', '#start-text-voices', '#record-start', '#demo-record-start', '#demo-voice-start', '#demo-render-start'];
+  const starters = ['#start-button', '#start-text-voices', '#record-start', '#demo-record-start', '#demo-voice-all', '#demo-render-start'];
   for (const selector of starters) assert.equal(query(selector).inert, false, `${selector}는 작업이 없으면 열려 있다`);
   assert.equal(query('#create-busy').classList.contains('hidden'), true);
 
@@ -199,13 +204,27 @@ test('실제 화면 모듈을 함께 불러와 초기화하고 공통 이벤트�
   assert.equal(query('#create-busy').classList.contains('hidden'), true);
   assert.equal(query('.nav-item[data-view="new"]').classList.contains('recording'), false);
 
-  jobListener({ type: 'demo-started', jobKind: 'demo-voice', step: 'demo-voice' });
-  assert.equal(query('#start-button').inert, true);
-  assert.equal(query('#demo-voice-start').inert, false);
-  assert.match(query('#create-busy-text').textContent, /앱 데모 작업이 진행 중/);
+  // 앱 데모의 목소리·완성본은 다듬기에서 돈다. 새로 만들기의 시작은 모두 막고, 다듬기
+  // 메뉴에 도는 표시를 두고, 앱 데모 작업면은 제 진행을 보인다.
+  jobListener({ type: 'demo-started', jobKind: 'demo-voice', step: 'demo-voice', scenes: ['loop'] });
+  for (const selector of ['#start-button', '#record-start', '#demo-record-start']) assert.equal(query(selector).inert, true, selector);
+  assert.equal(query('#demo-voice-all').inert, false, '도는 작업면은 제 진행으로 막는다');
+  assert.equal(query('#demo-running').classList.contains('hidden'), false);
+  assert.match(query('#demo-running-note').textContent, /loop/);
+  assert.match(query('#create-busy-text').textContent, /앱 데모 목소리 후보를 만드는 중/);
+  assert.equal(query('.nav-item[data-view="review"]').classList.contains('running'), true, '다듬기 메뉴가 도는 표시를 한다');
+  assert.equal(query('.nav-item[data-view="new"]').classList.contains('running'), false);
   jobListener({ type: 'demo-failed', jobKind: 'demo-voice', step: 'demo-voice', message: '실패' });
   // 끝난 뒤 늦게 온 로그가 다시 막지 않는다.
   jobListener({ type: 'log', jobKind: 'demo-voice', text: 'late\n' });
   for (const selector of starters) assert.equal(query(selector).inert, false, selector);
-  assert.equal(query('.nav-item[data-view="new"]').classList.contains('running'), false);
+  assert.equal(query('#demo-running').classList.contains('hidden'), true);
+  assert.equal(query('.nav-item[data-view="review"]').classList.contains('running'), false);
+
+  // 새로 만들기에서 강의가 돌면 앱 데모 작업면은 굽기·후보 만들기만 막고 까닭을 적는다.
+  jobListener({ type: 'started', jobKind: 'create', options: { name: 'lesson', mode: 'lesson' } });
+  assert.equal(query('#demo-render-start').inert, true);
+  assert.match(query('#demo-blocked').textContent, /강의 영상을 만드는 중/);
+  jobListener({ type: 'failed', jobKind: 'create', cancelled: true, message: '중지됨' });
+  assert.equal(query('#demo-render-start').inert, false);
 });

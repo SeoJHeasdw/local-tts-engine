@@ -1,7 +1,7 @@
 import { animateLayout } from "../motion.mjs";
 import { filterOutputItems, visibleVoiceFindings, outputIcon, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs, outputGroupKey, outputVersionLinks } from "../view-utils.mjs";
 
-export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, appDemo, document = globalThis.document }) {
+export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, demoPolish, document = globalThis.document }) {
   let outputItems = [];
 
   let outputFilter = "all";
@@ -162,21 +162,12 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
           } catch (error) { showToast(error.message, "error"); }
         });
         if (kind === "demo") {
-          // 앱 데모에는 페이지 타임라인이 없어 다듬기가 할 일이 없다. 장면·배율·대본·
-          // 후보를 한 쪽에 모은 그 결과의 검수 화면이 이어서 볼 자리다.
+          // 앱 데모도 다듬기에서 본다. 다만 강의처럼 mp4를 고치지 않고 장면·대본·후보를 고쳐
+          // 다시 굽는 작업면이 따로 열린다.
           const open = row.querySelector(".open-button");
-          open.textContent = "검수 화면";
-          open.addEventListener("click", () => api.openDemoReview(target)
+          open.textContent = "다듬기";
+          open.addEventListener("click", () => demoPolish.openTarget(target)
             .catch((error) => showToast(error.message, "error")));
-          const resume = document.createElement("button");
-          resume.type = "button";
-          resume.className = "resume-demo-button";
-          resume.textContent = "앱 데모에서 이어서";
-          resume.addEventListener("click", async () => {
-            closeResultMenus();
-            try { await appDemo.resume(target); } catch (error) { showToast(error.message, "error"); }
-          });
-          row.querySelector(".result-menu div").prepend(resume);
         } else if (item.video) {
           row.querySelector(".open-button").textContent = findings.length ? "다듬기" : "열기";
           row.querySelector(".open-button").addEventListener("click", () => review.openReview(target));

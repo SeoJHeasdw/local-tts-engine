@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createAppDemoService } from '../../electron-app/main/app-demo.mjs';
-import { nextStep, sceneSeconds } from '../../electron-app/renderer/controllers/app-demo.mjs';
+import { nextStep, sceneSeconds, scenesNeedingVoice, isStale, candidateLabel, defaultVersion, bakedVersion, englishParts } from '../../electron-app/renderer/controllers/demo-polish.mjs';
 
 const SCENARIO = {
   schemaVersion: 1,
@@ -94,7 +94,36 @@ test('결과 폴더에서 대본·후보·완성본을 한 벌로 모은다', as
   assert.equal(project.scenes[0].candidates[0].durationMs, 6520, '후보 길이를 함께 준다');
   assert.match(project.scenes[0].candidates[0].url, /^file:\/\/.*candidate-01\.wav$/);
   assert.deepEqual(project.videos.map(video => video.name), ['rice-first-run-high.mp4']);
-  assert.equal(project.reviewUrl, null, '검수 화면이 없으면 지어내지 않는다');
+  assert.match(project.videos[0].url, /^file:\/\/.*rice-first-run-high\.mp4$/);
+  // 굽기 전이라 편집 계획·자막·검증이 없다. 지어내지 않고 비워 둔다.
+  assert.equal(project.plan, null);
+  assert.deepEqual(project.captions, []);
+  assert.equal(project.ok, null);
+  assert.equal(project.reviewUrl, undefined, '앱은 브라우저 검수 페이지를 열지 않는다');
+});
+
+test('다듬기가 그릴 편집 계획·자막·검증과 후보가 읽은 대본을 함께 준다', async t => {
+  const { service, outDir, demoDir } = await studio(t, { scenes: scenesFile, script: scriptFile });
+  await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'input.txt'), '예전 대본\n');
+  await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-01.json'),
+    JSON.stringify({ durationMs: 6520, voiceRouting: { segments: [{ language: 'English' }] } }));
+  const plan = { fps: 25, maxSpeed: 4, durationMs: 9000, segments: [], zoom: [],
+    scenes: [{ id: 'awakening', outStartMs: 0, outEndMs: 7000, srcStartMs: 0, srcEndMs: 29600, holdMs: 0 }] };
+  await fs.writeFile(path.join(demoDir, 'edit-plan.json'), JSON.stringify(plan));
+  await fs.writeFile(path.join(demoDir, 'captions.json'), JSON.stringify({ cues: [{ startMs: 320, endMs: 2800, text: '처음 열면' }] }));
+  await fs.writeFile(path.join(outDir, 'validation-report.json'), JSON.stringify({
+    checks: [{ label: '영상 규격', ok: true }], warnings: [], summary: { ok: true } }));
+  const project = await service.readDemoProject(outDir);
+  assert.equal(project.plan.durationMs, 9000);
+  assert.equal(project.plan.scenes[0].outEndMs, 7000);
+  assert.equal(project.captions[0].text, '처음 열면');
+  assert.equal(project.ok, true);
+  assert.equal(project.checks.length, 1);
+  // 예전 기록에는 voice.text가 없어 작업자가 남긴 입력 글로 갈음한다.
+  assert.equal(project.scenes[0].voicedText, '예전 대본');
+  assert.equal(project.scenes[1].voicedText, null, '후보가 없으면 읽은 대본도 없다');
+  assert.equal(project.scenes[0].candidates[0].voiceRouting.segments[0].language, 'English');
+  assert.equal(project.scenes[0].candidates[1].voiceRouting, undefined, '기록이 없는 후보는 모른다고 둔다');
 });
 
 test('화면이 고친 대본과 고른 후보만 돌려 쓴다', async t => {
@@ -133,6 +162,16 @@ test('촬영·목소리·렌더는 CLI와 같은 작업자를 같은 인자로 �
   const voiced = runs.at(-1);
   assert.deepEqual(voiced.args.slice(1), ['voice', outDir, '--candidates', '4']);
 
+  // 다듬기는 할 일이 남은 장면만 골라 부른다. 여러 장면은 쉼표로 잇는다.
+  await service.startDemoVoice({ outDir, candidates: 3, scenes: ['awakening', 'chat'] });
+  await settle();
+  assert.deepEqual(runs.at(-1).args.slice(1), ['voice', outDir, '--candidates', '3', '--scene', 'awakening,chat']);
+  assert.deepEqual(events.filter(event => event.type === 'demo-started').at(-1).scenes, ['awakening', 'chat'],
+    '어느 장면을 만드는지 화면이 알 수 있다');
+  await service.startDemoVoice({ outDir, scene: 'chat' });
+  await settle();
+  assert.deepEqual(runs.at(-1).args.slice(-2), ['--scene', 'chat']);
+
   await service.startDemoRender({ outDir, quality: 'ultra' });
   await settle();
   const rendered = runs.at(-1);
@@ -151,6 +190,37 @@ test('다음에 할 일은 결과 폴더의 상태만 보고 정한다', () => {
   assert.equal(nextStep({ scenes: [{ id: 'a', status: 'approved', text: '말', candidates: [] }] }), 'voice');
   assert.equal(nextStep({ scenes: [{ id: 'a', status: 'approved', text: '말', candidates: [{}], selected: null }] }), 'select');
   assert.equal(nextStep({ scenes: [{ id: 'a', status: 'approved', text: '말', candidates: [{}], selected: 'x.wav' }] }), 'render');
+});
+
+test('대본을 고친 뒤 후보를 다시 만들지 않은 장면을 가려낸다', () => {
+  const scene = (id, extra) => ({ id, status: 'approved', text: '지금 대본', candidates: [], selected: null, ...extra });
+  const project = { scenes: [
+    scene('fresh'),
+    scene('same', { candidates: [{}], voicedText: '지금 대본', selected: 'a.wav' }),
+    scene('changed', { candidates: [{}], voicedText: '예전 대본', selected: 'a.wav' }),
+    scene('unknown', { candidates: [{}], voicedText: null, selected: 'a.wav' }),
+    scene('draft', { status: 'draft' }),
+  ] };
+  assert.equal(isStale(project.scenes[2]), true);
+  assert.equal(isStale(project.scenes[3]), false, '기록이 없으면 바뀌었다고 지어내지 않는다');
+  assert.deepEqual(scenesNeedingVoice(project), ['fresh', 'changed']);
+  assert.equal(nextStep(project), 'voice');
+  assert.equal(nextStep({ scenes: [scene('same', { candidates: [{}], voicedText: '지금 대본', selected: null })] }), 'select');
+});
+
+test('후보 이름·영어 구간·기본 화질을 사람이 읽는 말로 적는다', () => {
+  assert.equal(candidateLabel({ name: 'candidate-03' }), '후보 3');
+  assert.equal(englishParts({ voiceRouting: { segments: [{ language: 'English' }, { language: 'Korean' }] } }), '영어 1구간');
+  assert.equal(englishParts({ voiceRouting: null }), '');
+  // 1440p가 기본 화질이다. 없으면 가장 큰 것을 연다.
+  assert.equal(defaultVersion([{ name: 'x-standard.mp4' }, { name: 'x-high.mp4' }, { name: 'x-ultra.mp4' }]), 'x-high.mp4');
+  assert.equal(defaultVersion([{ name: 'x-standard.mp4' }, { name: 'x-ultra.mp4' }]), 'x-ultra.mp4');
+  assert.equal(defaultVersion([]), null);
+  // 방금 구운 화질로 바꿔 보여 준다. 1080p는 이름에 꼬리가 없다.
+  const baked = { name: 'x', videos: [{ name: 'x.mp4' }, { name: 'x-high.mp4' }] };
+  assert.equal(bakedVersion(baked, 'standard'), 'x.mp4');
+  assert.equal(bakedVersion(baked, 'high'), 'x-high.mp4');
+  assert.equal(bakedVersion(baked, 'ultra'), null, '없는 파일은 지어내지 않는다');
 });
 
 test('느리게 찍은 장면의 길이는 되돌린 뒤로 보여 준다', () => {

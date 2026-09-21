@@ -473,3 +473,29 @@ test("접은 사이드바는 이름을 지우지 않고 말풍선으로 보인�
   assert.doesNotMatch(css, /\.sidebar-collapsed \.local-card-copy, \.sidebar-collapsed \.local-runtime \{ display: none; \}/);
   assert.match(css, /\.sidebar-collapsed \.nav-item:is\(:hover, :focus-visible\) b/);
 });
+
+// 앱 데모의 검수는 브라우저 검수 페이지로 떨어지지 않고 다듬기 안에서 한다. 새로 만들기의
+// 앱 데모는 찍기까지만 하고, 대본·목소리·완성본은 다듬기의 앱 데모 작업면이 맡는다.
+test("앱 데모는 새로 만들기에서 찍고 다듬기의 따로 된 작업면에서 대본·목소리·완성본을 만든다", async () => {
+  const [html, preload, outputs] = await Promise.all([
+    fs.readFile(path.join(renderer, "index.html"), "utf8"),
+    fs.readFile(path.join(APP_DIR, "preload.cjs"), "utf8"),
+    fs.readFile(path.join(renderer, "controllers", "outputs.mjs"), "utf8"),
+  ]);
+  const create = html.match(/<section class="page-view hidden" id="view-demo">[\s\S]*?<\/section>\n\n        <section class="page-view hidden" id="view-voice">/)[0];
+  assert.match(create, /id="demo-record-start"/);
+  assert.match(create, /id="demo-done"[\s\S]*id="demo-polish-go"/, "찍고 나면 다듬기로 넘기는 결과 카드가 있다");
+  for (const moved of ["demo-scenes", "demo-voice-all", "demo-render-start", "target=\"_blank\""]) {
+    assert.doesNotMatch(create, new RegExp(moved), `${moved}는 새로 만들기에 없다`);
+  }
+  const polish = html.match(/<section class="page-view hidden" id="view-review">[\s\S]*?\n        <\/section>/)[0];
+  assert.match(polish, /<div id="review-lecture">/);
+  assert.match(polish, /<div class="hidden" id="review-demo">/);
+  const demo = polish.slice(polish.indexOf('id="review-demo"'));
+  for (const part of ["demo-player", "demo-track", "demo-scene-panel", "demo-voice-all", "demo-render-start", "demo-preview-render"]) {
+    assert.match(demo, new RegExp(`id="${part}"`), `다듬기의 앱 데모 작업면에 ${part}가 있다`);
+  }
+  assert.doesNotMatch(html, /target="_blank"/, "앱은 새 창을 막으므로 새 창 링크를 두지 않는다");
+  assert.doesNotMatch(preload, /openDemoReview/, "앱은 review.html을 브라우저로 열지 않는다");
+  assert.match(outputs, /open\.textContent = "다듬기";\n\s*open\.addEventListener\("click", \(\) => demoPolish\.openTarget\(target\)/);
+});

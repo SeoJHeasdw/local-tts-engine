@@ -279,12 +279,27 @@
           <header class="topbar">
             <div>
               <h1>앱 데모 촬영</h1>
-              <p class="lede">직접 만든 앱을 자동으로 조작하며 찍고, 찍은 화면을 보고 대본을 씁니다. 강의와 반대로 화면이 먼저입니다.</p>
+              <p class="lede">직접 만든 앱을 자동으로 조작하며 찍습니다. 강의와 반대로 화면이 먼저이고, 대본·목소리·완성본은 찍은 화면을 보며 다듬기에서 만듭니다.</p>
             </div>
             <div class="top-status" id="demo-top-status" tabindex="0" data-tooltip="시나리오를 고르세요" aria-label="시나리오를 고르세요"><span class="pulse"></span><span class="sr-only">대기</span></div>
           </header>
 
           <section class="record-workspace">
+            <!-- 방금 끝난 촬영. 대본·목소리·완성본은 다듬기에서 한다. 다시 찍는 길은 늘 아래에 보인다. -->
+            <section class="card record-result hidden" id="demo-done" aria-live="polite">
+              <div class="record-result-head">
+                <span class="record-result-icon" id="demo-done-icon" aria-hidden="true">✓</span>
+                <div class="record-result-copy">
+                  <strong id="demo-done-title">촬영을 마쳤습니다</strong>
+                  <small id="demo-done-summary"></small>
+                </div>
+                <button type="button" class="icon-button" id="demo-dismiss" aria-label="방금 촬영 알림 닫기">×</button>
+              </div>
+              <div class="record-result-actions">
+                <button type="button" class="primary-small" id="demo-polish-go">다듬기에서 대본 쓰기</button>
+              </div>
+            </section>
+
             <section class="card record-card" id="demo-setup">
               <div class="card-heading">
                 <div><h2>무엇을 찍을까요?</h2></div>
@@ -298,43 +313,18 @@
                 </div>
               </details>
               <button class="primary-button full" id="demo-record-start" type="button" data-demo-action disabled><span>촬영 시작</span><span aria-hidden="true">●</span></button>
-              <button type="button" class="secondary-small" id="demo-open" data-demo-action>이미 찍어 둔 결과 이어서 하기</button>
+              <button type="button" class="secondary-small" id="demo-open" data-demo-action>찍어 둔 결과를 다듬기에서 열기</button>
             </section>
 
             <section class="card record-live hidden" id="demo-progress" aria-live="polite">
               <div class="record-clock">
                 <span class="record-dot" aria-hidden="true"></span>
-                <strong id="demo-progress-label"></strong>
-                <small id="demo-progress-note">끝나면 이 화면이 다음 단계를 엽니다</small>
+                <strong id="demo-progress-label">촬영 중입니다</strong>
+                <small id="demo-progress-note">끝나면 다듬기에서 장면마다 대본을 씁니다</small>
               </div>
               <div class="job-controls">
                 <button class="cancel-button" id="demo-cancel" type="button">중지</button>
               </div>
-            </section>
-
-            <section class="hidden" id="demo-project">
-              <section class="card record-card">
-                <div class="card-heading">
-                  <div><h2 id="demo-project-name"></h2></div>
-                  <a class="secondary-small hidden" id="demo-review" href="#" target="_blank">검수 화면 열기</a>
-                </div>
-                <p class="lede" id="demo-project-meta"></p>
-                <p class="context-advice" id="demo-step-hint"></p>
-                <ul class="demo-videos" id="demo-videos"></ul>
-              </section>
-
-              <div id="demo-scenes" class="demo-scenes"></div>
-
-              <section class="card record-card">
-                <div class="card-heading">
-                  <div><h2>다음 단계</h2></div>
-                  <button type="button" class="secondary-small" id="demo-save" data-demo-action>대본 저장</button>
-                </div>
-                <label class="field full"><span>비교할 후보 수</span><input id="demo-candidates" type="number" min="1" max="8" value="3"><small>확정한 장면마다 이만큼 만들고 직접 듣고 고릅니다.</small></label>
-                <button class="primary-button full" id="demo-voice-start" type="button" data-demo-action><span>목소리 후보 만들기</span><span aria-hidden="true">♪</span></button>
-                <label class="field full"><span>완성본 화질</span><select id="demo-quality"><option value="standard">1080p</option><option value="high" selected>1440p · 기본</option><option value="ultra">4K</option></select><small>화질마다 다른 파일로 남아 나란히 견줄 수 있습니다.</small></label>
-                <button class="primary-button full" id="demo-render-start" type="button" data-demo-action><span>완성본 만들기</span><span aria-hidden="true">→</span></button>
-              </section>
             </section>
 
             <details class="log-panel">
@@ -377,6 +367,9 @@
         </section>
 
         <section class="page-view hidden" id="view-review">
+          <!-- 다듬기의 두 작업면. 강의·녹화는 mp4를 직접 고치고, 앱 데모는 편집 계획에서 완성본을
+               매번 새로 굽는다. 고치는 대상이 달라 한 화면에 섞지 않는다. 연 결과의 종류가 고른다. -->
+          <div id="review-lecture">
           <header class="review-head">
             <div class="review-file">
               <h1>다듬기</h1>
@@ -494,6 +487,74 @@
               <button type="button" class="primary-small" id="polish-save">한 번에 저장</button>
             </div>
           </section>
+          </div>
+
+          <div class="hidden" id="review-demo">
+            <header class="review-head">
+              <div class="review-file">
+                <h1>다듬기</h1>
+                <span class="demo-kind">앱 데모</span>
+                <strong id="demo-polish-name">찍어 둔 결과를 여세요.</strong>
+                <button type="button" class="secondary-small" id="demo-polish-pick">다른 촬영 열기</button>
+              </div>
+              <div class="review-head-meta">
+                <div class="polish-facts" id="demo-polish-facts"></div>
+                <span class="demo-verdict hidden" id="demo-polish-verdict"></span>
+              </div>
+            </header>
+            <!-- 결과 전체에 걸리는 일은 위 한 줄에 둔다. 다음 할 일을 말하는 자리와 그 일을 하는 단추가
+                 같은 줄에 서고, 장면 패널이 길어져도 화면 밖으로 밀리지 않는다. 장면 하나의 일은 오른쪽이다. -->
+            <section class="card demo-command hidden" id="demo-command">
+              <div class="demo-command-copy">
+                <p id="demo-polish-hint"></p>
+                <small id="demo-command-note"></small>
+              </div>
+              <div class="demo-command-actions" id="demo-command-actions">
+                <label class="demo-count"><input id="demo-candidates" type="number" min="1" max="8" value="3" aria-label="장면마다 만들 후보 수"><span>벌씩</span></label>
+                <button class="secondary-small" id="demo-voice-all" type="button">후보 만들기</button>
+                <span class="demo-command-divider" aria-hidden="true"></span>
+                <select id="demo-quality" aria-label="완성본 화질"><option value="standard">1080p</option><option value="high" selected>1440p · 기본</option><option value="ultra">4K</option></select>
+                <button class="primary-small" id="demo-render-start" type="button">완성본 만들기 →</button>
+              </div>
+              <div class="demo-running hidden" id="demo-running">
+                <span class="spinner" aria-hidden="true"></span>
+                <div><strong id="demo-running-label"></strong><small id="demo-running-note"></small></div>
+                <button class="cancel-button" id="demo-polish-cancel" type="button">중지</button>
+              </div>
+              <p class="demo-blocked hidden" id="demo-blocked" role="status"></p>
+            </section>
+            <div class="review-layout">
+              <section class="review-stage card">
+                <div class="demo-stage" id="demo-stage">
+                  <video id="demo-player" controls preload="metadata" aria-label="앱 데모 완성본"></video>
+                  <div class="demo-caption" id="demo-caption" aria-hidden="true"></div>
+                  <div class="demo-stage-empty hidden" id="demo-stage-empty">
+                    <strong>아직 완성본이 없습니다</strong>
+                    <p>내레이션 없이 한 번 구우면 장면을 보면서 대본을 쓸 수 있습니다.</p>
+                    <button type="button" class="primary-small" id="demo-preview-render">1080p로 미리 굽기</button>
+                  </div>
+                </div>
+                <div class="review-transport demo-transport">
+                  <div class="segmented demo-versions" id="demo-versions" role="radiogroup" aria-label="볼 화질"></div>
+                  <button type="button" class="secondary-small" id="demo-captions" aria-pressed="true">자막</button>
+                  <span class="demo-keys">space 재생 · ←→ 2초 · [ ] 장면</span>
+                </div>
+                <div class="demo-track" id="demo-track"></div>
+                <details class="demo-checks hidden" id="demo-checks">
+                  <summary><span id="demo-checks-title">자동 검증</span><small>파일 규격과 길이를 본 것입니다. 화면과 소리는 직접 보고 판단합니다.</small></summary>
+                  <ul id="demo-check-list"></ul>
+                </details>
+              </section>
+              <aside class="review-sidebar">
+                <section class="card demo-scene-card" id="demo-scene-panel" aria-live="polite"></section>
+              </aside>
+            </div>
+            <details class="log-panel">
+              <summary>상세 기록</summary>
+              <pre id="demo-polish-log"></pre>
+            </details>
+            <audio id="demo-voice-preview" preload="none"></audio>
+          </div>
         </section>
 
         <section class="page-view hidden" id="view-edit">
@@ -689,7 +750,7 @@
                 <div class="setting-copy"><strong>내 목소리 반영 강도</strong><small>한국어 제작 기본값은 0.60입니다. 바꾸면 짧은 샘플을 먼저 들어 보세요.</small></div>
                 <div class="setting-control range-control">
                   <output id="global-scale-output">0.60</output>
-                  <input id="global-scale" type="range" min="0.1" max="1" step="0.001" value="0.6" aria-label="내 목소리 반영 강도">
+                  <input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6" aria-label="내 목소리 반영 강도">
                   <div class="range-labels"><span>기본 모델에 가깝게</span><span>학습값 그대로</span></div>
                 </div>
               </div>

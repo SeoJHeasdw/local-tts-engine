@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { ROOT, dateFolder, runtimePaths } from "./paths.mjs";
 import { normalizeEditName } from "../shared/index.mjs";
 import { normalizeScenario } from "../shared/demo-scenario.mjs";
+import { collectReview } from "./editing/demo-review.mjs";
 
 // 앱 데모 촬영을 화면에서 돌린다. 세 단계(촬영 → 목소리 → 렌더)는 CLI와 같은
 // 작업자(`workers/demo.mjs`)를 별도 프로세스로 실행한다. 한 가지 일에 두 벌의
@@ -108,7 +109,12 @@ export function createAppDemoService({
     return path.join(runtimePaths(settings.paths).editOutputRoot, dateFolder(), name);
   }
 
-  /** 결과 폴더의 촬영 기록·대본·후보를 화면이 쓸 모양으로 모은다. */
+  /**
+   * 결과 폴더의 촬영 기록·대본·후보·완성본·편집 계획을 다듬기 화면이 쓸 모양으로 모은다.
+   *
+   * 편집 계획·자막·검증은 CLI 검수 페이지(review.html)와 같은 것을 같은 함수로 읽는다.
+   * 완성본이 없으면 비어 있다 — 대본을 쓰기 전에도 화면은 열려야 한다.
+   */
   async function readDemoProject(outDir) {
     const demoDir = path.join(outDir, "demo");
     const read = async file => {
@@ -118,27 +124,35 @@ export function createAppDemoService({
     const script = await read("script.json");
     if (!scenes) throw new Error("촬영 기록(demo/scenes.json)이 없습니다.");
     const texts = new Map((script?.scenes || []).map(scene => [scene.id, scene]));
-    const lengths = new Map();
+    const metas = new Map();
     for (const scene of script?.scenes || []) {
       for (const relative of scene.voice?.candidates || []) {
         try {
-          const meta = JSON.parse(await fs.readFile(path.join(demoDir, relative.replace(/\.wav$/, ".json")), "utf8"));
-          lengths.set(relative, meta.durationMs ?? null);
-        } catch { lengths.set(relative, null); }
+          metas.set(relative, JSON.parse(await fs.readFile(path.join(demoDir, relative.replace(/\.wav$/, ".json")), "utf8")));
+        } catch { metas.set(relative, null); }
       }
     }
-    const videos = (await fs.readdir(outDir).catch(() => []))
-      .filter(name => name.endsWith(".mp4"))
-      .sort()
-      .map(name => ({ name, url: pathToFileURL(path.join(outDir, name)).href }));
-    const reviewPath = path.join(outDir, "review.html");
+    // 후보가 어느 대본을 읽었는지. 대본을 고친 뒤 후보를 다시 만들지 않았으면 화면이 알린다.
+    // 예전 기록에는 voice.text가 없어 작업자가 남긴 입력 글로 갈음한다.
+    const voicedTexts = new Map();
+    for (const scene of script?.scenes || []) {
+      if (!scene.voice?.candidates?.length) continue;
+      const input = await fs.readFile(path.join(demoDir, "narration", scene.id, "input.txt"), "utf8").catch(() => null);
+      voicedTexts.set(scene.id, scene.voice.text ?? input?.trim() ?? null);
+    }
+    const review = collectReview(outDir);
     return {
       outDir,
       name: path.basename(outDir),
       scenario: scenes.scenario,
       durationMs: scenes.durationMs,
-      videos,
-      reviewUrl: (await fs.stat(reviewPath).catch(() => null)) ? pathToFileURL(reviewPath).href : null,
+      frame: review.frame,
+      videos: review.videos.map(video => ({ ...video, url: pathToFileURL(path.join(outDir, video.name)).href })),
+      plan: review.plan,
+      captions: review.captions,
+      checks: review.checks,
+      warnings: review.warnings,
+      ok: review.ok,
       scenes: scenes.scenes.map(scene => {
         const text = texts.get(scene.id);
         return {
@@ -151,12 +165,16 @@ export function createAppDemoService({
           text: text?.text || "",
           status: text?.status || "draft",
           selected: text?.voice?.selected || null,
+          voicedText: voicedTexts.get(scene.id) ?? null,
           candidates: (text?.voice?.candidates || []).map(relative => ({
             file: relative,
             name: path.basename(relative, ".wav"),
             url: pathToFileURL(path.join(demoDir, relative)).href,
             // 후보를 고를 때 길이를 함께 본다. 장면보다 길면 편집이 덜 되돌린다.
-            durationMs: lengths.get(relative) ?? null,
+            durationMs: metas.get(relative)?.durationMs ?? null,
+            // 영어를 따로 읽은 후보인지 보인다. 기록이 없는 예전 후보(undefined)와
+            // 영어 구간이 없던 후보(null)는 다른 이야기다.
+            voiceRouting: metas.get(relative) ? metas.get(relative).voiceRouting ?? null : undefined,
           })),
         };
       }),
@@ -245,10 +263,14 @@ export function createAppDemoService({
     if (!outDir) throw new Error("촬영 결과 폴더가 필요합니다.");
     const count = Math.min(8, Math.max(1, Math.round(Number(raw.candidates ?? 3))));
     const args = ["voice", outDir, "--candidates", String(count)];
-    if (raw.scene) args.push("--scene", String(raw.scene));
-    const job = startJob("demo-voice", { outDir, candidates: count, scene: raw.scene || null });
+    // 장면 하나(scene) 또는 여럿(scenes). 비우면 확정한 장면 모두다.
+    const scenes = [raw.scene, ...(Array.isArray(raw.scenes) ? raw.scenes : [])]
+      .map(id => String(id ?? "").trim()).filter(Boolean);
+    if (scenes.some(id => id.includes(","))) throw new Error("장면 이름에 쉼표를 쓸 수 없습니다.");
+    if (scenes.length) args.push("--scene", scenes.join(","));
+    const job = startJob("demo-voice", { outDir, candidates: count, scenes });
     const snapshot = jobSnapshot();
-    emit({ type: "demo-started", step: "demo-voice", job: snapshot, outDir });
+    emit({ type: "demo-started", step: "demo-voice", job: snapshot, outDir, scenes });
     void runDemoWorker(job, args, async () => ({ project: await readDemoProject(outDir) }));
     return snapshot;
   }

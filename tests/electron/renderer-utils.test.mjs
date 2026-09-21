@@ -143,25 +143,28 @@ test('뒤로·앞으로 이동과 이동 후 새 화면 선택은 브라우저�
   assert.equal(history.back(),'new'); assert.equal(history.canBack,false);
 });
 
-test('작업 사건으로 새로 만들기의 어느 갈래가 도는지 가른다', async () => {
+test('작업 사건으로 어느 화면의 작업이 도는지 가른다', async () => {
   const { CREATE_VIEWS, jobActivity, jobView } = await import('../../electron-app/renderer/view-utils.mjs');
   assert.deepEqual(CREATE_VIEWS, ['new', 'voice', 'record', 'demo']);
   assert.equal(jobView('create'), 'new');
   assert.equal(jobView('text-voice'), 'voice');
   assert.equal(jobView('record'), 'record');
-  for (const kind of ['demo-record', 'demo-voice', 'demo-render']) assert.equal(jobView(kind), 'demo');
-  // 편집·학습은 갈래가 아니다. 그 작업은 제 대화상자가 화면을 막는다.
+  // 앱 데모는 촬영만 새로 만들기에서 하고, 목소리·완성본은 다듬기의 앱 데모 작업면에서 돈다.
+  assert.equal(jobView('demo-record'), 'demo');
+  assert.equal(jobView('demo-voice'), 'review');
+  assert.equal(jobView('demo-render'), 'review');
+  // 편집·학습은 제 대화상자가 화면을 막는다.
   assert.equal(jobView('edit'), null);
   assert.equal(jobView('training'), null);
 
-  assert.deepEqual(jobActivity({ type: 'started', jobKind: 'create' }), { view: 'new', running: true });
-  assert.deepEqual(jobActivity({ type: 'started' }), { view: 'new', running: true }, 'main의 기본값처럼 강의로 본다');
-  assert.deepEqual(jobActivity({ type: 'partial-complete', jobKind: 'create' }), { view: 'new', running: false });
-  assert.deepEqual(jobActivity({ type: 'record-started', jobKind: 'record' }), { view: 'record', running: true });
-  assert.deepEqual(jobActivity({ type: 'record-failed', jobKind: 'record' }), { view: 'record', running: false });
-  assert.deepEqual(jobActivity({ type: 'demo-started', jobKind: 'demo-render' }), { view: 'demo', running: true });
-  assert.deepEqual(jobActivity({ type: 'demo-complete', jobKind: 'demo-render' }), { view: 'demo', running: false });
-  assert.deepEqual(jobActivity({ type: 'text-voices-ready', jobKind: 'text-voice' }), { view: 'voice', running: false });
+  assert.deepEqual(jobActivity({ type: 'started', jobKind: 'create' }), { view: 'new', kind: 'create', running: true });
+  assert.deepEqual(jobActivity({ type: 'started' }), { view: 'new', kind: 'create', running: true }, 'main의 기본값처럼 강의로 본다');
+  assert.deepEqual(jobActivity({ type: 'partial-complete', jobKind: 'create' }), { view: 'new', kind: 'create', running: false });
+  assert.deepEqual(jobActivity({ type: 'record-started', jobKind: 'record' }), { view: 'record', kind: 'record', running: true });
+  assert.deepEqual(jobActivity({ type: 'record-failed', jobKind: 'record' }), { view: 'record', kind: 'record', running: false });
+  assert.deepEqual(jobActivity({ type: 'demo-started', jobKind: 'demo-render' }), { view: 'review', kind: 'demo-render', running: true });
+  assert.deepEqual(jobActivity({ type: 'demo-complete', jobKind: 'demo-record' }), { view: 'demo', kind: 'demo-record', running: false });
+  assert.deepEqual(jobActivity({ type: 'text-voices-ready', jobKind: 'text-voice' }), { view: 'voice', kind: 'text-voice', running: false });
   // 끝난 뒤 늦게 온 로그나 단계 사건이 다시 "도는 중"으로 되돌리지 않는다.
   assert.equal(jobActivity({ type: 'log', jobKind: 'demo-record', text: 'x' }), null);
   assert.equal(jobActivity({ type: 'record-phase', jobKind: 'record', phase: 'recording' }), null);

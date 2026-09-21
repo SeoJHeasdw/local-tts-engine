@@ -1,7 +1,7 @@
 import { parseRegionTime, formatRegionTime, regionWindow, regionIssue, regionImpact, timeAtFraction } from "../../shared/regions.mjs";
 import { findingStatus, voiceFindingReason, summarizeVoiceFindings, voiceFindingLabel, findingKeyOf, findingSeek, findingExcerpt } from "../view-utils.mjs";
 
-export function createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState, neighbours = () => ({ previous: null, next: null, index: 0, total: 0 }), refreshOutputs = () => {}, document = globalThis.document }) {
+export function createReviewController({ $, api, showToast, setEditBusy, $$, formatDuration, updateVoicePageMeta, mediaState, neighbours = () => ({ previous: null, next: null, index: 0, total: 0 }), refreshOutputs = () => {}, onOpen = () => {}, document = globalThis.document }) {
   let reviewTarget = null;
   let reviewFindings = [];
   let reviewSelection = null;
@@ -629,6 +629,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       const video = await api.adoptResultVideo(target);
       if (request !== reviewRequest || reviewBusy) return false;
       setReviewVideo(video, target);
+      // 다듬기에는 앱 데모 작업면도 있다. 강의·녹화를 열면 이 작업면이 앞에 선다.
+      onOpen();
       $("[data-view='review']").click();
       if (finding) {
         // 최근 결과에서 한 곳을 짚어 들어온 길이다. 그 항목을 목록에서도 열어
@@ -695,7 +697,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
 
   function reviewShortcut(event) {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
-    if ($('#view-review')?.classList?.contains('hidden')) return;
+    if ($('#view-review')?.classList?.contains('hidden') || $('#review-lecture')?.classList?.contains('hidden')) return;
     if (document.querySelector?.('dialog[open]')) return;
     const target = event.target;
     if (target?.isContentEditable || SHORTCUT_SKIP_TAGS.has(target?.tagName)) return;

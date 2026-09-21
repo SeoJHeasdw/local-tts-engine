@@ -6,6 +6,7 @@
 // 확대·내레이션을 같이 그리고, 누르면 그 자리로 재생을 옮긴다.
 import fs from "node:fs";
 import path from "node:path";
+import { planBlocks, zoomSpans } from "../../shared/demo-plan.mjs";
 
 const escapeHtml = value => String(value ?? "")
   .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -300,34 +301,6 @@ function sceneCard(scene) {
   </article>`;
 }
 
-// 키프레임 넷이 확대 한 번이다. 하나씩 찍으면 같은 글자가 겹쳐 무엇이 몇 번인지
-// 알 수 없다. 1배를 벗어나 있는 동안을 한 칸으로 묶는다.
-export function zoomSpans(plan) {
-  const spans = [];
-  let open = null;
-  for (const key of plan.zoom || []) {
-    if (key.z > 1.01 && open === null) open = key.atMs;
-    else if (key.z <= 1.01 && open !== null) { spans.push({ fromMs: open, toMs: key.atMs }); open = null; }
-  }
-  if (open !== null) spans.push({ fromMs: open, toMs: plan.durationMs });
-  return spans;
-}
-
-function segmentBlocks(plan) {
-  const parts = [];
-  for (const segment of plan.segments) {
-    const played = segment.outFrames * 1000 / plan.fps;
-    if (played > 0) {
-      parts.push({ ms: played, at: segment.outStartMs, kind: segment.speed > 1.01 ? "fast" : "",
-        label: segment.speed > 1.01 ? `${segment.speed.toFixed(1)}배` : "1배" });
-    }
-    if (segment.holdMs > 0) {
-      parts.push({ ms: segment.holdMs, at: segment.outStartMs + played, kind: "hold", label: "멈춤" });
-    }
-  }
-  return parts;
-}
-
 // 가장 긴 기다림 한 곳을 실제 값으로 말한다. "빠른 것 같다"에서 멈추지 않게.
 function longestWait(plan) {
   const slowed = plan.segments.filter(segment => segment.kind === "slowed");
@@ -346,7 +319,7 @@ function longestWait(plan) {
 export function buildReviewPage(data) {
   const plan = data.plan;
   const total = plan?.durationMs || 1;
-  const blocks = plan ? segmentBlocks(plan) : [];
+  const blocks = plan ? planBlocks(plan) : [];
   const marks = Array.from({ length: Math.floor(total / 5000) + 1 }, (_, index) => index * 5000);
   const zooms = plan ? zoomSpans(plan) : [];
   const videos = data.videos;

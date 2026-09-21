@@ -167,11 +167,15 @@ export function completionSummary(report, durationLabel) {
 // 앱 데모는 촬영 → 대본 → 후보 → 렌더로 도는 모양이 서로 달라서다.
 export const CREATE_VIEWS = ['new', 'voice', 'record', 'demo'];
 
-const JOB_VIEWS = { create: 'new', 'text-voice': 'voice', record: 'record' };
+// 작업이 도는 것을 보여 주는 화면. 앱 데모는 촬영만 새로 만들기에서 하고 목소리·완성본은
+// 다듬기의 앱 데모 작업면에서 한다.
+const JOB_VIEWS = {
+  create: 'new', 'text-voice': 'voice', record: 'record',
+  'demo-record': 'demo', 'demo-voice': 'review', 'demo-render': 'review',
+};
 
-/** 작업 종류가 어느 갈래의 것인지. 편집·학습은 새로 만들기의 갈래가 아니다. */
+/** 작업 종류가 어느 화면에서 도는지. 편집·학습은 제 대화상자가 화면을 막아 따로 가리키지 않는다. */
 export function jobView(kind = '') {
-  if (String(kind).startsWith('demo-')) return 'demo';
   return JOB_VIEWS[kind] || null;
 }
 
@@ -183,16 +187,17 @@ const JOB_ENDS = new Set([
 ]);
 
 /**
- * 사건 하나가 어느 갈래의 작업을 시작하거나 끝내면 `{ view, running }`, 아니면 null.
+ * 사건 하나가 작업을 시작하거나 끝내면 `{ view, kind, running }`, 아니면 null.
  * 작업은 앱 전체에서 한 번에 하나만 돈다(main의 activeJob). 화면은 이것으로 어느 갈래가
  * 돌고 있는지 알고, 나머지 갈래의 시작만 막는다.
  */
 export function jobActivity(event = {}) {
   // main은 작업이 없을 때 보낸 사건을 강의 제작으로 적는다. 화면도 같은 기본값을 쓴다.
-  const view = jobView(event.jobKind || 'create');
+  const kind = event.jobKind || 'create';
+  const view = jobView(kind);
   if (!view) return null;
-  if (JOB_STARTS.has(event.type)) return { view, running: true };
-  if (JOB_ENDS.has(event.type)) return { view, running: false };
+  if (JOB_STARTS.has(event.type)) return { view, kind, running: true };
+  if (JOB_ENDS.has(event.type)) return { view, kind, running: false };
   return null;
 }
 

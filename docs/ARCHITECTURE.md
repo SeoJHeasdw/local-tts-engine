@@ -101,8 +101,8 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 끝까지, 녹화는 사람이 시작·정지, 앱 데모는 촬영 → 대본 → 후보 → 렌더로 진행 모양이 달라서다.
 
 작업은 앱 전체에서 한 번에 하나다(`state.activeJob`). 화면은 작업 사건을
-`renderer/view-utils.mjs`의 `jobActivity`로 읽어 어느 갈래가 도는지 알고, 다른 갈래의 시작
-단추에만 `inert`를 건다. 설정·대본은 미리 써 둘 수 있다. 창을 다시 열면 `getStatus`의
+`renderer/view-utils.mjs`의 `jobActivity`로 읽어 어느 화면의 작업이 도는지 알고(앱 데모의
+목소리·완성본은 다듬기다), 다른 곳의 시작 단추에만 `inert`를 건다. 설정·대본은 미리 써 둘 수 있다. 창을 다시 열면 `getStatus`의
 `activeJob.kind`로 같은 판정을 되살린다. 편집·학습은 갈래가 아니며 제 대화상자가 화면을 막는다.
 
 ## 화면 녹화
@@ -161,10 +161,11 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 | `main/capture/cursor-overlay.mjs` | 페이지에 넣는 커서·클릭 표시. 실제 마우스 사건을 따라 그린다 |
 | `main/capture/record-app.mjs` | `record` 한 번: 작업 폴더·무손실 녹화·scenes.json |
 | `main/editing/demo-render.mjs` | 편집 계획 → ffmpeg 한 번, 음성·자막, 검증·보고서 |
-| `main/editing/demo-review.mjs` | 결과 폴더 → `review.html`. 영상·구간·확대·대본·검증을 한 쪽에 모은다 |
+| `main/editing/demo-review.mjs` | 결과 폴더 → 검수 데이터(`collectReview`)와 CLI용 `review.html`. 앱은 같은 데이터를 다듬기에 그린다 |
 | `main/workers/demo.mjs` | CLI 진입점: `record`·`voice`·`render` |
 | `main/app-demo.mjs` | 앱 화면의 세 단계. 같은 작업자를 별도 프로세스로 부르고 `script.json`을 읽고 쓴다 |
-| `renderer/controllers/app-demo.mjs` | 앱 데모 화면: 시나리오·장면 대본·후보 고르기·화질 |
+| `renderer/controllers/app-demo.mjs` | 새로 만들기의 앱 데모: 시나리오 고르기·촬영, 끝나면 다듬기로 넘기는 결과 카드 |
+| `renderer/controllers/demo-polish.mjs` | 다듬기의 앱 데모 작업면: 완성본·화질 비교·자막 겹침·시간 막대, 장면 대본·확정, 후보를 영상에 맞춰 듣고 고르기, 후보 만들기·굽기 |
 
 **앱을 아는 것은 시나리오 파일뿐이다.** 촬영 엔진은 앱 이름을 모른다. 덱 고유의 조작이
 `deck-page.mjs`에 모이듯 앱 고유의 사정은 시나리오에 모인다. 시나리오는 그 앱의 저장소가
@@ -197,16 +198,24 @@ CDP 왕복이 4K에서 한 번에 200ms라 커서가 화면을 기어간다. 실
 | --- | --- |
 | `demo/raw.mkv` | RGB 무손실 원본. 다시 찍지 않고 고치기 위해 남긴다 |
 | `demo/scenes.json` | 장면·걸음의 시각(ms)·좌표(CSS px)·장면 끝 화면의 글 |
-| `demo/script.json` | 장면별 대본·확정 상태·목소리 후보와 고른 것 |
+| `demo/script.json` | 장면별 대본·확정 상태·목소리 후보와 고른 것, 후보를 만든 대본(`voice.text`) |
 | `demo/edit-plan.json` | 구간·배율·멈춤·확대 키프레임·내레이션 자리 |
 | `validation-report.json` | `operation: "app-demo"`. 최근 결과·다듬기·합치기가 그대로 받는다 |
-| `review.html` | 사람이 보고 판단하는 화면. 렌더가 끝나면 다시 쓰고 CLI가 연다 |
+| `review.html` | CLI용 검수 페이지. 렌더가 끝나면 다시 쓰고 CLI가 연다. 앱은 열지 않고 다듬기에서 같은 내용을 본다 |
 
 편집 계획은 프레임 단위로 센다. 밀리초로 자르면 배율마다 반 프레임이 남아 최종 프레임
 수가 계획과 어긋난다. 감는 것은 `waitFor`·`waitGone`뿐이고 사람 동작은 1배다. 장면 목표
 길이는 `max(내레이션 + 0.8초, 감을 수 있는 만큼 감은 원본)`이며, 감아도 짧으면 장면 끝
 화면을 멈춰 채운다. 확대는 누른 자리를 중심으로 걸고 z=1에서는 중심이 화면 한가운데가
 되도록 가둔다. 규격·측정은 [VIDEO-QUALITY](VIDEO-QUALITY.md#앱-데모-촬영)에 있다.
+
+앱에서는 촬영만 새로 만들기가 하고 대본·목소리·완성본은 **다듬기의 앱 데모 작업면**이
+한다. 강의·녹화 작업면(`#review-lecture`)과 따로 둔다 — 강의는 mp4를 직접 고치지만 앱 데모
+완성본은 편집 계획에서 매번 새로 구워 mp4를 고치면 다음 렌더에 사라진다. 작업면은
+`readDemoProject`가 `collectReview`로 모은 편집 계획·자막·검증을 그리고, 고치는 것은
+`script.json`뿐이다. 후보 목록은 `demo voice`가 소유하며, 후보를 만든 대본을 `voice.text`로
+남겨 대본을 고친 뒤 다시 만들지 않은 장면을 가려낸다(후보 파일 이름은 다시 만들어도 같아
+이름으로는 가를 수 없다). 여러 장면은 `--scene a,b`로 한 번에 만든다.
 
 검수 화면은 검증에 실패해도 만든다. 무엇이 어긋났는지 보려면 영상을 봐야 하기 때문이다.
 결과 폴더의 mp4를 모두 실어 해상도를 바꿔 가며 같은 자리를 비교하고, 대본·목소리가 아직

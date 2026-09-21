@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { ADAPTER, APP_SETTINGS_PATH, ROOT, dateFolder, runtimePaths } from "../paths.mjs";
 import { resolveRuntimeTools } from "../runtime-config.mjs";
+import { settingsAdapterScale } from "../../shared/index.mjs";
 import { parseFlags } from "../capture/cli.mjs";
 import { recordAppDemo } from "../capture/record-app.mjs";
 import { renderAppDemo } from "../editing/demo-render.mjs";
@@ -109,19 +110,24 @@ if (command === "record") {
   const scriptFile = path.join(outDir, "demo", "script.json");
   const script = JSON.parse(fs.readFileSync(scriptFile, "utf8"));
   const count = Number(flags.candidates ?? 3);
-  const adapterScale = Number(flags["adapter-scale"] ?? settings.adapterScale ?? 0.6);
+  // 명령줄 값은 적은 그대로 쓰고, 앱 설정은 앱과 같은 규칙(0.01 단위)으로 읽는다.
+  const adapterScale = flags["adapter-scale"] !== undefined
+    ? Number(flags["adapter-scale"])
+    : settingsAdapterScale(settings.adapterScale);
   if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error("--candidates는 1~8이어야 합니다.");
   if (!tools.trainPython) throw new Error("음성 생성 Python(.venv-train)을 찾지 못했습니다.");
   // 한 문장만 고쳐 쓰는 일이 잦다. 그때 나머지 장면까지 다시 합성하지 않는다.
-  const only = typeof flags.scene === "string" ? flags.scene : null;
-  if (only && !script.scenes.some(scene => scene.id === only)) {
-    throw new Error(`--scene ${only}: 그런 장면이 없습니다. (${script.scenes.map(scene => scene.id).join(", ")})`);
+  // 여러 장면은 쉼표로 잇는다(--scene loop,capabilities).
+  const only = typeof flags.scene === "string" ? flags.scene.split(",").map(id => id.trim()).filter(Boolean) : null;
+  const unknown = (only || []).filter(id => !script.scenes.some(scene => scene.id === id));
+  if (unknown.length) {
+    throw new Error(`--scene ${unknown.join(",")}: 그런 장면이 없습니다. (${script.scenes.map(scene => scene.id).join(", ")})`);
   }
   const ready = script.scenes.filter(scene => scene.status === "approved" && scene.text?.trim()
-    && (!only || scene.id === only));
+    && (!only || only.includes(scene.id)));
   if (!ready.length) {
     throw new Error(only
-      ? `장면 ${only}의 대본이 확정되지 않았습니다.`
+      ? `장면 ${only.join(", ")}의 대본이 확정되지 않았습니다.`
       : "확정(approved)된 대본이 없습니다. 대본을 쓰고 status를 approved로 바꿔 주세요.");
   }
 
@@ -152,9 +158,11 @@ if (command === "record") {
       ]);
       candidates.push(path.relative(path.join(outDir, "demo"), audioPath));
     }
-    // 말이 바뀌면 예전에 고른 후보는 다른 말을 읽고 있다. 고르기를 비운다.
-    const changed = scene.voice?.selected && !candidates.includes(scene.voice.selected);
-    scene.voice = { ...scene.voice, candidates, selected: changed ? null : scene.voice?.selected ?? null };
+    // 말이 바뀌면 예전에 고른 후보는 다른 말을 읽고 있다. 고르기를 비운다. 후보 파일
+    // 이름(candidate-01…)은 다시 만들어도 같아서 이름으로는 가를 수 없다 — 후보를 만든
+    // 대본(voice.text)과 견준다. 예전 기록에는 그 대본이 없으니 바뀐 것으로 본다.
+    const changed = scene.voice?.text !== scene.text;
+    scene.voice = { ...scene.voice, text: scene.text, candidates, selected: changed ? null : scene.voice?.selected ?? null };
   }
   fs.writeFileSync(scriptFile, `${JSON.stringify(script, null, 2)}\n`, "utf8");
   // 고르는 것은 사람이다. 자동 검사는 청취 승인을 대신하지 않는다.
