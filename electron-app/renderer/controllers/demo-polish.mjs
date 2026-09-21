@@ -69,10 +69,10 @@ export function defaultVersion(videos = []) {
   return (videos.find(video => /-high\.mp4$/.test(video.name)) || videos.at(-1))?.name || null;
 }
 
-/** 방금 구운 화질의 파일 이름. 렌더와 같은 이름 규칙이다(1080p는 꼬리가 없다). */
-export function bakedVersion(project, quality) {
+/** 방금 구운 화질의 파일 이름. 렌더와 같은 이름 규칙이다(1080p는 꼬리가 없고, 자막을 구우면 -captioned). */
+export function bakedVersion(project, quality, burnCaptions = false) {
   if (!project || !quality) return null;
-  const name = captureVideoFileName(project.name, { videoQuality: quality });
+  const name = captureVideoFileName(project.name, { videoQuality: quality, burnCaptions });
   return project.videos.some(video => video.name === name) ? name : null;
 }
 
@@ -297,7 +297,7 @@ export function createDemoPolishController({
     const off = !project || busy() || Boolean(blocked);
     $("#demo-voice-all").disabled = off || !needs.length;
     $("#demo-render-start").disabled = off;
-    for (const id of ["#demo-voice-all", "#demo-render-start", "#demo-candidates", "#demo-quality"]) $(id).inert = Boolean(blocked);
+    for (const id of ["#demo-voice-all", "#demo-render-start", "#demo-candidates", "#demo-quality", "#demo-burn"]) $(id).inert = Boolean(blocked);
     $("#demo-polish-pick").disabled = busy();
     // 도는 동안은 단추 자리에 진행이 선다. 끝나면 결과가 이 화면에 바로 들어온다.
     $("#demo-command-actions").classList.toggle("hidden", Boolean(running));
@@ -306,7 +306,7 @@ export function createDemoPolishController({
       $("#demo-running-label").textContent = running.step === "demo-voice" ? "목소리 후보를 만들고 있습니다" : "완성본을 굽고 있습니다";
       $("#demo-running-note").textContent = running.step === "demo-voice"
         ? (running.scenes?.length ? `장면 ${running.scenes.join(", ")}` : "확정한 장면 모두")
-        : ({ standard: "1080p", high: "1440p", ultra: "4K" }[running.quality] || "");
+        : [{ standard: "1080p", high: "1440p", ultra: "4K" }[running.quality], running.burnCaptions ? "자막 굽기" : ""].filter(Boolean).join(" · ");
     }
     $("#demo-blocked").classList.toggle("hidden", !blocked);
     $("#demo-blocked").textContent = blocked ? `${blocked} · 끝나면 여기서 만들 수 있습니다` : "";
@@ -433,7 +433,7 @@ export function createDemoPolishController({
   function handleEvent(event) {
     if (!DEMO_POLISH_STEPS.includes(event.jobKind)) return;
     if (event.type === "demo-started") {
-      running = { step: event.step, scenes: event.scenes || [], quality: event.quality, outDir: event.outDir };
+      running = { step: event.step, scenes: event.scenes || [], quality: event.quality, burnCaptions: Boolean(event.burnCaptions), outDir: event.outDir };
       $("#demo-polish-log").textContent = "";
       renderActions();
       renderScene();
@@ -448,7 +448,10 @@ export function createDemoPolishController({
         project = event.project;
         if (!scenes().some(scene => scene.id === sceneId)) sceneId = scenes()[0]?.id ?? null;
         // 방금 구운 화질로 바꿔 보여 준다. 그것을 보려고 구웠다.
-        const baked = finished?.step === "demo-render" ? bakedVersion(project, finished.quality) : null;
+        // 자막이 없어 굽지 못했으면 자막 없는 이름으로 나온다. 둘 다 찾아본다.
+        const baked = finished?.step === "demo-render"
+          ? bakedVersion(project, finished.quality, finished.burnCaptions) || bakedVersion(project, finished.quality)
+          : null;
         if (baked) version = baked;
         else if (!project.videos.some(video => video.name === version)) version = defaultVersion(project.videos);
       }
@@ -531,7 +534,7 @@ export function createDemoPolishController({
   }));
   $("#demo-render-start").addEventListener("click", () => guarded("완성본", async () => {
     await save();
-    await api.startDemoRender({ outDir: project.outDir, quality: $("#demo-quality").value });
+    await api.startDemoRender({ outDir: project.outDir, quality: $("#demo-quality").value, burnCaptions: $("#demo-burn").checked });
   }));
   $("#demo-preview-render").addEventListener("click", () => guarded("미리 굽기", async () => {
     await save();

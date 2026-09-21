@@ -2090,6 +2090,8 @@ button:disabled { cursor: not-allowed; }
 .demo-command-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); }
 .demo-command-actions select { width: auto; height: var(--h-sm); padding: 0 var(--s2); font-size: var(--fs-sm); }
 .demo-command-divider { width: 1px; height: 22px; margin: 0 var(--s1); background: var(--line-2); }
+.demo-burn { display: flex; align-items: center; gap: var(--s1); color: var(--text-2); font-size: var(--fs-xs); cursor: pointer; white-space: nowrap; }
+.demo-burn input { accent-color: var(--lime); }
 .demo-count { display: flex; align-items: center; gap: var(--s1); color: var(--text-3); font-size: var(--fs-xs); }
 .demo-count input { width: 52px; height: var(--h-sm); padding: 0 var(--s2); font-size: var(--fs-sm); }
 .demo-running {

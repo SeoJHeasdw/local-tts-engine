@@ -30,7 +30,7 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
   let startedAt = 0, startedMono = 0, capFrames = 0;
   let written = 0, received = 0, duplicated = 0, reordered = 0, superseded = 0, peakBacklog = 0, peakBufferedBytes = 0;
   let stall = 0, longestStall = 0;
-  let nextAck = 0;
+  let nextAck = 0, lastAckSent = -Infinity;
   const ackTimers = new Set();
   const clearAcks = () => { for (const pending of ackTimers) clearTimeout(pending); ackTimers.clear(); };
   let rejectFailure, announceFirst;
@@ -78,9 +78,22 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
       const send = () => Promise.resolve().then(() => session.send('Page.screencastFrameAck', { sessionId: event.sessionId }))
         .catch(error => { if (phase !== 'finishing') fail(new Error(`촬영 프레임 수신 확인에 실패했습니다: ${error.message}`)); });
       if (!ackPaceMs) return void send();
+      // 간격은 실제로 보낸 시각에서 잰다. 계획한 시각으로만 재면, 바쁠 때 늦게 깬 앞
+      // 타이머 바로 뒤에 제때 깬 다음 타이머가 붙어 둘이 한꺼번에 나가고(부하 속 실측
+      // 14~20ms), 브라우저가 다시 몰아 찍는다.
+      const deliver = () => {
+        const wait = lastAckSent + ackPaceMs - performance.now();
+        if (wait > 0.5) {
+          const again = setTimeout(() => { ackTimers.delete(again); if (active()) deliver(); }, wait);
+          ackTimers.add(again);
+          return;
+        }
+        lastAckSent = performance.now();
+        send();
+      };
       const now = performance.now(), at = Math.max(now, nextAck);
       nextAck = at + ackPaceMs;
-      const pending = setTimeout(() => { ackTimers.delete(pending); if (active()) send(); }, at - now);
+      const pending = setTimeout(() => { ackTimers.delete(pending); if (active()) deliver(); }, at - now);
       ackTimers.add(pending);
     };
     if (data.length < 24 || data.toString('hex', 0, 8) !== '89504e470d0a1a0a'

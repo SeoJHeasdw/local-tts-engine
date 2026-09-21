@@ -73,11 +73,14 @@ test("일시정지는 실제로 일을 멈추고, 이어하면 다시 진행한�
   running.catch(() => {});
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  await wait(400);
+  // 바쁜 기계에서는 자식이 뜨는 데만 수백 ms가 걸린다. 첫 줄이 올 때까지 기다린다.
+  for (let waited = 0; lines === 0 && waited < 3000; waited += 50) await wait(50);
   assert.ok(lines > 0, "멈추기 전에는 진행하고 있어야 한다");
 
   assert.equal(pauseJobProcesses(task), true);
   assert.equal(task.paused, true);
+  // 멈추기 직전에 자식이 써 둔 줄은 파이프에 있다가 늦게 도착할 수 있다. 그 줄까지 받고 센다.
+  await wait(200);
   const atPause = lines;
   await wait(600);
   assert.equal(lines, atPause, `멈춘 동안 진행했다 (${atPause} → ${lines})`);

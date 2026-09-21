@@ -41,7 +41,7 @@ export function collectReview(outDir) {
       const stat = fs.statSync(path.join(outDir, name));
       return {
         name,
-        label: capture?.profile ? `${capture.profile.width}×${capture.profile.height}` : name,
+        label: capture?.profile ? `${capture.profile.width}×${capture.profile.height}${capture.burnCaptions ? " · 자막" : ""}` : name,
         width: capture?.profile?.width ?? null,
         height: capture?.profile?.height ?? null,
         bytes: stat.size,

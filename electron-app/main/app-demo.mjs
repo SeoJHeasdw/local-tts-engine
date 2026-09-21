@@ -231,6 +231,19 @@ export function createAppDemoService({
       emit({ type: "demo-complete", step: job.kind, ...(await done()) });
     } catch (error) {
       if (state.activeJob !== job) return;
+      // 굽다 멈춘 임시 파일은 작업자가 치우지만, 강제 종료까지 가면 남는다. 결과 폴더에 반쪽
+      // 영상이 쌓이지 않게 한 번 더 치운다. 임시 파일 이름은 `<완성본>.mp4.<id>.part`다.
+      if (job.cancelled && job.kind === "demo-render" && job.options?.outDir) {
+        const names = await fs.readdir(job.options.outDir).catch(() => []);
+        await Promise.all(names.filter(name => /\.mp4\.[\w-]+\.part$/.test(name))
+          .map(name => fs.rm(path.join(job.options.outDir, name), { force: true }).catch(() => {})));
+      }
+      // 촬영은 비어 있거나 없던 폴더에만 시작한다(startDemoRecord). 끝까지 가지 못한 촬영의 폴더는
+      // 이번 촬영이 만든 것뿐이라 통째로 치운다. 남기면 같은 이름으로 다시 찍지도 못한다.
+      if (job.cancelled && job.kind === "demo-record" && job.options?.outDir
+          && !await fs.stat(path.join(job.options.outDir, "demo", "scenes.json")).catch(() => null)) {
+        await fs.rm(job.options.outDir, { recursive: true, force: true }).catch(() => {});
+      }
       job.state = job.cancelled ? "cancelled" : "failed";
       job.error = error.message;
       emit({ type: "demo-failed", step: job.kind, cancelled: job.cancelled, message: error.message });
@@ -283,9 +296,12 @@ export function createAppDemoService({
     const quality = ["standard", "high", "ultra"].includes(raw.quality) ? raw.quality : "high";
     const args = ["render", outDir, "--quality", quality, "--no-open"];
     if (raw.maxSpeed) args.push("--max-speed", String(Number(raw.maxSpeed)));
-    const job = startJob("demo-render", { outDir, quality });
+    // 자막은 기본으로 파일만 만든다. 켜면 완성본에 구운 것을 따로(-captioned) 낸다.
+    const burnCaptions = raw.burnCaptions === true;
+    if (burnCaptions) args.push("--burn-captions");
+    const job = startJob("demo-render", { outDir, quality, burnCaptions });
     const snapshot = jobSnapshot();
-    emit({ type: "demo-started", step: "demo-render", job: snapshot, outDir, quality });
+    emit({ type: "demo-started", step: "demo-render", job: snapshot, outDir, quality, burnCaptions });
     void runDemoWorker(job, args, async () => ({ project: await readDemoProject(outDir) }));
     return snapshot;
   }

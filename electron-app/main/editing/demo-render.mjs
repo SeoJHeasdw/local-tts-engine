@@ -17,6 +17,7 @@ import { captureVideoFileName, videoQuality } from "../../shared/video-quality.m
 import { CAPTURE_COLOR_FILTERS, captureCodecArgs, validateCaptureStream, writeCaptureReport } from "../capture/encoding.mjs";
 import { RAW_FILE, SCENES_FILE } from "../capture/record-app.mjs";
 import { writeReviewPage } from "./demo-review.mjs";
+import { renderCaptionFrames } from "./demo-captions.mjs";
 import { fileSha256 } from "../files.mjs";
 
 const AUDIO_ARGS = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "1"];
@@ -101,7 +102,7 @@ export function zoomFilter(plan, profile) {
   return `zoompan=d=1:s=${size}:fps=${plan.fps}:z='${expr(z)}':x='${expr(x)}':y='${expr(y)}'`;
 }
 
-export function videoFilterChain(plan, profile) {
+export function videoFilterChain(plan, profile, { color = true } = {}) {
   const fps = plan.fps;
   const tail = Math.round((plan.segments.at(-1).holdMs || 0) * fps / 1000);
   return [
@@ -114,7 +115,8 @@ export function videoFilterChain(plan, profile) {
     `trim=end_frame=${plan.totalFrames}`,
     `setpts=N/${fps}/TB`,
     zoomFilter(plan, profile),
-    CAPTURE_COLOR_FILTERS,
+    // 자막을 굽는다면 색 변환 전에 겹친다. 확대 뒤라 자막은 화면에 고정된다.
+    ...(color ? [CAPTURE_COLOR_FILTERS] : []),
   ].join(",");
 }
 
@@ -123,11 +125,17 @@ export function videoFilterChain(plan, profile) {
  *
  * `narration`은 `{ file, atMs }` 목록이다. 무음 바닥 위에 장면 음성을 제자리에
  * 놓고 더한다. 바닥이 있어야 완성본에 음성 트랙이 늘 있고 길이가 계획과 같다.
+ * `captions`(`{ list, band }`)를 주면 자막 그림을 확대 뒤·색 변환 전에 겹친다.
  */
-export function demoRenderArgs({ plan, rawFile, narration = [], profile, output }) {
+export function demoRenderArgs({ plan, rawFile, narration = [], profile, output, captions = null }) {
   const seconds = (plan.totalFrames / plan.fps).toFixed(3);
-  const graph = [`[0:v]${videoFilterChain(plan, profile)}[v]`];
   const voices = narration.filter(item => item.file);
+  const captionInput = voices.length + 2;
+  const graph = captions ? [
+    `[0:v]${videoFilterChain(plan, profile, { color: false })}[base]`,
+    `[${captionInput}:v]format=rgba,fps=${plan.fps}[cap]`,
+    `[base][cap]overlay=${captions.band.x}:${captions.band.y}:eof_action=pass:format=auto,${CAPTURE_COLOR_FILTERS}[v]`,
+  ] : [`[0:v]${videoFilterChain(plan, profile)}[v]`];
   for (const [index, item] of voices.entries()) {
     graph.push(`[${index + 2}:a]aresample=48000,adelay=${Math.round(item.atMs)}:all=1[n${index}]`);
   }
@@ -138,6 +146,7 @@ export function demoRenderArgs({ plan, rawFile, narration = [], profile, output 
     "-i", rawFile,
     "-f", "lavfi", "-t", seconds, "-i", "anullsrc=r=48000:cl=mono",
     ...voices.flatMap(item => ["-i", item.file]),
+    ...(captions ? ["-f", "concat", "-safe", "0", "-i", captions.list] : []),
     "-filter_complex", graph.join(";"),
     "-map", "[v]", "-map", "[a]",
     // 프레임 수는 이미 계획과 같다. 길이 상한은 그 프레임 수에서 나온 값이라
@@ -211,7 +220,8 @@ async function resolveNarration(scenes, script, demoDir, ffprobe) {
  * 검증에 실패한 결과는 지우지 않고 보고서에 남긴다 — 무엇이 어긋났는지가 근거다.
  */
 export async function renderAppDemo({
-  outDir, name, quality = "high", options = {}, ffmpeg = "ffmpeg", ffprobe = "ffprobe", onEvent = () => {},
+  outDir, name, quality = "high", options = {}, burnCaptions = false,
+  ffmpeg = "ffmpeg", ffprobe = "ffprobe", onEvent = () => {},
 }) {
   const profile = videoQuality(quality);
   const demoDir = path.join(outDir, "demo");
@@ -227,14 +237,22 @@ export async function renderAppDemo({
   const placed = plan.scenes.filter(scene => scene.narration)
     .map(scene => ({ id: scene.id, ...scene.narration }));
   onEvent({ phase: "rendering", durationMs: plan.durationMs, scenes: plan.scenes.length, narration: placed.length });
+  const cues = demoCaptionCues(plan, script);
+  const warnings = plan.scenes.filter(scene => !scene.narration).map(scene => `장면 ${scene.id}에 내레이션이 없습니다.`);
+  if (burnCaptions && !cues.length) warnings.push("구울 자막이 없습니다. 목소리를 고른 장면이 없어 자막 없이 구웠습니다.");
 
   // 화질마다 다른 이름이다. 같은 이름이면 1440p를 내고 4K를 내는 순간 앞의 것이
   // 사라져, 검수 화면이 준비해 둔 해상도 비교를 할 수가 없다. 이름 규칙은 촬영과 같다.
-  const finalFile = path.join(outDir, captureVideoFileName(name, { videoQuality: profile.id }));
+  // 자막을 구운 것도 따로 남는다(-captioned). 굽지 않은 것과 나란히 견준다.
+  const burned = burnCaptions && cues.length > 0;
+  const finalFile = path.join(outDir, captureVideoFileName(name, { videoQuality: profile.id, burnCaptions: burned }));
   const workFile = `${finalFile}.${crypto.randomUUID()}.part`;
+  const frameDir = path.join(demoDir, `caption-frames-${crypto.randomUUID()}`);
   let done = false;
   try {
-    await run(ffmpeg, demoRenderArgs({ plan, rawFile, narration: placed, profile, output: workFile }));
+    const captions = burned ? await renderCaptionFrames({ cues, profile, dir: frameDir, totalMs: plan.durationMs }) : null;
+    if (captions) onEvent({ phase: "log", text: `자막 ${captions.count}줄을 그림으로 떴습니다` });
+    await run(ffmpeg, demoRenderArgs({ plan, rawFile, narration: placed, profile, output: workFile, captions }));
     const probe = JSON.parse(await run(ffprobe, ["-v", "error", "-show_streams", "-show_format", "-of", "json", workFile]));
     const checks = renderChecks(probe, profile, plan, placed);
     const summary = summarizeChecks(checks);
@@ -243,7 +261,6 @@ export async function renderAppDemo({
     fs.renameSync(workFile, finalFile);
     done = true;
 
-    const cues = demoCaptionCues(plan, script);
     if (cues.length) {
       fs.writeFileSync(path.join(demoDir, "captions.srt"), captionsToSrt(cues), "utf8");
       fs.writeFileSync(path.join(demoDir, "captions.vtt"), captionsToVtt(cues), "utf8");
@@ -255,7 +272,7 @@ export async function renderAppDemo({
     const generatedAt = new Date().toISOString();
     writeCaptureReport(`${finalFile}.capture.json`, {
       schemaVersion: 1, profile, source: { scenario: scenes.scenario, raw: rawFile, frame: scenes.frame },
-      encoder: "libx264", preset: "slow", frames: { written: Number(video?.nb_frames) || 0 },
+      encoder: "libx264", preset: "slow", frames: { written: Number(video?.nb_frames) || 0 }, burnCaptions: burned,
       durationMs, video, audio, file: finalFile, fileSha256: digest, plan: {
         totalFrames: plan.totalFrames, maxSpeed: plan.maxSpeed,
         segments: plan.segments.length, zoomKeyframes: plan.zoom.length,
@@ -267,8 +284,8 @@ export async function renderAppDemo({
       scenario: scenes.scenario, plannedMs: plan.durationMs,
       scenes: plan.scenes.map(scene => ({ id: scene.id, outStartMs: scene.outStartMs, outEndMs: scene.outEndMs,
         holdMs: scene.holdMs, narrationMs: scene.narration?.durationMs ?? 0 })),
-      captions: cues.length ? { srt: path.join(demoDir, "captions.srt"), cues: cues.length } : null,
-      warnings: plan.scenes.filter(scene => !scene.narration).map(scene => `장면 ${scene.id}에 내레이션이 없습니다.`),
+      captions: cues.length ? { srt: path.join(demoDir, "captions.srt"), cues: cues.length, burned } : null,
+      warnings,
       checks, summary,
       target: { root: "edit", day: path.basename(path.dirname(outDir)), name: path.basename(outDir) },
     };
@@ -283,5 +300,6 @@ export async function renderAppDemo({
     return report;
   } finally {
     if (!done) fs.rmSync(workFile, { force: true });
+    fs.rmSync(frameDir, { recursive: true, force: true });
   }
 }

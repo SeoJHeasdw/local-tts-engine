@@ -16,7 +16,7 @@ const SCENARIO = {
   ],
 };
 
-async function studio(t, { scenes = null, script = null } = {}) {
+async function studio(t, { scenes = null, script = null, cancelRun = false, onRun = null } = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'app-demo-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const outDir = path.join(base, 'edits', '2026-09-21', 'rice-first-run');
@@ -41,7 +41,12 @@ async function studio(t, { scenes = null, script = null } = {}) {
     jobSnapshot: () => ({ kind: state.activeJob?.kind }),
     readAppSettings: async () => ({ paths: { editOutputRoot: path.join(base, 'edits') } }),
     requireRuntimeTool: () => '/usr/bin/node',
-    runProcess: async (stage, tool, args) => { runs.push({ stage, args }); },
+    // cancelRun: 중지를 누른 것처럼 작업을 중지 표시하고 작업자가 실패로 끝난다.
+    runProcess: async (stage, tool, args) => {
+      runs.push({ stage, args });
+      await onRun?.(args);
+      if (cancelRun) { state.activeJob.cancelled = true; throw new Error('중지했습니다'); }
+    },
     state,
   });
   return { service, runs, events, base, outDir, demoDir, scenarioFile };
@@ -176,6 +181,47 @@ test('촬영·목소리·렌더는 CLI와 같은 작업자를 같은 인자로 �
   await settle();
   const rendered = runs.at(-1);
   assert.deepEqual(rendered.args.slice(1), ['render', outDir, '--quality', 'ultra', '--no-open']);
+
+  // 자막 굽기는 켤 때만 작업자에 건넨다.
+  await service.startDemoRender({ outDir, quality: 'high', burnCaptions: true });
+  await settle();
+  assert.deepEqual(runs.at(-1).args.slice(1), ['render', outDir, '--quality', 'high', '--no-open', '--burn-captions']);
+  assert.equal(events.filter(event => event.type === 'demo-started').at(-1).burnCaptions, true);
+});
+
+test('굽기를 중지하면 반쯤 쓴 임시 영상을 결과 폴더에 남기지 않는다', async t => {
+  const { service, outDir, events } = await studio(t, { scenes: scenesFile, script: scriptFile, cancelRun: true });
+  const part = path.join(outDir, 'rice-first-run-high.mp4.5d0ae275-b23d-4121-82ea-444c440f3875.part');
+  const kept = path.join(outDir, 'rice-first-run-high.mp4');
+  await fs.writeFile(part, 'half');
+  await fs.writeFile(kept, 'done');
+  // 작업자가 SIGKILL로 끝나 제 finally를 돌지 못한 경우다.
+  await service.startDemoRender({ outDir, quality: 'high' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(events.at(-1).type, 'demo-failed');
+  assert.equal(events.at(-1).cancelled, true);
+  await assert.rejects(fs.stat(part), '임시 파일은 지운다');
+  assert.equal(await fs.readFile(kept, 'utf8'), 'done', '완성본은 건드리지 않는다');
+});
+
+test('촬영을 중지하면 이번 촬영이 만든 폴더를 남기지 않는다', async t => {
+  let outDir = null;
+  // 작업자가 결과 폴더를 만들고 원본을 반쯤 쓰다 중지로 끝난 자리를 흉내 낸다.
+  const { service, events, scenarioFile } = await studio(t, {
+    cancelRun: true,
+    onRun: async args => {
+      outDir = args[args.indexOf('--out-dir') + 1];
+      await fs.mkdir(path.join(outDir, 'demo', 'work'), { recursive: true });
+      await fs.writeFile(path.join(outDir, 'demo', 'raw.mkv'), 'half');
+    },
+  });
+  await service.startDemoRecord({ scenarioFile, name: 'stopped-take' });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(events.at(-1).type, 'demo-failed');
+  assert.equal(events.at(-1).cancelled, true);
+  await assert.rejects(fs.stat(outDir), '끝나지 않은 촬영 폴더는 치운다');
+  // 그래서 같은 이름으로 곧바로 다시 찍을 수 있다.
+  await service.startDemoRecord({ scenarioFile, name: 'stopped-take' });
 });
 
 test('같은 이름의 촬영이 있으면 덮어쓰지 않고 멈춘다', async t => {

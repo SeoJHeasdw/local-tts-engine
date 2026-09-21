@@ -162,6 +162,7 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 | `main/capture/record-app.mjs` | `record` 한 번: 작업 폴더·무손실 녹화·scenes.json |
 | `main/editing/demo-render.mjs` | 편집 계획 → ffmpeg 한 번, 음성·자막, 검증·보고서 |
 | `main/editing/demo-review.mjs` | 결과 폴더 → 검수 데이터(`collectReview`)와 CLI용 `review.html`. 앱은 같은 데이터를 다듬기에 그린다 |
+| `main/editing/demo-captions.mjs` | 자막 굽기(선택): 강의와 같은 자막 모양(`capture/caption-style.mjs`)을 투명 그림으로 뜨고 ffconcat 목록을 쓴다 |
 | `main/workers/demo.mjs` | CLI 진입점: `record`·`voice`·`render` |
 | `main/app-demo.mjs` | 앱 화면의 세 단계. 같은 작업자를 별도 프로세스로 부르고 `script.json`을 읽고 쓴다 |
 | `renderer/controllers/app-demo.mjs` | 새로 만들기의 앱 데모: 시나리오 고르기·촬영, 끝나면 다듬기로 넘기는 결과 카드 |

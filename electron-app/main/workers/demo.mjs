@@ -22,6 +22,36 @@ import { parseFlags } from "../capture/cli.mjs";
 import { recordAppDemo } from "../capture/record-app.mjs";
 import { renderAppDemo } from "../editing/demo-render.mjs";
 
+// 중지는 작업 묶음 전체에 SIGTERM으로 온다. 기본 동작대로 곧장 죽으면 렌더의 임시 파일(.part)과
+// 촬영의 작업 폴더·반쯤 쓴 원본·앱 서버를 치우는 finally가 돌지 못한다(2026-09-21 앱에서 굽기를
+// 중지했더니 .part가 남았다). 그래서 여기서는 죽지 않고 기다린다 — 같은 신호로 ffmpeg·앱·합성이
+// 먼저 끝나 기다리던 일이 실패하고, 그 finally가 치운 뒤 스스로 끝난다. 그래도 남아 있으면
+// main의 강제 종료(3초)보다 먼저 나간다. 그때는 이 작업이 만든 임시 것만 직접 치운다 — 촬영을
+// 멈췄더니 앱이 먼저 닫혀도 finally가 2.5초 안에 끝나지 못해 원본과 앱 프로필이 남았다(실측).
+let sweepDir = null;
+function sweepUnfinished() {
+  if (!sweepDir) return;
+  if (command === "render") {
+    for (const name of fs.readdirSync(sweepDir)) {
+      if (/\.mp4\.[\w-]+\.part$/.test(name)) fs.rmSync(path.join(sweepDir, name), { force: true });
+    }
+  } else if (command === "record" && !fs.existsSync(path.join(sweepDir, "demo", "scenes.json"))) {
+    fs.rmSync(path.join(sweepDir, "demo", "work"), { recursive: true, force: true });
+    fs.rmSync(path.join(sweepDir, "demo", "raw.mkv"), { force: true });
+    for (const dir of [path.join(sweepDir, "demo"), sweepDir]) {
+      if (fs.existsSync(dir) && !fs.readdirSync(dir).length) fs.rmdirSync(dir);
+    }
+  }
+}
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, () => {
+    setTimeout(() => {
+      try { sweepUnfinished(); } catch { /* 치우지 못해도 나간다. main이 한 번 더 치운다. */ }
+      process.exit(130);
+    }, 2500).unref();
+  });
+}
+
 const [command, target, ...rest] = process.argv.slice(2);
 if (!["record", "voice", "render"].includes(command)) {
   throw new Error("사용법: demo record <시나리오.json> | demo voice <결과 폴더> | demo render <결과 폴더>");
@@ -84,6 +114,7 @@ if (command === "record") {
   // 뒤에 풀리므로 여기서는 이름만 본다.
   const name = String(flags.name || JSON.parse(fs.readFileSync(scenarioFile, "utf8")).name || "app-demo");
   const outDir = path.resolve(String(flags["out-dir"] || path.join(studio.editOutputRoot, dateFolder(), name)));
+  sweepDir = outDir;
   if (fs.existsSync(path.join(outDir, "demo", "raw.mkv"))) {
     throw new Error(`같은 이름의 촬영이 이미 있습니다: ${outDir}`);
   }
@@ -169,12 +200,14 @@ if (command === "record") {
   log("후보를 들어 보고 script.json의 voice.selected에 고른 파일을 적어 주세요.");
 } else {
   const outDir = requireDir(target);
+  sweepDir = outDir;
   const maxSpeed = flags["max-speed"] === undefined ? undefined : Number(flags["max-speed"]);
   if (maxSpeed !== undefined && !(maxSpeed >= 1)) throw new Error("--max-speed는 1 이상이어야 합니다.");
   const report = await renderAppDemo({
     outDir,
     name: String(flags.name || path.basename(outDir)),
     quality: flags.quality === undefined ? "high" : String(flags.quality),
+    burnCaptions: flags["burn-captions"] === true,
     options: maxSpeed === undefined ? {} : { maxSpeed },
     ffmpeg: tools.ffmpeg || "ffmpeg",
     ffprobe: tools.ffprobe || "ffprobe",

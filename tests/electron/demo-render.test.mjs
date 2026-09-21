@@ -10,6 +10,7 @@ import {
   demoCaptionCues, demoRenderArgs, renderAppDemo, renderChecks, timeWarpExpression, videoFilterChain, zoomFilter,
 } from '../../electron-app/main/editing/demo-render.mjs';
 import { buildReviewPage, collectReview } from '../../electron-app/main/editing/demo-review.mjs';
+import { captionBand, captionConcatList } from '../../electron-app/main/editing/demo-captions.mjs';
 import { CAPTURE_COLOR_FILTERS, captureEncodingArgs } from '../../electron-app/main/capture/encoding.mjs';
 import { videoQuality } from '../../electron-app/shared/video-quality.mjs';
 
@@ -79,6 +80,49 @@ test('렌더 인자는 무음 바닥 위에 장면 음성을 제자리에 놓는
   assert.deepEqual(args.slice(-5), ['-f', 'mp4', '-movflags', '+faststart', 'out.part']);
   assert.deepEqual(args.slice(args.indexOf('-c:a'), args.indexOf('-c:a') + 8),
     ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '1'], '덱·화면 녹화와 같은 음성 서명');
+});
+
+test('자막을 구우면 확대 뒤·색 변환 전에 자막 그림 하나를 겹치고, 끄면 인자가 그대로다', () => {
+  const plan = waitPlan();
+  const narration = plan.scenes.map(scene => ({ id: scene.id, ...scene.narration }));
+  const plain = demoRenderArgs({ plan, rawFile: 'raw.mkv', narration, profile, output: 'out.part' });
+  const band = captionBand(profile);
+  const args = demoRenderArgs({ plan, rawFile: 'raw.mkv', narration, profile, output: 'out.part',
+    captions: { list: '/tmp/frames/captions.ffconcat', band } });
+  // 입력 순서: 원본 · 무음 바닥 · 장면 음성 둘 · 자막 목록
+  const inputs = args.flatMap((value, index) => (value === '-i' ? [args[index + 1]] : []));
+  assert.equal(inputs.at(-1), '/tmp/frames/captions.ffconcat');
+  assert.deepEqual(args.slice(args.indexOf('/tmp/frames/captions.ffconcat') - 5, args.indexOf('/tmp/frames/captions.ffconcat')),
+    ['-f', 'concat', '-safe', '0', '-i']);
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  assert.ok(graph.startsWith(`[0:v]${videoFilterChain(plan, profile, { color: false })}[base];`));
+  assert.ok(!videoFilterChain(plan, profile, { color: false }).includes(CAPTURE_COLOR_FILTERS));
+  assert.match(graph, /\[4:v\]format=rgba,fps=25\[cap\]/);
+  assert.ok(graph.includes(`[base][cap]overlay=0:${band.y}:eof_action=pass:format=auto,${CAPTURE_COLOR_FILTERS}[v]`));
+  // 끄면 전과 똑같다.
+  assert.deepEqual(demoRenderArgs({ plan, rawFile: 'raw.mkv', narration, profile, output: 'out.part', captions: null }), plain);
+});
+
+test('자막 그림 목록은 빈 그림으로 틈을 메우고 영상 길이에서 끝난다', () => {
+  assert.deepEqual(captionBand({ width: 3840, height: 2160 }), { x: 0, y: 1620, width: 3840, height: 540 });
+  assert.equal(captionBand({ width: 1920, height: 1080 }).height % 2, 0);
+  const list = captionConcatList([
+    { startMs: 320, endMs: 2800, text: '하나' },
+    { startMs: 2500, endMs: 4000, text: '겹친 둘' },
+    { startMs: 9000, endMs: 12000, text: '넘치는 셋' },
+  ], { files: ['cue-0001.png', 'cue-0002.png', 'cue-0003.png'], blank: 'blank.png', totalMs: 10000 });
+  assert.equal(list, [
+    'ffconcat version 1.0',
+    "file 'blank.png'", 'duration 0.320',
+    "file 'cue-0001.png'", 'duration 2.480',
+    // 겹친 자막은 앞의 것이 끝난 뒤부터
+    "file 'cue-0002.png'", 'duration 1.200',
+    "file 'blank.png'", 'duration 5.000',
+    // 영상보다 긴 자막은 영상 끝에서 자른다
+    "file 'cue-0003.png'", 'duration 1.000',
+    "file 'blank.png'",
+    '',
+  ].join('\n'));
 });
 
 test('내레이션이 하나도 없어도 음성 트랙을 만든다', () => {
@@ -217,6 +261,47 @@ test('합성 촬영을 렌더해 계획 길이와 음성 자리를 확인한다'
   assert.match(page, /<video id="player" controls[^>]*src="demo-fixture\.mp4"/);
   for (const scene of plan.scenes) assert.ok(page.includes(`data-scene="${scene.id}"`), scene.id);
   assert.ok(page.includes(`window.__review = {`), '화면이 읽을 자료를 함께 넣는다');
+});
+
+// 이 맥 ffmpeg에는 글자를 그릴 필터가 없다. 브라우저가 그린 자막 그림을 겹친 결과를, 같은
+// 촬영을 자막 없이 구운 것과 자막 띠에서 견준다. 자막이 뜬 동안만 달라야 한다.
+test('자막을 구우면 강의와 같은 모양의 자막이 따로 된 완성본에 들어간다', { timeout: 240_000 }, async t => {
+  const { outDir, demoDir } = await fixtureRecording(t, {
+    scenes: [
+      { id: 'ask', startMs: 0, endMs: 4000, steps: [{ verb: 'click', startMs: 1200, endMs: 1800, point: { x: 320, y: 180 } }] },
+      { id: 'result', startMs: 4000, endMs: 6000, steps: [{ verb: 'pause', startMs: 4000, endMs: 6000 }] },
+    ],
+    narration: {
+      ask: { durationMs: 2500, text: '먼저 하고 싶은 일을 그대로 적습니다.' },
+      result: { durationMs: 3000, text: '결과가 실제 폴더에 남습니다.' },
+    },
+  });
+  const clean = await renderAppDemo({ outDir, name: 'demo-fixture', quality: 'standard' });
+  const burned = await renderAppDemo({ outDir, name: 'demo-fixture', quality: 'standard', burnCaptions: true });
+  assert.equal(path.basename(burned.videoPath), 'demo-fixture-captioned.mp4', '구운 것은 따로 남는다');
+  assert.equal(path.basename(clean.videoPath), 'demo-fixture.mp4');
+  await fs.stat(clean.videoPath);
+  assert.equal(burned.summary.ok, true, JSON.stringify(burned.checks));
+  assert.equal(burned.captions.burned, true);
+  assert.equal(clean.captions.burned, false);
+  const capture = JSON.parse(await fs.readFile(`${burned.videoPath}.capture.json`, 'utf8'));
+  assert.equal(capture.burnCaptions, true);
+  assert.ok((await fs.readdir(demoDir)).every(entry => !entry.startsWith('caption-frames-')), '자막 그림은 굽고 나서 지운다');
+
+  const band = captionBand(videoQuality('standard'));
+  const crop = `crop=${band.width}:${band.height}:${band.x}:${band.y}`;
+  const psnrAt = async ms => {
+    const at = (ms / 1000).toFixed(3);
+    const { stderr } = await exec('ffmpeg', ['-v', 'info', '-ss', at, '-i', burned.videoPath, '-ss', at, '-i', clean.videoPath,
+      '-frames:v', '1', '-lavfi', `[0:v]${crop}[a];[1:v]${crop}[b];[a][b]psnr`, '-f', 'null', '-']);
+    const value = /average:(inf|[0-9.]+)/.exec(stderr)?.[1];
+    return value === 'inf' ? Infinity : Number(value);
+  };
+  const cues = JSON.parse(await fs.readFile(path.join(demoDir, 'captions.json'), 'utf8')).cues;
+  const during = await psnrAt((cues[0].startMs + cues[0].endMs) / 2);
+  const before = await psnrAt(cues[0].startMs / 2);
+  assert.ok(during < 32, `자막이 뜬 동안 자막 띠가 달라야 한다 (PSNR ${during})`);
+  assert.ok(before > 45, `자막 전에는 자막 띠가 같아야 한다 (PSNR ${before})`);
 });
 
 test('검수 화면은 영상·구간·대본을 한 쪽에 모으고 없는 것은 비워 둔다', async t => {

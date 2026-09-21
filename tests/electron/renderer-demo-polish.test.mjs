@@ -108,7 +108,12 @@ test('후보 만들기는 할 일이 남은 장면만, 굽기는 고른 화질�
   $('#demo-quality').value = 'ultra';
   await $('#demo-render-start').fire('click');
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'ultra' }]);
+  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'ultra', burnCaptions: false }],
+    '자막은 기본으로 굽지 않는다');
+  $('#demo-burn').checked = true;
+  await $('#demo-render-start').fire('click');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'ultra', burnCaptions: true }]);
 });
 
 test('확정과 고르기는 바로 script.json에 적는다', async () => {
@@ -125,16 +130,18 @@ test('확정과 고르기는 바로 script.json에 적는다', async () => {
 test('굽는 동안은 진행을 보이고, 끝나면 방금 구운 화질로 바꿔 보여 준다', () => {
   const { $, polish } = controller();
   polish.load(project());
-  polish.handleEvent({ type: 'demo-started', jobKind: 'demo-render', step: 'demo-render', quality: 'ultra', outDir: '/out/rice-first-run' });
+  polish.handleEvent({ type: 'demo-started', jobKind: 'demo-render', step: 'demo-render', quality: 'ultra', burnCaptions: true, outDir: '/out/rice-first-run' });
   assert.equal($('#demo-running').classList.contains('hidden'), false);
   assert.equal($('#demo-command-actions').classList.contains('hidden'), true, '도는 동안은 단추 자리에 진행이 선다');
-  assert.equal($('#demo-running-note').textContent, '4K');
+  assert.equal($('#demo-running-note').textContent, '4K · 자막 굽기');
   assert.equal($('#demo-render-start').disabled, true);
   polish.handleEvent({ type: 'log', jobKind: 'demo-render', text: 'ffmpeg…\n' });
   assert.match($('#demo-polish-log').textContent, /ffmpeg/);
-  polish.handleEvent({ type: 'demo-complete', jobKind: 'demo-render', step: 'demo-render', project: project() });
+  const baked = project();
+  baked.videos.push({ name: 'rice-first-run-ultra-captioned.mp4', label: '3840×2160 · 자막', bytes: 9e6, url: 'file:///out/rice-first-run-ultra-captioned.mp4' });
+  polish.handleEvent({ type: 'demo-complete', jobKind: 'demo-render', step: 'demo-render', project: baked });
   assert.equal($('#demo-running').classList.contains('hidden'), true);
-  assert.equal($('#demo-player').src, 'file:///out/rice-first-run-ultra.mp4');
+  assert.equal($('#demo-player').src, 'file:///out/rice-first-run-ultra-captioned.mp4', '방금 구운 자막본으로 바꿔 보여 준다');
   // 촬영은 새로 만들기의 일이다. 이 작업면은 그 사건을 받지 않는다.
   polish.handleEvent({ type: 'demo-started', jobKind: 'demo-record', step: 'demo-record' });
   assert.equal($('#demo-running').classList.contains('hidden'), true);

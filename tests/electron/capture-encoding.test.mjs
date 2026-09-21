@@ -258,7 +258,8 @@ test('확인 응답을 한 프레임 간격보다 촘촘하게 보내지 않는�
     const ready = recorder.ready(), start = Date.now();
     session.frame(frame, start); await ready; recorder.begin(start, 25);
     for (let i = 1; i <= 4; i++) session.frame(frame, start + i);
-    await recorder.wait(250);
+    // 바쁜 기계에서는 타이머가 늦게 깬다. 다 올 때까지 기다리되, 간격은 늦어져도 좁아지면 안 된다.
+    for (let waited = 0; acks.length < 5 && waited < 3000; waited += 50) await recorder.wait(50);
     assert.equal(acks.length, 5, '몰아 보낸 프레임도 모두 응답해야 한다');
     for (let i = 1; i < acks.length; i++) {
       assert.ok(acks[i] - acks[i - 1] > 25, `${i}번째 응답이 ${(acks[i] - acks[i - 1]).toFixed(1)}ms 만에 나갔다`);
