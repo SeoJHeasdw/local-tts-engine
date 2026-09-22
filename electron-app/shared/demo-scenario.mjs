@@ -3,6 +3,7 @@
 //
 // 시나리오는 "앱을 아는 유일한 파일"이다. 촬영 엔진은 앱 이름을 모른다. 그래서
 // 여기서 거르지 못한 오타는 앱을 띄우고 수십 초를 찍은 뒤에야 드러난다.
+import { cameraMode } from "./demo-camera.mjs";
 const APP_KINDS = ["electron", "web"];
 const TARGET_KEYS = ["role", "name", "exact", "placeholder", "text", "label"];
 const DEFAULT_STEP_TIMEOUT_MS = 15_000;
@@ -62,13 +63,13 @@ export function normalizeTarget(target, where) {
 
 function normalizeStep(step, where) {
   if (!step || typeof step !== "object" || Array.isArray(step)) fail(where, "걸음은 객체여야 합니다.");
-  const verbs = ["click", "type", "press", "hover", "scroll", "waitFor", "waitGone", "pause"]
+  const verbs = ["click", "type", "press", "hover", "scroll", "waitFor", "waitGone", "pause", "focus", "overview"]
     .filter(verb => Object.hasOwn(step, verb));
   if (verbs.length !== 1) {
     fail(where, `걸음 하나에 동사 하나여야 합니다(있는 것: ${verbs.join(", ") || "없음"}).`);
   }
   const [verb] = verbs;
-  const known = new Set([verb, "timeoutMs", "zoom", "text", "delta"]);
+  const known = new Set([verb, "timeoutMs", "zoom", "text", "delta", ...(verb === "focus" ? ["padding", "maxZoom"] : [])]);
   const unknown = Object.keys(step).filter(key => !known.has(key));
   if (unknown.length) fail(where, `${verb}에 알 수 없는 항목이 있습니다: ${unknown.join(", ")}`);
   if (step.zoom !== undefined && typeof step.zoom !== "boolean") fail(where, "zoom은 true·false여야 합니다.");
@@ -80,6 +81,16 @@ function normalizeStep(step, where) {
     timeoutMs: optionalTimeout(step.timeoutMs, where, DEFAULT_STEP_TIMEOUT_MS),
     zoom: zoomable && step.zoom !== false,
   };
+  if (verb === "overview") {
+    if (step.overview !== true) fail(where, "overview는 true여야 합니다.");
+    return base;
+  }
+  if (verb === "focus") {
+    const padding = step.padding ?? 48, maxZoom = step.maxZoom ?? 1.6;
+    if (!Number.isFinite(padding) || padding < 0 || padding > 512) fail(where, "focus의 padding은 0~512여야 합니다.");
+    if (!Number.isFinite(maxZoom) || maxZoom < 1 || maxZoom > 3) fail(where, "focus의 maxZoom은 1~3이어야 합니다.");
+    return { ...base, target: normalizeTarget(step.focus, where), padding, maxZoom };
+  }
   if (verb === "pause") {
     const ms = step.pause;
     if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_PAUSE_MS) {
@@ -126,6 +137,7 @@ function normalizeScene(scene, index, seen) {
     id,
     textFrom,
     timeScale,
+    camera: cameraMode(scene.camera),
     steps: scene.steps.map((step, at) => normalizeStep(step, `${where}(${id}) 걸음 ${at + 1}`)),
   };
 }
@@ -145,6 +157,7 @@ function normalizeApp(app) {
     kind,
     cwd: app.cwd === undefined ? null : requireText(app.cwd, where, "cwd"),
     prepare: app.prepare === undefined ? null : command(app.prepare),
+    prepareTimeoutMs: optionalTimeout(app.prepareTimeoutMs, where, 5 * 60_000),
     server: null,
     env: {},
     files: {},
@@ -224,10 +237,22 @@ export function normalizeScenario(raw) {
     viewport: normalizeViewport(raw.viewport),
     scenes,
   };
-  // 장면 전체가 최대 얼마나 걸릴 수 있는지. recorder.begin의 넉넉한 상한이 된다.
+  // 대상 대기 외에 타이핑·커서·스크롤의 실제 연출 시간도 포함한다. 2천 자 타이핑이나
+  // ⅛ 속도 장면이 15초짜리 걸음으로 계산되면 녹화 상한에서 뒤가 잘린다.
   scenario.budgetMs = scenes.reduce((sum, scene) => sum
-    + scene.steps.reduce((inner, step) => inner + (step.verb === "pause" ? step.ms : step.timeoutMs), 0), 0);
+    + 2000 + scene.steps.reduce((inner, step) => inner + stepBudgetMs(step, scene.timeScale), 0), 0);
+  if (!Number.isSafeInteger(Math.ceil(scenario.budgetMs)) || scenario.budgetMs > 24 * 60 * 60_000) {
+    fail("파일", "장면의 배율·타이핑·스크롤을 포함한 촬영 상한은 24시간 이하여야 합니다.");
+  }
   return scenario;
+}
+
+export function stepBudgetMs(step, timeScale = 1) {
+  if (step.verb === "pause") return step.ms;
+  const motion = ["click", "type", "hover", "scroll"].includes(step.verb) ? 2000 : 0;
+  const typing = step.verb === "type" ? [...step.text].length * TYPE_DELAY_MS.max : 0;
+  const scrolling = step.verb === "scroll" ? Math.ceil(Math.abs(step.delta) / 120) * 30 : 0;
+  return Math.ceil(step.timeoutMs + (motion + typing + scrolling) / timeScale);
 }
 
 // `{scenario}`·`{work}`만 푼다. 알 수 없는 표시가 남으면 조용히 넘기지 않는다.

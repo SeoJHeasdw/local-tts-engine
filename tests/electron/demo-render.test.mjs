@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildEditPlan } from '../../electron-app/shared/demo-plan.mjs';
+import { buildEditPlan, zoomAt } from '../../electron-app/shared/demo-plan.mjs';
 import {
   demoCaptionCues, demoRenderArgs, renderAppDemo, renderChecks, timeWarpExpression, videoFilterChain, zoomFilter,
 } from '../../electron-app/main/editing/demo-render.mjs';
@@ -13,6 +13,7 @@ import { buildReviewPage, collectReview } from '../../electron-app/main/editing/
 import { captionBand, captionConcatList } from '../../electron-app/main/editing/demo-captions.mjs';
 import { CAPTURE_COLOR_FILTERS, captureEncodingArgs } from '../../electron-app/main/capture/encoding.mjs';
 import { videoQuality } from '../../electron-app/shared/video-quality.mjs';
+import { createDemoCameraPreview } from '../../electron-app/main/editing/demo-camera-preview.mjs';
 
 const exec = promisify(execFile);
 const profile = videoQuality('high');
@@ -54,12 +55,43 @@ test('시간축을 접는 식은 구간마다 기울기를 바꾸고 멈출 자�
 test('확대 식은 키프레임을 코사인으로 잇고 화면 밖을 가둔다', () => {
   const filter = zoomFilter(waitPlan(), profile);
   assert.match(filter, /^zoompan=d=1:s=2560x1440:fps=25:/);
-  assert.match(filter, /z='[^']*1\+0\.6000000000000001\*\(1-cos\(PI\*\(on-17\)\/15\)\)\/2/);
+  assert.match(filter, /z='1\/\(/, '배율 대신 보이는 사각형 크기를 보간한다');
+  assert.ok(filter.includes('cos(PI*'));
   // 중심은 CSS px이므로 배율을 곱해 프레임 픽셀로 옮긴다.
   assert.ok(filter.includes('*2-(iw/zoom)/2'), filter);
   // 식 안의 쉼표는 필터 구분자와 섞이지 않게 벗겨 둔다.
   assert.ok(filter.includes('max(0\\,min(iw-iw/zoom\\,'), filter);
   assert.ok(!/[^\\],/.test(filter.slice(filter.indexOf("z='"))), '벗기지 않은 쉼표가 남아 있다');
+});
+
+test('실제 ffmpeg 확대의 사각형이 계획과 맞고 전환 도중에도 지정 영역을 자르지 않는다', async () => {
+  const box = { x: 40, y: 32, w: 400, h: 250 };
+  const view = { width: 640, height: 360, scale: 1 };
+  const plan = buildEditPlan({ schemaVersion: 1, viewport: view, scenes: [
+    { id: 'region', startMs: 0, endMs: 6000, steps: [{ verb: 'focus', startMs: 0, endMs: 0,
+      box, padding: 24, maxZoom: 1.6 }] },
+  ] });
+  const indices = [0, 5, 10, 20, 50, 140];
+  const select = indices.map(i => `eq(n\\,${i})`).join('+');
+  const { stdout } = await exec('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i',
+    'color=c=black:s=640x360:r=25:d=6,drawbox=x=40:y=32:w=400:h=250:color=white:t=fill',
+    '-vf', `${zoomFilter(plan, view)},select='${select}'`, '-fps_mode', 'passthrough', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'],
+  { encoding: 'buffer', maxBuffer: 8 * 1024 * 1024 });
+  const bytes = 640 * 360 * 3;
+  assert.equal(stdout.length, indices.length * bytes);
+  for (const [index, frame] of indices.entries()) {
+    let left = 640, top = 360, right = -1, bottom = -1;
+    for (let y = 0; y < 360; y++) for (let x = 0; x < 640; x++) {
+      if (stdout[index * bytes + (y * 640 + x) * 3] < 200) continue;
+      left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+    }
+    assert.ok(left > 0 && top > 0 && right < 639 && bottom < 359, `프레임 ${frame} 영역 잘림`);
+    const { z, cx, cy } = zoomAt(plan, frame * 40);
+    const expected = [(box.x - cx) * z + 320, (box.y - cy) * z + 180,
+      (box.x + box.w - cx) * z + 320 - 1, (box.y + box.h - cy) * z + 180 - 1];
+    [left, top, right, bottom].forEach((actual, i) => assert.ok(Math.abs(actual - expected[i]) <= 3,
+      `프레임 ${frame}: 실제 ${[left, top, right, bottom]} · 계획 ${expected}`));
+  }
 });
 
 test('확대가 없으면 크기만 맞춘다', () => {
@@ -351,6 +383,41 @@ test('고른 음성 파일이 없으면 어느 장면인지 말하고 멈춘다'
   await fs.writeFile(scriptFile, JSON.stringify(script, null, 2));
   await assert.rejects(renderAppDemo({ outDir, name: 'demo-fixture', quality: 'standard' }),
     /장면 ask의 고른 음성을 찾지 못했습니다/);
+});
+
+test('구도 미리보기는 원본 사진을 읽기만 하고 저장한 직접 지정 영역은 완성본까지 이어진다', { timeout: 120000 }, async t => {
+  const { outDir, demoDir } = await fixtureRecording(t, {
+    scenes: [{ id: 'ask', startMs: 0, endMs: 3000, steps: [
+      { verb: 'click', startMs: 700, endMs: 1000, point: { x: 500, y: 250 } },
+    ] }], narration: {},
+  });
+  const file = path.join(demoDir, 'script.json'), script = JSON.parse(await fs.readFile(file, 'utf8'));
+  const camera = { mode: 'focus', box: { x: 40, y: 40, w: 250, h: 220 }, padding: 16, maxZoom: 1.8 };
+  script.scenes[0].camera = camera;
+  await fs.writeFile(file, JSON.stringify(script));
+  const entries = await fs.readdir(demoDir);
+  const readPreview = createDemoCameraPreview();
+  const preview = await readPreview({ outDir, sceneId: 'ask', atMs: 1200 });
+  assert.equal(preview.sourceAtMs, 1200);
+  assert.equal(preview.recording.viewport.width, 640);
+  const png = Buffer.from(preview.imageUrl.split(',')[1], 'base64');
+  assert.equal(png.toString('hex', 0, 8), '89504e470d0a1a0a');
+  assert.equal(png.readUInt32BE(16), 1280);
+  assert.equal(png.readUInt32BE(20), 720);
+  assert.deepEqual(await fs.readdir(demoDir), entries, '미리보기가 편집 계획이나 완성본을 쓰지 않는다');
+  const report = await renderAppDemo({ outDir, name: 'camera-demo', quality: 'standard' });
+  assert.equal(report.summary.ok, true);
+  const capture = JSON.parse(await fs.readFile(`${report.videoPath}.capture.json`, 'utf8'));
+  assert.deepEqual(capture.cameraSettings.ask, camera);
+  const plan = JSON.parse(await fs.readFile(path.join(demoDir, 'edit-plan.json'), 'utf8'));
+  assert.ok(plan.zoom.some(key => key.z > 1));
+  const before = collectReview(outDir).videos[0].revision;
+  script.scenes[0].camera = 'overview';
+  await fs.writeFile(file, JSON.stringify(script));
+  await renderAppDemo({ outDir, name: 'camera-demo', quality: 'standard' });
+  const after = collectReview(outDir).videos[0];
+  assert.notEqual(after.revision, before);
+  assert.equal(after.cameraSettings.ask, 'overview');
 });
 
 test('화질마다 다른 파일로 내보내 1440p와 4K를 나란히 둔다', { timeout: 300_000 }, async t => {

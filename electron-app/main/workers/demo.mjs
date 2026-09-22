@@ -23,12 +23,13 @@ import { recordAppDemo } from "../capture/record-app.mjs";
 import { renderAppDemo } from "../editing/demo-render.mjs";
 
 // 중지는 작업 묶음 전체에 SIGTERM으로 온다. 기본 동작대로 곧장 죽으면 렌더의 임시 파일(.part)과
-// 촬영의 작업 폴더·반쯤 쓴 원본·앱 서버를 치우는 finally가 돌지 못한다(2026-09-21 앱에서 굽기를
-// 중지했더니 .part가 남았다). 그래서 여기서는 죽지 않고 기다린다 — 같은 신호로 ffmpeg·앱·합성이
-// 먼저 끝나 기다리던 일이 실패하고, 그 finally가 치운 뒤 스스로 끝난다. 그래도 남아 있으면
+// 촬영의 작업 폴더·반쯤 쓴 원본·앱 서버를 치우는 finally가 돌지 못한다. 촬영에는 AbortSignal을
+// 전달해 준비 명령·별도 서버 그룹·앱·조작을 함께 중지한다. 렌더·합성은 같은 그룹 신호로
+// 끝나 기다리던 일이 실패하고, 그 finally가 치운 뒤 스스로 끝난다. 그래도 남아 있으면
 // main의 강제 종료(3초)보다 먼저 나간다. 그때는 이 작업이 만든 임시 것만 직접 치운다 — 촬영을
 // 멈췄더니 앱이 먼저 닫혀도 finally가 2.5초 안에 끝나지 못해 원본과 앱 프로필이 남았다(실측).
 let sweepDir = null;
+const stopping = new AbortController();
 function sweepUnfinished() {
   if (!sweepDir) return;
   if (command === "render") {
@@ -45,6 +46,8 @@ function sweepUnfinished() {
 }
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, () => {
+    if (stopping.signal.aborted) return;
+    stopping.abort(new Error("앱 데모 작업을 중지했습니다."));
     setTimeout(() => {
       try { sweepUnfinished(); } catch { /* 치우지 못해도 나간다. main이 한 번 더 치운다. */ }
       process.exit(130);
@@ -66,6 +69,7 @@ const log = text => console.log(`[demo] ${text}`);
 const announce = event => {
   if (event.phase === "log") return log(event.text);
   if (event.phase === "scene") return log(`장면 ${event.scene}`);
+  if (event.phase === "step") return log(`장면 ${event.scene} · ${event.step}번째 ${event.verb}${event.target ? ` (${event.target})` : ""}`);
   if (event.phase === "recording") return log(`녹화 시작 · 장면 ${event.scenes}개`);
   if (event.phase === "recorded") return log(`녹화 ${(event.durationMs / 1000).toFixed(1)}초 · ${event.frames}프레임 (복제 ${event.duplicated})`);
   if (event.phase === "rendering") return log(`렌더 ${(event.durationMs / 1000).toFixed(1)}초 · 내레이션 ${event.narration}장면`);
@@ -119,7 +123,7 @@ if (command === "record") {
     throw new Error(`같은 이름의 촬영이 이미 있습니다: ${outDir}`);
   }
   log(`촬영 ${scenarioFile} → ${outDir}`);
-  const record = await recordAppDemo({ scenarioFile, outDir, name, onEvent: announce });
+  const record = await recordAppDemo({ scenarioFile, outDir, name, onEvent: announce, signal: stopping.signal });
 
   // 대본은 여기서 쓰지 않는다. 장면마다 빈 칸과 화면 글(근거)만 놓아 둔다.
   const scriptFile = path.join(outDir, "demo", "script.json");

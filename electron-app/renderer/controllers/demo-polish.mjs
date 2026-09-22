@@ -1,5 +1,7 @@
 import { planBlocks, zoomSpans } from "../../shared/demo-plan.mjs";
 import { captureVideoFileName } from "../../shared/video-quality.mjs";
+import { cameraLabel, sameCamera } from "../../shared/demo-camera.mjs";
+import { createDemoCameraEditor } from "./demo-camera.mjs";
 
 // 다듬기의 앱 데모 작업면. 찍어 둔 결과를 보며 장면마다 대본을 쓰고, 목소리 후보를 그
 // 장면 영상에 맞춰 듣고 고르고, 완성본을 굽는다. CLI 검수 페이지(review.html)가 하던
@@ -79,6 +81,14 @@ export function bakedVersion(project, quality, burnCaptions = false) {
 const seconds = ms => `${(ms / 1000).toFixed(1)}초`;
 const SKIP_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON", "SUMMARY", "A"]);
 
+export function cameraApplication(scene, video, viewport) {
+  if (!video) return "new";
+  const applied = video.cameraSettings?.[scene.id];
+  if (applied === undefined) return Date.parse(scene.cameraModifiedAt || "") > video.modifiedMs ? "pending" : "unknown";
+  try { return sameCamera(scene.camera ?? scene.recordedCamera ?? "auto", applied, viewport) ? "applied" : "pending"; }
+  catch { return "unknown"; }
+}
+
 export function createDemoPolishController({
   $, api, showToast, show = () => {}, document = globalThis.document,
 }) {
@@ -89,6 +99,7 @@ export function createDemoPolishController({
   let running = null;
   let blocked = null;
   let together = null;
+  let applySceneId = null;
   const player = $("#demo-player");
   const voicePreview = $("#demo-voice-preview");
 
@@ -99,6 +110,21 @@ export function createDemoPolishController({
   const currentScene = () => scenes().find(scene => scene.id === sceneId) || scenes()[0] || null;
   const planScene = id => project?.plan?.scenes?.find(scene => scene.id === id) || null;
   const currentVideo = () => project?.videos?.find(video => video.name === version) || null;
+  const cameraEditor = createDemoCameraEditor({ $, api, onSave: async change => {
+    if (busy() || blocked) throw new Error(blocked || "다른 작업이 끝난 뒤 적용해 주세요.");
+    if (project?.outDir !== change.outDir) throw new Error("열려 있는 촬영이 바뀌었습니다.");
+    const scene = scenes().find(item => item.id === change.sceneId);
+    if (!scene) throw new Error("장면을 찾지 못했습니다.");
+    const previous = scene.camera;
+    scene.camera = change.camera;
+    try { await save(); } catch (error) { scene.camera = previous; throw error; }
+    renderScene();
+    if (change.render) {
+      applySceneId = scene.id;
+      try { await api.startDemoRender({ outDir: project.outDir, quality: $("#demo-quality").value || "high", burnCaptions: $("#demo-burn").checked }); }
+      catch (error) { applySceneId = null; throw error; }
+    } else showToast("구도를 저장했습니다. 완성본에는 아직 적용하지 않았습니다.");
+  } });
 
   // ---------------------------------------------------------------- 머리
   function renderHead() {
@@ -144,6 +170,7 @@ export function createDemoPolishController({
         player.src = url;
         // 화질을 바꿔도 같은 자리를 본다. 해상도 비교가 이 화면의 일이다.
         player.addEventListener("loadedmetadata", () => {
+          if (player.dataset.src !== url) return;
           player.currentTime = Math.min(at, player.duration || at);
           if (playing) player.play().catch(() => {});
         }, { once: true });
@@ -237,6 +264,9 @@ export function createDemoPolishController({
     const stale = isStale(scene);
     const voiceBlocked = busy() || Boolean(blocked);
     const voiceReady = scene.status === "approved" && scene.text?.trim();
+    const cameraState = cameraApplication(scene, currentVideo(), project.viewport);
+    const cameraNote = { applied: "지금 재생하는 완성본에 반영됐습니다.", pending: "저장한 구도가 완성본에는 아직 반영되지 않았습니다.",
+      unknown: "이 완성본은 구도 적용 기록이 없습니다. 편집 창에서 원본으로 미리 볼 수 있습니다.", new: "구도 편집에서 원본을 먼저 확인할 수 있습니다." }[cameraState];
     panel.innerHTML = `
       <div class="demo-scene-head">
         <button type="button" class="secondary-small" data-demo-step="-1" aria-label="앞 장면"${index ? "" : " disabled"}>◀</button>
@@ -244,6 +274,11 @@ export function createDemoPolishController({
         <button type="button" class="secondary-small" data-demo-step="1" aria-label="다음 장면"${index < scenes().length - 1 ? "" : " disabled"}>▶</button>
       </div>
       <p class="demo-scene-when">촬영 ${seconds(src * 1000)} → 약 ${seconds(out * 1000)}${restored}<br>${placed}</p>
+      <div class="demo-camera-summary" data-pending="${cameraState === "pending"}">
+        <strong>구도 · ${escapeHtml(cameraLabel(scene.camera))}</strong>
+        <small>${cameraNote}</small>
+        <button type="button" class="secondary-small" id="demo-camera-edit"${voiceBlocked ? " disabled" : ""}>구도 편집 · 드래그로 확대</button>
+      </div>
       <label class="field full"><span>대본</span>
         <textarea id="demo-scene-text" rows="4" spellcheck="false" placeholder="이 장면에서 할 말을 적습니다.">${escapeHtml(scene.text)}</textarea>
         <small>완성 길이보다 길면 편집이 덜 되돌립니다 — 그만큼 화면이 느려 보입니다.</small>
@@ -411,7 +446,7 @@ export function createDemoPolishController({
 
   // ---------------------------------------------------------------- 저장
   function edits() {
-    return scenes().map(scene => ({ id: scene.id, text: scene.text, status: scene.status, selected: scene.selected }));
+    return scenes().map(scene => ({ id: scene.id, text: scene.text, status: scene.status, selected: scene.selected, camera: scene.camera ?? null }));
   }
 
   async function save({ quiet = true } = {}) {
@@ -456,8 +491,21 @@ export function createDemoPolishController({
         else if (!project.videos.some(video => video.name === version)) version = defaultVersion(project.videos);
       }
       render();
+      if (finished?.step === "demo-render" && applySceneId) {
+        const applied = planScene(applySceneId);
+        applySceneId = null;
+        if (applied) {
+          sceneId = applied.id;
+          const at = project.plan.zoom?.find(key => key.atMs >= applied.outStartMs && key.atMs < applied.outEndMs && key.z > 1.01)?.atMs ?? applied.outStartMs;
+          const appliedUrl = player.dataset.src;
+          player.addEventListener("loadedmetadata", () => { if (player.dataset.src === appliedUrl) seek(at); }, { once: true });
+          renderTrack();
+          renderScene();
+        }
+      }
       showToast(event.step === "demo-voice" ? "목소리 후보가 나왔습니다. 영상에 맞춰 듣고 고르세요." : "완성본을 만들었습니다.");
     } else if (event.type === "demo-failed") {
+      applySceneId = null;
       running = null;
       render();
       showToast(event.cancelled ? "중지했습니다." : `실패: ${event.message}`, event.cancelled ? "success" : "error");
@@ -469,11 +517,12 @@ export function createDemoPolishController({
     const picked = await api.pickDemoProject();
     if (picked) load(picked);
   }));
-  $("#demo-versions").addEventListener("click", event => {
+    $("#demo-versions").addEventListener("click", event => {
     const button = event.target.closest("[data-demo-version]");
     if (!button) return;
     version = button.dataset.demoVersion;
     renderStage();
+    renderScene();
   });
   $("#demo-captions").addEventListener("click", () => {
     captionsOn = !captionsOn;
@@ -488,6 +537,11 @@ export function createDemoPolishController({
   });
   const panel = $("#demo-scene-panel");
   panel.addEventListener("click", event => {
+    if (event.target.closest("#demo-camera-edit")) {
+      if (busy() || blocked) return;
+      stopTogether(); player.pause();
+      return guarded("구도 편집", () => cameraEditor.open(project, currentScene()));
+    }
     const step = event.target.closest("[data-demo-step]");
     if (step) return stepScene(Number(step.dataset.demoStep));
     const listen = event.target.closest("[data-demo-together]");

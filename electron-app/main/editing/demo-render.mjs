@@ -93,7 +93,7 @@ export function zoomFilter(plan, profile) {
   const size = `${profile.width}x${profile.height}`;
   if (!plan.zoom?.length) return `scale=${profile.width}:${profile.height}:flags=lanczos`;
   const scale = plan.viewport.scale || 1;
-  const z = keyframeExpression(plan.zoom, key => key.z, plan.fps);
+  const z = `1/(${keyframeExpression(plan.zoom, key => 1 / key.z, plan.fps)})`;
   const cx = keyframeExpression(plan.zoom, key => key.cx, plan.fps);
   const cy = keyframeExpression(plan.zoom, key => key.cy, plan.fps);
   // 중심은 CSS px이다. 프레임 픽셀로 옮긴 뒤 보이는 상자가 화면 밖으로 나가지 않게 가둔다.
@@ -214,16 +214,10 @@ async function resolveNarration(scenes, script, demoDir, ffprobe) {
 }
 
 /**
- * 촬영 기록·대본·고른 목소리로 완성 영상을 만든다.
- *
- * 다시 찍지 않는다. 대본·목소리·계획만 바뀌면 이 단계만 다시 돌면 된다.
- * 검증에 실패한 결과는 지우지 않고 보고서에 남긴다 — 무엇이 어긋났는지가 근거다.
+ * 미리보기와 완성본이 같은 입력·실제 음성 길이·편집 계획을 사용한다.
+ * 이 단계에서는 결과 파일을 쓰지 않는다.
  */
-export async function renderAppDemo({
-  outDir, name, quality = "high", options = {}, burnCaptions = false,
-  ffmpeg = "ffmpeg", ffprobe = "ffprobe", onEvent = () => {},
-}) {
-  const profile = videoQuality(quality);
+export async function loadDemoRenderInput({ outDir, options = {}, ffprobe = "ffprobe" }) {
   const demoDir = path.join(outDir, "demo");
   const scenes = JSON.parse(fs.readFileSync(path.join(demoDir, SCENES_FILE), "utf8"));
   const scriptFile = path.join(demoDir, "script.json");
@@ -232,7 +226,19 @@ export async function renderAppDemo({
   if (!fs.existsSync(rawFile)) throw new Error(`무손실 원본이 없습니다: ${rawFile}`);
 
   const narration = await resolveNarration(scenes, script, demoDir, ffprobe);
-  const plan = buildEditPlan(scenes, { narration, options: { ...options, fps: scenes.fps ?? 25 } });
+  const cameras = Object.fromEntries((script?.scenes || []).filter(scene => scene.camera != null)
+    .map(scene => [scene.id, scene.camera]));
+  const plan = buildEditPlan(scenes, { narration, cameras, options: { ...options, fps: scenes.fps ?? 25 } });
+  return { demoDir, scenes, script, rawFile, narration, cameras, plan };
+}
+
+// 원본을 다시 촬영하지 않고 한 번 인코딩한다. 검증 실패 결과도 보고서에 남긴다.
+export async function renderAppDemo({
+  outDir, name, quality = "high", options = {}, burnCaptions = false,
+  ffmpeg = "ffmpeg", ffprobe = "ffprobe", onEvent = () => {},
+}) {
+  const profile = videoQuality(quality);
+  const { demoDir, scenes, script, rawFile, plan } = await loadDemoRenderInput({ outDir, options, ffprobe });
   writeCaptureReport(path.join(demoDir, "edit-plan.json"), plan);
   const placed = plan.scenes.filter(scene => scene.narration)
     .map(scene => ({ id: scene.id, ...scene.narration }));
@@ -273,6 +279,7 @@ export async function renderAppDemo({
     writeCaptureReport(`${finalFile}.capture.json`, {
       schemaVersion: 1, profile, source: { scenario: scenes.scenario, raw: rawFile, frame: scenes.frame },
       encoder: "libx264", preset: "slow", frames: { written: Number(video?.nb_frames) || 0 }, burnCaptions: burned,
+      cameraSettings: Object.fromEntries(plan.scenes.map(scene => [scene.id, scene.camera])),
       durationMs, video, audio, file: finalFile, fileSha256: digest, plan: {
         totalFrames: plan.totalFrames, maxSpeed: plan.maxSpeed,
         segments: plan.segments.length, zoomKeyframes: plan.zoom.length,

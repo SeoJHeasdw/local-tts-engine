@@ -5,42 +5,11 @@ import { createAppDemoController } from '../../electron-app/renderer/controllers
 
 // 다듬기의 앱 데모 작업면. 실제 컨트롤러에 가짜 화면을 물려 무엇을 저장하고 무엇을 굽게
 // 하는지 본다. 화면 모양은 실제 창에서 찍어 확인한다.
-function fakeDom() {
-  const elements = new Map();
-  const element = () => {
-    const classes = new Set();
-    const handlers = new Map();
-    return {
-      textContent: '', innerHTML: '', value: '', dataset: {}, style: {}, attributes: {},
-      disabled: false, inert: false, checked: false, currentTime: 0, paused: true, muted: false,
-      classList: {
-        add: (...names) => names.forEach(name => classes.add(name)),
-        remove: (...names) => names.forEach(name => classes.delete(name)),
-        contains: name => classes.has(name),
-        toggle(name, force = !classes.has(name)) { force ? classes.add(name) : classes.delete(name); },
-      },
-      addEventListener(type, handler) { handlers.set(type, handler); },
-      fire(type, event = {}) { return handlers.get(type)?.(event); },
-      setAttribute(key, value) { this.attributes[key] = value; },
-      getAttribute(key) { return this.attributes[key] ?? null; },
-      removeAttribute(key) { delete this.attributes[key]; },
-      replaceChildren(...items) { this.children = items; },
-      append() {}, querySelectorAll: () => [], querySelector: () => null,
-      play() { this.paused = false; return Promise.resolve(); },
-      pause() { this.paused = true; },
-    };
-  };
-  const $ = selector => {
-    if (!elements.has(selector)) elements.set(selector, element());
-    return elements.get(selector);
-  };
-  const document = { createElement: element, querySelectorAll: () => [], querySelector: () => null, addEventListener() {}, activeElement: null };
-  return { $, document };
-}
+import { fakeDemoDom as fakeDom, cameraPreviewData } from "./helpers/demo-dom.mjs";
 
 const project = () => ({
   outDir: '/out/rice-first-run', name: 'rice-first-run', scenario: 'rice-first-run', durationMs: 137600,
-  frame: { width: 3840, height: 2160 },
+  frame: { width: 3840, height: 2160 }, viewport: { width: 1920, height: 1080, scale: 2 },
   videos: [
     { name: 'rice-first-run-high.mp4', label: '2560×1440', bytes: 4e6, url: 'file:///out/rice-first-run-high.mp4' },
     { name: 'rice-first-run-ultra.mp4', label: '3840×2160', bytes: 9e6, url: 'file:///out/rice-first-run-ultra.mp4' },
@@ -69,6 +38,7 @@ function controller(t) {
     startDemoVoice: async options => { calls.push(['voice', options]); },
     startDemoRender: async options => { calls.push(['render', options]); },
     readDemoProject: async () => project(),
+    readDemoCameraPreview: async options => cameraPreviewData(options.sceneId),
     demoProjectDir: async () => '/out/rice-first-run',
     cancel: async () => true,
   };
@@ -124,7 +94,24 @@ test('확정과 고르기는 바로 script.json에 적는다', async () => {
   await new Promise(resolve => setImmediate(resolve));
   const [, outDir, scenes] = calls.at(-1);
   assert.equal(outDir, '/out/rice-first-run');
-  assert.deepEqual(scenes.find(scene => scene.id === 'loop'), { id: 'loop', text: '고친 대본', status: 'draft', selected: 'narration/loop/candidate-01.wav' });
+  assert.deepEqual(scenes.find(scene => scene.id === 'loop'), { id: 'loop', text: '고친 대본', status: 'draft', selected: 'narration/loop/candidate-01.wav', camera: null });
+});
+
+test('구도 편집에서 저장하고 영상에 적용하면 같은 화질로 렌더까지 이어진다', async () => {
+  const { $, polish, calls } = controller();
+  polish.load(project());
+  assert.match($('#demo-scene-panel').innerHTML, /드래그로 확대/);
+  await $('#demo-scene-panel').fire('click', { target: { closest: selector => selector === '#demo-camera-edit' ? {} : null } });
+  assert.equal($('#demo-camera-dialog').open, true);
+  await $('#demo-camera-mode').fire('change', { target: { value: 'overview' } });
+  assert.match($('#demo-camera-result').style.transform, /scale\(1\)/);
+  await $('#demo-camera-apply').fire('click');
+  assert.equal($('#demo-camera-dialog').open, false);
+  const edit = calls.find(call => call[0] === 'save')[2].find(scene => scene.id === 'loop');
+  assert.equal(edit.camera, 'overview');
+  assert.equal(edit.text, '고친 대본');
+  assert.equal(edit.selected, 'narration/loop/candidate-01.wav');
+  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'high', burnCaptions: false }]);
 });
 
 test('굽는 동안은 진행을 보이고, 끝나면 방금 구운 화질로 바꿔 보여 준다', () => {
@@ -145,6 +132,19 @@ test('굽는 동안은 진행을 보이고, 끝나면 방금 구운 화질로 �
   // 촬영은 새로 만들기의 일이다. 이 작업면은 그 사건을 받지 않는다.
   polish.handleEvent({ type: 'demo-started', jobKind: 'demo-record', step: 'demo-record' });
   assert.equal($('#demo-running').classList.contains('hidden'), true);
+});
+
+test('같은 화질·같은 이름으로 다시 구워도 새 영상 주소를 다시 읽는다', () => {
+  const { $, polish } = controller();
+  const initial = project(); initial.videos[0].url += '?v=old';
+  polish.load(initial);
+  polish.handleEvent({ type: 'demo-started', jobKind: 'demo-render', step: 'demo-render', quality: 'high' });
+  const next = project(); next.videos[0].url += '?v=new';
+  next.videos[0].cameraSettings = { loop: 'overview', awakening: 'auto' };
+  next.scenes[1].camera = 'overview';
+  polish.handleEvent({ type: 'demo-complete', jobKind: 'demo-render', step: 'demo-render', project: next });
+  assert.equal($('#demo-player').src, 'file:///out/rice-first-run-high.mp4?v=new');
+  assert.match($('#demo-scene-panel').innerHTML, /지금 재생하는 완성본에 반영됐습니다/);
 });
 
 test('다른 작업이 돌면 굽기·후보 만들기만 막고 까닭을 적는다', () => {

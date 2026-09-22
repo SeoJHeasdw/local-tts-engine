@@ -268,6 +268,19 @@ test('확인 응답을 한 프레임 간격보다 촘촘하게 보내지 않는�
 });
 
 // 시각이 이미 기록한 프레임보다 오래됐다면 어떤 출력 시각도 이길 수 없다.
+test('앱 촬영이 상한을 넘으면 뒤를 자른 성공본으로 만들지 않는다', async () => {
+  const session = new Session(), frame = await png(160, 90, 'black');
+  const recorder = startScreencastEncoder({ session, width: 160, height: 90, fps: 25,
+    ffmpegArgs: ['-v', 'error', '-f', 'image2pipe', '-i', 'pipe:0', '-f', 'null', '-'] });
+  try {
+    const ready = recorder.ready(), start = Date.now();
+    session.frame(frame, start); await ready; recorder.begin(start, 5);
+    await assert.rejects(recorder.finish({ endAt: start + 1000 }), /상한을 넘었습니다/);
+    recorder.fail(new Error('연결 실패 전달'));
+    await assert.rejects(recorder.failed, /연결 실패 전달/);
+  } finally { await recorder.abort(); }
+});
+
 test('이미 기록한 시각보다 오래된 프레임은 버려도 영상 시계를 지킨다', async () => {
   const session = new Session(), frame = await png(160, 90, 'black');
   const recorder = startScreencastEncoder({ session, width: 160, height: 90,

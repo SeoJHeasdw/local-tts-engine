@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createServer } from "node:http";
+import { demoDelay } from "./demo-runtime.mjs";
 
 const MIME_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -89,15 +90,23 @@ export function startCaptureServer(siteDir) {
   });
 }
 
-export async function waitForServer(url) {
-  for (let attempt = 0; attempt < 80; attempt++) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-    } catch {
-      // 아직 시작 중
+export async function waitForServer(url, { timeoutMs = 20_000, signal } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(
+    `캡처 화면 서버가 ${timeoutMs / 1000}초 안에 준비되지 않았습니다.`,
+  )), timeoutMs);
+  const waiting = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  try {
+    while (true) {
+      waiting.throwIfAborted();
+      try {
+        const response = await fetch(url, { signal: waiting });
+        await response.body?.cancel();
+        if (response.ok) return;
+      } catch {
+        waiting.throwIfAborted();
+      }
+      await demoDelay(250, waiting);
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error("캡처 화면 서버가 20초 안에 준비되지 않았습니다.");
+  } finally { clearTimeout(timer); }
 }

@@ -17,7 +17,8 @@ const SCENARIO = {
   ],
 };
 
-async function studio(t, { scenes = null, script = null, cancelRun = false, onRun = null } = {}) {
+async function studio(t, { scenes = null, script = null, cancelRun = false, onRun = null,
+  requireTool = () => '/usr/bin/node' } = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'app-demo-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   // 촬영은 오늘 날짜 폴더에 결과를 만든다. 같은 자리를 써야 같은 이름 검사가 뜻이 있다.
@@ -44,7 +45,7 @@ async function studio(t, { scenes = null, script = null, cancelRun = false, onRu
     // 결과 폴더 뿌리는 outputRoot에서 나온다(editOutputRoot = outputRoot/edits). 임시 폴더에 가둔다 —
     // 가두지 않으면 촬영 검사가 실제 output/edits에 폴더를 만든다.
     readAppSettings: async () => ({ paths: { outputRoot: base } }),
-    requireRuntimeTool: () => '/usr/bin/node',
+    requireRuntimeTool: requireTool,
     // cancelRun: 중지를 누른 것처럼 작업을 중지 표시하고 작업자가 실패로 끝난다.
     runProcess: async (stage, tool, args) => {
       runs.push({ stage, args });
@@ -53,8 +54,55 @@ async function studio(t, { scenes = null, script = null, cancelRun = false, onRu
     },
     state,
   });
-  return { service, runs, events, base, outDir, demoDir, scenarioFile };
+  return { service, runs, events, base, outDir, demoDir, scenarioFile, state };
 }
+
+async function settled(state) {
+  for (let i = 0; i < 100 && state.activeJob?.state === 'running'; i++) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.notEqual(state.activeJob?.state, 'running', '작업이 끝나야 한다');
+}
+
+test('시나리오를 읽는 동안 두 번 시작해도 작업자는 하나만 뜬다', async t => {
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const { service, scenarioFile, runs, state } = await studio(t, { onRun: () => waiting });
+  try {
+    const started = await Promise.allSettled([
+      service.startDemoRecord({ scenarioFile, name: 'first' }),
+      service.startDemoRecord({ scenarioFile, name: 'second' }),
+    ]);
+    assert.equal(started.filter(item => item.status === 'fulfilled').length, 1);
+    assert.match(started.find(item => item.status === 'rejected').reason.message, /이미 실행 중/);
+    assert.equal(runs.length, 1);
+  } finally { release(); await settled(state); }
+});
+
+test('실행 도구가 없어도 실패 사건으로 끝내고 실행 중 상태에 남지 않는다', async t => {
+  const { service, outDir, state, events } = await studio(t, {
+    requireTool: () => { throw new Error('Node 없음'); },
+  });
+  await service.startDemoVoice({ outDir });
+  await settled(state);
+  assert.equal(state.activeJob.state, 'failed');
+  assert.equal(events.at(-1).type, 'demo-failed');
+  assert.match(events.at(-1).message, /Node 없음/);
+});
+
+test('중지 직후 작업자가 정상 종료해도 완료로 표시하지 않는다', async t => {
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const { service, outDir, state, events } = await studio(t, {
+    scenes: scenesFile, script: scriptFile, onRun: () => waiting,
+  });
+  await service.startDemoVoice({ outDir });
+  state.activeJob.cancelled = true;
+  release();
+  await settled(state);
+  assert.equal(state.activeJob.state, 'cancelled');
+  assert.equal(events.some(event => event.type === 'demo-complete'), false);
+});
 
 const scenesFile = {
   schemaVersion: 1, scenario: 'rice-first-run', durationMs: 94300,
@@ -103,7 +151,7 @@ test('결과 폴더에서 대본·후보·완성본을 한 벌로 모은다', as
   assert.equal(project.scenes[0].candidates[0].durationMs, 6520, '후보 길이를 함께 준다');
   assert.match(project.scenes[0].candidates[0].url, /^file:\/\/.*candidate-01\.wav$/);
   assert.deepEqual(project.videos.map(video => video.name), ['rice-first-run-high.mp4']);
-  assert.match(project.videos[0].url, /^file:\/\/.*rice-first-run-high\.mp4$/);
+  assert.match(project.videos[0].url, /^file:\/\/.*rice-first-run-high\.mp4\?v=/);
   // 굽기 전이라 편집 계획·자막·검증이 없다. 지어내지 않고 비워 둔다.
   assert.equal(project.plan, null);
   assert.deepEqual(project.captions, []);
@@ -153,10 +201,40 @@ test('화면이 고친 대본과 고른 후보만 돌려 쓴다', async t => {
     /그 후보가 없습니다/);
 });
 
+test('장면 구도는 저장·다시 열기에 유지되며 잘못된 값은 파일에 쓰지 않는다', async t => {
+  const { service, outDir, demoDir } = await studio(t, { scenes: scenesFile, script: scriptFile });
+  const saved = await service.saveDemoScript(outDir, [{ id: 'awakening', camera: 'overview' }]);
+  assert.equal(saved.scenes[0].camera, 'overview');
+  assert.equal(saved.scenes[0].text, scriptFile.scenes[0].text);
+  const before = await fs.readFile(path.join(demoDir, 'script.json'), 'utf8');
+  await assert.rejects(service.saveDemoScript(outDir, [{ id: 'awakening', camera: 'typo' }]), /장면 구도/);
+  assert.equal(await fs.readFile(path.join(demoDir, 'script.json'), 'utf8'), before);
+  const inherited = await service.saveDemoScript(outDir, [{ id: 'awakening', camera: null }]);
+  assert.equal(inherited.scenes[0].camera, null);
+});
+
+test('직접 지정 영역을 저장하고 같은 완성본이 바뀌면 재생 주소도 갱신한다', async t => {
+  const { service, outDir, demoDir } = await studio(t, { scenes: scenesFile, script: scriptFile });
+  const camera = { mode: 'focus', box: { x: 50, y: 100, w: 800, h: 600 }, padding: 24, maxZoom: 1.8 };
+  const saved = await service.saveDemoScript(outDir, [{ id: 'awakening', camera }]);
+  assert.deepEqual(saved.scenes[0].camera, camera);
+  const video = path.join(outDir, 'rice-first-run-high.mp4');
+  await fs.writeFile(video, 'version-one');
+  const before = await service.readDemoProject(outDir);
+  await fs.writeFile(video, 'version-two-new');
+  await fs.writeFile(`${video}.capture.json`, JSON.stringify({ cameraSettings: { awakening: camera } }));
+  const after = await service.readDemoProject(outDir);
+  assert.notEqual(before.videos[0].url, after.videos[0].url);
+  assert.deepEqual(after.videos[0].cameraSettings.awakening, camera);
+  const original = await fs.readFile(path.join(demoDir, 'script.json'), 'utf8');
+  await assert.rejects(service.saveDemoScript(outDir, [{ id: 'awakening', camera: { ...camera, box: { ...camera.box, x: -1 } } }]), /화면 안/);
+  assert.equal(await fs.readFile(path.join(demoDir, 'script.json'), 'utf8'), original);
+});
+
 test('촬영·목소리·렌더는 CLI와 같은 작업자를 같은 인자로 부른다', async t => {
-  const { service, runs, events, outDir, scenarioFile } = await studio(t, { scenes: scenesFile, script: scriptFile });
+  const { service, runs, events, outDir, scenarioFile, state } = await studio(t, { scenes: scenesFile, script: scriptFile });
   // 작업자는 따로 돈다. 시작은 바로 돌아오고 실행은 다음 차례에 일어난다.
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const settle = () => settled(state);
   await service.startDemoRecord({ scenarioFile, name: 'demo-two' });
   await settle();
   const recorded = runs.at(-1);
@@ -232,6 +310,19 @@ test('같은 이름의 촬영이 있으면 덮어쓰지 않고 멈춘다', async
   const { service, outDir, scenarioFile } = await studio(t, { scenes: scenesFile, script: scriptFile });
   await assert.rejects(() => service.startDemoRecord({ scenarioFile, name: path.basename(outDir) }),
     /같은 이름의 촬영이 이미 있습니다/);
+});
+
+test('실패 진단만 있는 결과는 앱에서도 같은 이름으로 다시 찍을 수 있다', async t => {
+  const { service, outDir, demoDir, scenarioFile, runs, state } = await studio(t);
+  await fs.rm(demoDir, { recursive: true, force: true });
+  await fs.mkdir(demoDir);
+  await fs.writeFile(path.join(demoDir, 'failure.json'), JSON.stringify({ operation: 'app-demo-record', status: 'failed' }));
+  await fs.writeFile(path.join(demoDir, 'failure.png'), 'diagnostic');
+  await service.startDemoRecord({ scenarioFile, name: path.basename(outDir) });
+  await settled(state);
+  assert.equal(runs.length, 1);
+  await fs.writeFile(path.join(demoDir, 'script.json'), 'user script');
+  await assert.rejects(service.startDemoRecord({ scenarioFile, name: path.basename(outDir) }), /이미 있습니다/);
 });
 
 test('다음에 할 일은 결과 폴더의 상태만 보고 정한다', () => {

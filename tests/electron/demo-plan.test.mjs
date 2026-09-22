@@ -1,10 +1,71 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PLAN_DEFAULTS, buildEditPlan, zoomAt } from '../../electron-app/shared/demo-plan.mjs';
+import { frameForBox } from '../../electron-app/shared/demo-camera.mjs';
 
 const viewport = { width: 1920, height: 1080, scale: 2 };
 const recorded = (scenes, durationMs) => ({ schemaVersion: 1, scenario: 'demo', viewport, durationMs, scenes });
 const totalOf = plan => plan.segments.reduce((sum, s) => sum + s.outFrames + s.holdMs / 40, 0);
+
+test('먼 대상이나 다른 장면으로 갈 때는 전체 화면을 거친다', () => {
+  for (const nextScene of [false, true]) {
+    const first = { verb: 'click', startMs: 2000, endMs: 2600, point: { x: 100, y: 200 } };
+    const next = { verb: 'click', startMs: 3800, endMs: 4300, point: nextScene ? first.point : { x: 1800, y: 950 } };
+    const scenes = nextScene
+      ? [{ id: 'a', startMs: 0, endMs: 3200, steps: [first] }, { id: 'b', startMs: 3200, endMs: 8000, steps: [next] }]
+      : [{ id: 'a', startMs: 0, endMs: 8000, steps: [first, next] }];
+    const plan = buildEditPlan(recorded(scenes, 8000));
+    assert.ok(plan.zoom.some(key => key.atMs >= 2600 && key.atMs <= 3800 && key.z === 1));
+    if (nextScene) assert.equal(zoomAt(plan, 3200).z, 1, '장면 경계에는 이전 확대가 남지 않는다');
+    for (let i = 1; i < plan.zoom.length; i++) assert.ok(plan.zoom[i].atMs > plan.zoom[i - 1].atMs);
+  }
+});
+
+test('연속 확대가 너무 촘촘하면 한두 프레임으로 튀지 않고 전체 화면을 유지한다', () => {
+  const steps = Array.from({ length: 10 }, (_, i) => ({ verb: 'click', startMs: i * 120, endMs: i * 120 + 80,
+    point: { x: i % 2 ? 1800 : 100, y: 500 } }));
+  const plan = buildEditPlan(recorded([{ id: 'dense', startMs: 0, endMs: 1240, steps }], 1240));
+  assert.deepEqual(plan.zoom, [], '전환할 틈이 없으면 확대를 생략한다');
+});
+
+test('장면별 전체 화면 설정은 기존 촬영에도 적용되고 다시 촬영할 필요가 없다', () => {
+  const source = recorded([{ id: 'a', startMs: 0, endMs: 8000,
+    steps: [{ verb: 'click', startMs: 2000, endMs: 2600, point: { x: 100, y: 900 } }] }], 8000);
+  const normal = buildEditPlan(source);
+  const wide = buildEditPlan(source, { cameras: { a: 'overview' } });
+  assert.ok(normal.zoom.length > 0);
+  assert.deepEqual(wide.zoom, []);
+  assert.deepEqual(wide.segments, normal.segments, '구도만 바꾸며 화면과 내레이션의 시간을 바꾸지 않는다');
+  assert.equal(wide.scenes[0].camera, 'overview');
+  assert.throws(() => buildEditPlan(source, { cameras: { a: 'typo' } }), /장면 구도/);
+});
+
+test('지정 영역은 제목과 여백까지 들어오며 클릭 위치가 구도를 바꾸지 않는다', () => {
+  const box = { x: 80, y: 150, w: 700, h: 680 };
+  const plan = buildEditPlan(recorded([{ id: 'a', startMs: 0, endMs: 8000, steps: [
+    { verb: 'focus', startMs: 0, endMs: 120, box, padding: 48, maxZoom: 1.6 },
+    { verb: 'click', startMs: 3000, endMs: 3300, point: { x: 1800, y: 1000 } },
+  ] }], 8000));
+  assert.ok(plan.zoom.some(key => key.z > 1));
+  const expected = frameForBox(box, viewport);
+  assert.ok(expected.z < 1.6, '큰 영역은 고정 1.6배 대신 안전하게 들어오는 배율로 잡는다');
+  for (let t = 0; t <= plan.durationMs; t += 40) {
+    const { z, cx, cy } = zoomAt(plan, t), w = viewport.width / z, h = viewport.height / z;
+    assert.ok(cx - w / 2 <= box.x - 48 + 1e-6 && cx + w / 2 >= box.x + box.w + 48 - 1e-6, `가로 잘림 ${t}`);
+    assert.ok(cy - h / 2 <= box.y - 48 + 1e-6 && cy + h / 2 >= box.y + box.h + 48 - 1e-6, `세로 잘림 ${t}`);
+  }
+  assert.throws(() => frameForBox({ ...box, y: -20 }, viewport), /촬영 화면 안/);
+});
+
+test('overview 걸음 뒤에는 가까운 focus도 확대를 풀고 시작한다', () => {
+  const box = { x: 400, y: 400, w: 200, h: 100 };
+  const plan = buildEditPlan(recorded([{ id: 'a', startMs: 0, endMs: 10000, steps: [
+    { verb: 'focus', startMs: 0, endMs: 80, box },
+    { verb: 'overview', startMs: 4000, endMs: 4000 },
+    { verb: 'focus', startMs: 5000, endMs: 5080, box },
+  ] }], 10000));
+  for (let t = 4000; t <= 5080; t += 40) assert.equal(zoomAt(plan, t).z, 1, `전체 화면 ${t}`);
+});
 
 // 실제 측정(설계 10절)을 줄인 모양이다. 승인 카드 17.8초, 승인 뒤 완료 41.1초처럼
 // 화면 변화가 없는 기다림이 장면 길이를 지배한다.
@@ -92,15 +153,15 @@ test('확대는 누른 자리를 중심으로 걸고 화면 밖으로 나가지 
   assert.deepEqual(zoomAt(plan, 7000), { z: 1, cx: 960, cy: 540 });
 });
 
-test('다음 확대가 곧이면 되돌리지 않고 옮겨 간다', () => {
+test('가까운 대상의 다음 확대가 곧이면 되돌리지 않고 옮겨 간다', () => {
   const near = buildEditPlan(recorded([
     { id: 'ask', startMs: 0, endMs: 10000, steps: [
       { verb: 'click', startMs: 2000, endMs: 2600, point: { x: 600, y: 500 } },
-      { verb: 'click', startMs: 4500, endMs: 5100, point: { x: 1300, y: 700 } },
+      { verb: 'click', startMs: 4500, endMs: 5100, point: { x: 850, y: 600 } },
     ] },
   ], 10000));
   assert.deepEqual(near.zoom.map(k => [k.atMs, k.z, k.cx]),
-    [[1680, 1, 960], [2280, 1.6, 600], [3400, 1.6, 600], [4800, 1.6, 1300], [5920, 1.6, 1300], [6520, 1, 960]]);
+    [[1680, 1, 960], [2280, 1.6, 600], [3400, 1.6, 600], [4800, 1.6, 850], [5920, 1.6, 850], [6520, 1, 960]]);
   assert.ok(near.zoom.every(k => k.z === 1 || k.z === 1.6), '옮겨 가는 동안 확대를 놓지 않는다');
 
   const far = buildEditPlan(recorded([

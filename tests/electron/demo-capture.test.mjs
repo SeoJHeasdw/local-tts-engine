@@ -7,7 +7,8 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { losslessRecordArgs, readScenario, recordAppDemo, stitchScenes } from '../../electron-app/main/capture/record-app.mjs';
-import { describeTarget, launchDemoApp, sceneMotion } from '../../electron-app/main/capture/app-page.mjs';
+import { describeTarget, launchDemoApp, runScenes, sceneMotion } from '../../electron-app/main/capture/app-page.mjs';
+import { normalizeScenario } from '../../electron-app/shared/demo-scenario.mjs';
 import { glideCursor, installCursorOverlay, moveCursor } from '../../electron-app/main/capture/cursor-overlay.mjs';
 
 const exec = promisify(execFile);
@@ -217,4 +218,85 @@ test('¼ 속도로 찍는 장면에서는 커서·클릭·타이핑도 네 배�
 
 test('배율을 적지 않았거나 올바르지 않으면 실제 속도로 움직인다', () => {
   for (const value of [undefined, 1, 0, -1, 2]) assert.equal(sceneMotion(value).stretch, 1);
+});
+
+// 실제 DOM에서 재현해야 하는 조작 회귀다. 앱/브라우저 실행이 가능한 환경에서 돌린다.
+test('화면 밖·가림·비활성·이동 중 버튼을 실제 대상에 한 번만 누른다', { timeout: 120000 }, async t => {
+  const { base, file } = await workspace(t);
+  const app = await launchDemoApp(readScenario(file, path.join(base, 'work')), { workDir: path.join(base, 'work') });
+  try {
+    await app.page.setContent(`<style>body{margin:0;height:1600px}button{position:absolute;top:1000px;left:40px;width:180px;height:80px}
+      #shield{position:fixed;inset:0;z-index:100;background:#555}</style>
+      <main><button id="target" disabled>실행</button><div id="shield"></div></main>`);
+    await installCursorOverlay(app.page);
+    await app.page.evaluate(() => {
+      window.clicks = 0;
+      const button = document.querySelector('button');
+      button.onclick = () => { window.clicks++; };
+      button.addEventListener('mouseenter', () => { button.style.left = '320px'; }, { once: true });
+      setTimeout(() => { button.disabled = false; document.querySelector('#shield').remove(); }, 1200);
+    });
+    const input = fixtureScenario();
+    input.scenes = [{ id: 'guarded', steps: [{ click: '#target', zoom: false, timeoutMs: 5000 }] }];
+    const started = performance.now();
+    const result = await runScenes(app.page, normalizeScenario(input), { clock: () => performance.now() - started });
+    assert.equal(await app.page.evaluate(() => window.clicks), 1);
+    assert.ok(await app.page.evaluate(() => scrollY) > 0, '화면 밖 대상을 먼저 보이게 한다');
+    assert.equal(result[0].steps[0].zoom, false, '확대 끄기를 촬영 기록에도 남긴다');
+    const box = await app.page.locator('#target').boundingBox();
+    const point = result[0].steps[0].point;
+    assert.ok(point.x >= box.x && point.x <= box.x + box.width, '실제 클릭한 좌표를 기록한다');
+  } finally { await app.close(); }
+});
+
+test('같은 선택자의 버튼이 여럿이면 첫 번째를 임의로 누르지 않는다', { timeout: 120000 }, async t => {
+  const { base, file } = await workspace(t);
+  const app = await launchDemoApp(readScenario(file, path.join(base, 'work')), { workDir: path.join(base, 'work') });
+  try {
+    await app.page.setContent('<main><button>승인</button><button>승인</button></main>');
+    await installCursorOverlay(app.page);
+    await app.page.evaluate(() => {
+      window.clicks = 0;
+      for (const button of document.querySelectorAll('button')) button.onclick = () => window.clicks++;
+    });
+    const input = fixtureScenario();
+    input.scenes = [{ id: 'ambiguous', steps: [{ click: { role: 'button', name: '승인', exact: true } }] }];
+    await assert.rejects(runScenes(app.page, normalizeScenario(input), { clock: () => 0 }), /strict mode violation/);
+    assert.equal(await app.page.evaluate(() => window.clicks), 0);
+  } finally { await app.close(); }
+});
+
+test('촬영 중 pause를 취소하면 원본·프로필을 남기지 않고 즉시 끝난다', { timeout: 120000 }, async t => {
+  const input = fixtureScenario();
+  input.scenes = [{ id: 'waiting', steps: [{ pause: 60000 }, { press: 'Enter' }] }];
+  const { file, outDir } = await workspace(t, input);
+  const stop = new AbortController();
+  let cancelledAt;
+  await assert.rejects(recordAppDemo({ scenarioFile: file, outDir, signal: stop.signal,
+    onEvent: event => {
+      if (event.phase === 'step') {
+        cancelledAt = performance.now();
+        stop.abort(new Error('취소 검증'));
+      }
+    },
+  }), /취소 검증/);
+  assert.ok(performance.now() - cancelledAt < 5000);
+  for (const name of ['raw.mkv', 'work', 'scenes.json']) {
+    assert.equal(await fs.stat(path.join(outDir, 'demo', name)).catch(() => null), null);
+  }
+});
+
+test('지정 영역 구도를 실제 촬영 기록에 남기고 전체 화면으로 돌아온다', { timeout: 120000 }, async t => {
+  const input = fixtureScenario();
+  input.scenes = [{ id: 'region', steps: [
+    { focus: 'main', padding: 16, maxZoom: 1.4 }, { pause: 1600 }, { overview: true }, { pause: 500 },
+  ] }];
+  const { file, outDir } = await workspace(t, input);
+  const result = await recordAppDemo({ scenarioFile: file, outDir });
+  const scene = result.scenes[0];
+  assert.equal(scene.camera, 'auto');
+  assert.deepEqual(scene.steps.map(step => step.verb), ['focus', 'pause', 'overview', 'pause']);
+  assert.ok(scene.steps[0].box.w > 0 && scene.steps[0].box.h > 0);
+  assert.equal(scene.steps[0].padding, 16);
+  assert.equal(scene.steps[0].maxZoom, 1.4);
 });

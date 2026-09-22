@@ -46,6 +46,9 @@ export function collectReview(outDir) {
         height: capture?.profile?.height ?? null,
         bytes: stat.size,
         durationMs: capture?.durationMs ?? null,
+        revision: `${stat.mtimeMs}-${stat.size}`,
+        modifiedMs: stat.mtimeMs,
+        cameraSettings: capture?.cameraSettings ?? null,
       };
     })
     .sort((a, b) => (a.width ?? 0) - (b.width ?? 0));

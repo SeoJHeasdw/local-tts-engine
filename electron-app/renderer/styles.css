@@ -1981,6 +1981,27 @@ button:disabled { cursor: not-allowed; }
 .demo-verdict[data-tone="bad"] { background: var(--dngr-soft); color: var(--danger); }
 
 .demo-stage { position: relative; }
+.demo-camera-modal { width: min(1160px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow-y: auto; }
+.demo-camera-modal > :not(.modal-head) { margin-left: var(--s5); margin-right: var(--s5); }
+.demo-camera-modal .demo-camera-actions { margin-bottom: var(--s5); }
+.demo-camera-modal > p { color: var(--text-3); font-size: var(--fs-sm); margin: var(--s3) 0; }
+.demo-camera-controls { display: flex; align-items: end; gap: var(--s4); margin: var(--s3) 0; }
+.demo-camera-controls .field { flex: 1; }
+.demo-camera-pictures { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4); margin: var(--s4) 0; }
+.demo-camera-pictures section { min-width: 0; }
+.demo-camera-pictures h3 { font-size: var(--fs-sm); margin: 0 0 var(--s2); }
+.demo-camera-pictures small { display: block; color: var(--text-3); font-size: var(--fs-xs); margin-top: var(--s2); }
+.demo-camera-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; background: var(--nav); overflow: hidden; border-radius: var(--r-sm); }
+.demo-camera-frame img { display: block; width: 100%; height: 100%; object-fit: fill; transform-origin: 0 0; pointer-events: none; }
+.demo-camera-frame img:not([src]) { visibility: hidden; }
+.demo-camera-source { cursor: crosshair; touch-action: none; user-select: none; }
+.demo-camera-source:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+.demo-camera-selection { position: absolute; border: 2px solid var(--lime); background: rgba(201,255,91,.08); box-shadow: 0 0 0 2000px rgba(0,0,0,.35); pointer-events: none; }
+.demo-camera-actions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s4); }
+.demo-camera-summary { display: grid; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-sm); margin: var(--s3) 0; }
+.demo-camera-summary small { color: var(--text-3); }
+.demo-camera-summary[data-pending="true"] { border-color: var(--warn-edge); }
+@media (max-width: 800px) { .demo-camera-pictures { grid-template-columns: 1fr; } .demo-camera-controls { flex-wrap: wrap; } }
 #demo-player { display: block; width: 100%; aspect-ratio: 16 / 9; background: var(--nav); border-radius: var(--r-md); }
 /* 자막은 영상에 굽지 않는다(파일로 따로 올린다). 여기서는 덱과 같은 자리에 겹쳐 본다. */
 .demo-caption {
@@ -2093,4 +2114,3 @@ button:disabled { cursor: not-allowed; }
 .demo-running strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
 .demo-running small { margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .demo-blocked { margin: 0; color: var(--text-3); font-size: var(--fs-xs); }
-

@@ -5,12 +5,11 @@
 // 적은 동사를 Playwright 조작으로 옮기고 그 시각·좌표를 기록할 뿐이다.
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { TYPE_DELAY_MS } from "../../shared/demo-scenario.mjs";
-import { TAP_MS, glideCursor, installCursorOverlay, moveCursor, showTap } from "./cursor-overlay.mjs";
+import { TYPE_DELAY_MS, stepBudgetMs } from "../../shared/demo-scenario.mjs";
+import { frameForBox } from "../../shared/demo-camera.mjs";
+import { TAP_MS, glideCursor, installCursorOverlay, moveCursor, prepareTap, lastTap } from "./cursor-overlay.mjs";
 import { waitForServer } from "./site.mjs";
-
-const sleep = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+import { abortable, demoDelay as sleep, startDemoCommand } from "./demo-runtime.mjs";
 
 const GLIDE_MS = 320;        // 커서가 한 번 움직이는 데 걸리는 시간
 const HOVER_MS = 200;
@@ -81,38 +80,53 @@ export function describeTarget(target) {
   return `${target.kind}="${target.value}"`;
 }
 
-function runCommand(command, { cwd, env, label }) {
-  return new Promise((resolve, reject) => {
-    const [file, ...args] = command;
-    const child = spawn(file, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
-    child.stdout.on("data", () => {});
-    child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-8192); });
-    child.once("error", reject);
-    child.once("close", code => code === 0
-      ? resolve()
-      : reject(new Error(`${label} 실패 (종료 ${code})${stderr.trim() ? `\n${stderr.trim()}` : ""}`)));
-  });
-}
-
 /**
  * 시나리오가 말한 앱을 띄우고 촬영할 페이지를 돌려준다.
  *
  * 돌려주는 `close`는 띄운 순서의 반대로 거둔다. 서버·앱이 남으면 다음 촬영이
  * 포트나 프로파일에서 막힌다.
  */
-export async function launchDemoApp(scenario, { workDir, onLog = () => {} }) {
+export async function launchDemoApp(scenario, { workDir, onLog = () => {}, signal } = {}) {
+  signal?.throwIfAborted();
   const { _electron, chromium } = await loadPlaywright();
   const app = scenario.app;
   const cwd = app.cwd ? path.resolve(app.cwd) : process.cwd();
   const consoleLines = [];
+  const windowLines = new Map();
   const cleanups = [];
-  const close = async () => {
-    for (const cleanup of cleanups.reverse()) await cleanup().catch(() => {});
-    cleanups.length = 0;
+  const lifetime = new AbortController();
+  const running = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
+  let closing = null, closed = false, readyTimer = null;
+  const own = cleanup => {
+    if (closed) void cleanup().catch(() => {});
+    else cleanups.push(cleanup);
+  };
+  const close = () => {
+    if (closing) return closing;
+    closed = true;
+    clearTimeout(readyTimer);
+    running.removeEventListener("abort", onAbort);
+    lifetime.abort(new Error("촬영 앱을 닫았습니다."));
+    // 하나가 닫히길 기다리느라 서버의 종료까지 늦추지 않는다.
+    closing = Promise.allSettled(cleanups.splice(0).reverse().map(cleanup => cleanup())).then(() => {});
+    return closing;
+  };
+  const onAbort = () => { void close(); };
+  running.addEventListener("abort", onAbort, { once: true });
+  const wait = promise => abortable(promise, running);
+  const listen = window => {
+    const lines = [];
+    windowLines.set(window, lines);
+    window.on("console", message => {
+      lines.push(message.text());
+      consoleLines.push(message.text());
+      if (lines.length > 500) lines.shift();
+      if (consoleLines.length > 500) consoleLines.shift();
+    });
   };
 
   try {
+    running.throwIfAborted();
     for (const [relative, body] of Object.entries(app.files)) {
       const file = path.join(workDir, relative);
       fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -124,50 +138,54 @@ export async function launchDemoApp(scenario, { workDir, onLog = () => {} }) {
 
     if (app.prepare) {
       onLog(`준비: ${app.prepare.join(" ")}`);
-      await runCommand(app.prepare, { cwd, env, label: "시나리오 준비 명령" });
+      const preparing = startDemoCommand(app.prepare, { cwd, env, label: "시나리오 준비 명령" });
+      own(() => preparing.stop());
+      const timeout = setTimeout(() => lifetime.abort(new Error("시나리오 준비 명령의 제한 시간이 지났습니다.")), app.prepareTimeoutMs);
+      try {
+        const result = await wait(preparing.exited);
+        if (result.code !== 0) throw new Error(result.message);
+      } finally { clearTimeout(timeout); await preparing.stop(); }
     }
 
     if (app.server) {
       onLog(`화면 서버: ${app.server.command.join(" ")}`);
-      const [file, ...args] = app.server.command;
-      const server = spawn(file, args, { cwd, env, stdio: ["ignore", "ignore", "pipe"], detached: true });
-      let serverError = "";
-      server.stderr.on("data", chunk => { serverError = (serverError + chunk).slice(-8192); });
-      cleanups.push(async () => { try { process.kill(-server.pid, "SIGTERM"); } catch { server.kill("SIGTERM"); } });
-      const exited = new Promise((_, reject) => server.once("close", code =>
-        reject(new Error(`화면 서버가 먼저 끝났습니다 (종료 ${code})${serverError.trim() ? `\n${serverError.trim()}` : ""}`))));
-      await Promise.race([waitForServer(app.server.url), exited]);
+      const server = startDemoCommand(app.server.command, { cwd, env, label: "화면 서버" });
+      own(() => server.stop());
+      server.exited.then(result => {
+        if (!closed) lifetime.abort(new Error(result.message));
+      }, error => { if (!closed) lifetime.abort(error); });
+      await waitForServer(app.server.url, { timeoutMs: app.server.timeoutMs, signal: running });
     }
 
+    readyTimer = setTimeout(() => lifetime.abort(new Error("앱 준비의 제한 시간이 지났습니다.")), app.ready.timeoutMs);
     let page = null;
     if (app.kind === "electron") {
-      const launched = await _electron.launch({
+      const launched = await wait(_electron.launch({
         executablePath: path.resolve(cwd, app.executable),
         args: [...app.args, `--user-data-dir=${path.join(workDir, "profile")}`],
         env, cwd, timeout: app.ready.timeoutMs,
-      });
-      cleanups.push(() => launched.close());
+      }).then(launched => { own(() => launched.close()); return launched; }));
       // 준비 신호는 창이 열리자마자 올 수 있다. 창을 고른 뒤에 듣기 시작하면 그
       // 줄을 놓치고 영영 기다린다. 그래서 열리는 모든 창을 즉시 듣는다.
       const heard = new Set();
-      const listen = window => {
+      const listenWindow = window => {
         if (heard.has(window)) return;
         heard.add(window);
-        window.on("console", message => consoleLines.push(message.text()));
+        listen(window);
       };
-      launched.on("window", listen);
-      for (const window of launched.windows()) listen(window);
+      launched.on("window", listenWindow);
+      for (const window of launched.windows()) listenWindow(window);
       const deadline = Date.now() + app.ready.timeoutMs;
       while (!page && Date.now() < deadline) {
-        for (const window of launched.windows()) listen(window);
+        for (const window of launched.windows()) listenWindow(window);
         page = launched.windows().find(window => !app.window || window.url().startsWith(app.window)) || null;
-        if (!page) await sleep(200);
+        if (!page) await sleep(200, running);
       }
       if (!page) {
         throw new Error(`앱 창을 찾지 못했습니다${app.window ? ` (${app.window})` : ""}. `
           + `열린 창: ${JSON.stringify(launched.windows().map(window => window.url()))}`);
       }
-      await launched.evaluate(({ BrowserWindow }) => {
+      await wait(launched.evaluate(({ BrowserWindow }) => {
         for (const window of BrowserWindow.getAllWindows()) {
           // 개발 모드로 띄운 앱은 DevTools를 연다. 영상에 나오면 안 된다.
           window.webContents.closeDevTools();
@@ -175,42 +193,48 @@ export async function launchDemoApp(scenario, { workDir, onLog = () => {} }) {
           // 조작은 OS 히트 테스트를 거치지 않아 그대로 들어간다.
           window.setIgnoreMouseEvents(true);
         }
-      }).catch(() => {});
+      }));
     } else {
       // headless라 실제 마우스가 닿지 않는다. 덱 촬영과 같은 렌더 경로다.
-      const browser = await chromium.launch({ headless: true, args: ["--enable-gpu", "--use-gl=angle", "--use-angle=metal"] });
-      cleanups.push(() => browser.close());
-      const context = await browser.newContext({
+      const browser = await wait(chromium.launch({ headless: true, args: ["--enable-gpu", "--use-gl=angle", "--use-angle=metal"] })
+        .then(browser => { own(() => browser.close()); return browser; }));
+      const context = await wait(browser.newContext({
         viewport: { width: scenario.viewport.width, height: scenario.viewport.height },
         deviceScaleFactor: scenario.viewport.scale,
-      });
-      page = await context.newPage();
-      page.on("console", message => consoleLines.push(message.text()));
-      await page.goto(app.url, { waitUntil: "domcontentloaded", timeout: app.ready.timeoutMs });
+      }));
+      page = await wait(context.newPage());
+      listen(page);
+      await wait(page.goto(app.url, { waitUntil: "domcontentloaded", timeout: app.ready.timeoutMs }));
     }
 
     if (app.ready.selector) {
-      await page.waitForSelector(app.ready.selector, { state: "visible", timeout: app.ready.timeoutMs });
+      await wait(page.waitForSelector(app.ready.selector, { state: "visible", timeout: app.ready.timeoutMs }));
     }
     if (app.ready.console) {
+      // Electron.launch가 돌아오기 전에 찍힌 준비 신호도 Playwright의 기록에서 읽는다.
+      // 다른 창의 같은 로그로 촬영할 창이 준비됐다고 판단하지 않는다.
+      const lines = windowLines.get(page);
+      const early = await wait(page.consoleMessages());
+      lines.push(...early.map(message => message.text()));
       const deadline = Date.now() + app.ready.timeoutMs;
-      while (!consoleLines.some(line => line.includes(app.ready.console))) {
+      while (!lines.some(line => line.includes(app.ready.console))) {
         if (Date.now() > deadline) throw new Error(`앱 준비 신호를 기다리다 시간이 지났습니다: "${app.ready.console}"`);
-        await sleep(200);
+        await sleep(200, running);
       }
     }
 
     // 창으로는 1920×1080을 만들 수 없다(내장 화면 작업 영역에 막힌다). 에뮬레이션으로
     // CSS 크기와 배율을 주면 스크린캐스트가 정확히 그 크기의 PNG를 준다.
-    const session = await page.context().newCDPSession(page);
-    await session.send("Emulation.setDeviceMetricsOverride", {
+    const session = await wait(page.context().newCDPSession(page));
+    await wait(session.send("Emulation.setDeviceMetricsOverride", {
       width: scenario.viewport.width, height: scenario.viewport.height,
       deviceScaleFactor: scenario.viewport.scale, mobile: false,
-    });
-    await installCursorOverlay(page);
-    await page.evaluate(() => document.fonts?.ready).catch(() => {});
-    await sleep(600);
-    return { page, session, consoleLines, close };
+    }));
+    await wait(installCursorOverlay(page));
+    await wait(page.evaluate(() => document.fonts?.ready));
+    await sleep(600, running);
+    clearTimeout(readyTimer);
+    return { page, session, consoleLines, close, signal: running };
   } catch (error) {
     await close();
     throw error;
@@ -218,8 +242,9 @@ export async function launchDemoApp(scenario, { workDir, onLog = () => {} }) {
 }
 
 async function boxOf(locator, target, timeoutMs) {
-  await locator.first().waitFor({ state: "visible", timeout: timeoutMs });
-  const box = await locator.first().boundingBox();
+  await locator.waitFor({ state: "visible", timeout: timeoutMs });
+  await locator.scrollIntoViewIfNeeded({ timeout: timeoutMs });
+  const box = await locator.boundingBox({ timeout: timeoutMs });
   if (!box) throw new Error(`대상의 위치를 읽지 못했습니다: ${describeTarget(target)}`);
   return { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) };
 }
@@ -230,10 +255,11 @@ async function boxOf(locator, target, timeoutMs) {
  * `clock()`은 녹화 시작 기준 경과 ms다. 기록한 시각이 곧 편집 계획의 근거이므로
  * 걸음을 실행하는 쪽과 시계를 읽는 쪽이 같아야 한다.
  */
-export async function runScenes(page, scenario, { clock, onEvent = () => {} }) {
+export async function runScenes(page, scenario, { clock, onEvent = () => {}, signal }) {
+  signal?.throwIfAborted();
   const random = seededRandom(scenario.name);
   let cursor = { x: scenario.viewport.width / 2, y: scenario.viewport.height / 2 };
-  await moveCursor(page, cursor.x, cursor.y);
+  await abortable(moveCursor(page, cursor.x, cursor.y), signal);
 
   const glide = async (to, motion) => {
     await glideCursor(page, cursor, to, motion.glideMs);
@@ -242,63 +268,109 @@ export async function runScenes(page, scenario, { clock, onEvent = () => {} }) {
 
   const scenes = [];
   for (const scene of scenario.scenes) {
+    signal?.throwIfAborted();
     const motion = sceneMotion(scene.timeScale);
     const startMs = clock();
     const steps = [];
+    let screenText = null;
+    const rememberText = async () => {
+      const source = page.locator(scene.textFrom).first();
+      if (!await abortable(source.isVisible().catch(() => false), signal)) return;
+      const text = await abortable(source.innerText({ timeout: 2000 })
+        .then(text => text.replace(/\n{3,}/g, "\n\n").trim()).catch(() => null), signal);
+      if (text) screenText = text;
+    };
     onEvent({ phase: "scene", scene: scene.id });
-    for (const step of scene.steps) {
+    for (const [index, step] of scene.steps.entries()) {
+      signal?.throwIfAborted();
       const at = clock();
-      const record = { verb: step.verb, startMs: at, endMs: at };
+      const record = { verb: step.verb, zoom: step.zoom, startMs: at, endMs: at };
+      onEvent({ phase: "step", scene: scene.id, step: index + 1, verb: step.verb,
+        target: step.target ? describeTarget(step.target) : null });
+      const deadline = new AbortController();
+      // pause는 정확히 정한 만큼 쉰다. 타이머 경합으로 정상 pause를 실패시키지 않는다.
+      const timer = setTimeout(() => deadline.abort(new Error("걸음의 제한 시간이 지났습니다.")),
+        stepBudgetMs(step, scene.timeScale) + 1000);
+      const running = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
+      const act = task => { running.throwIfAborted(); return abortable(task(), running); };
       try {
+        // 다음 화면으로 넘어가는 조작 뒤에는 현재 오버레이가 없어질 수 있다.
+        // 마지막에만 읽으면 실제 장면 대신 뒤의 main을 대본 근거로 남기게 된다.
+        if (["click", "press"].includes(step.verb)) await act(rememberText);
         if (step.verb === "pause") {
-          await sleep(step.ms);
+          await sleep(step.ms, running);
+        } else if (step.verb === "overview") {
+          // 편집 구도만 바꾼다. 실제 앱·마우스·포커스는 움직이지 않는다.
+        } else if (step.verb === "focus") {
+          const target = locate(page, step.target);
+          await act(() => target.waitFor({ state: "visible", timeout: step.timeoutMs }));
+          const handle = await act(() => target.elementHandle({ timeout: step.timeoutMs }));
+          if (!handle) throw new Error("보여 줄 영역이 사라졌습니다.");
+          try {
+            await act(() => handle.waitForElementState("stable", { timeout: step.timeoutMs }));
+            const box = await act(() => handle.boundingBox());
+            if (!box) throw new Error("보여 줄 영역의 위치를 읽지 못했습니다.");
+            record.box = { x: box.x, y: box.y, w: box.width, h: box.height };
+            record.padding = step.padding;
+            record.maxZoom = step.maxZoom;
+            frameForBox(record.box, scenario.viewport, step);
+          } finally { await handle.dispose(); }
         } else if (step.verb === "press") {
-          await page.keyboard.press(step.key);
+          await act(() => page.keyboard.press(step.key));
         } else if (step.verb === "waitFor") {
-          await locate(page, step.target).first().waitFor({ state: "visible", timeout: step.timeoutMs });
+          await act(() => locate(page, step.target).waitFor({ state: "visible", timeout: step.timeoutMs }));
         } else if (step.verb === "waitGone") {
-          await locate(page, step.target).first().waitFor({ state: "hidden", timeout: step.timeoutMs });
+          await act(() => locate(page, step.target).waitFor({ state: "hidden", timeout: step.timeoutMs }));
         } else {
           const locator = locate(page, step.target);
-          const box = await boxOf(locator, step.target, step.timeoutMs);
+          const box = await act(() => boxOf(locator, step.target, step.timeoutMs));
           const point = { x: box.x + Math.round(box.w / 2), y: box.y + Math.round(box.h / 2) };
           record.box = box;
           record.point = point;
-          await glide(point, motion);
+          await act(() => glide(point, motion));
           if (step.verb === "hover") {
-            await sleep(motion.hoverMs);
+            await act(() => locator.hover({ timeout: step.timeoutMs }));
+            await sleep(motion.hoverMs, running);
           } else if (step.verb === "scroll") {
+            await act(() => locator.hover({ timeout: step.timeoutMs }));
             // 한 번에 굴리면 화면이 튄다. 나눠서 굴린다.
             for (let done = 0; done < Math.abs(step.delta); done += 120) {
-              await page.mouse.wheel(0, Math.sign(step.delta) * Math.min(120, Math.abs(step.delta) - done));
-              await sleep(motion.scrollStepMs);
+              await act(() => page.mouse.wheel(0, Math.sign(step.delta) * Math.min(120, Math.abs(step.delta) - done)));
+              await sleep(motion.scrollStepMs, running);
             }
           } else {
-            await page.mouse.down();
-            await showTap(page, motion.tapMs);
-            await sleep(motion.clickHoldMs + Math.round(random() * motion.clickJitterMs));
-            await page.mouse.up();
+            // 실제 클릭은 locator가 수행한다. 이동 후 레이아웃이 바뀌거나 버튼이 가려져도
+            // 안정·활성·hit target 검사를 다시 통과해야 하며 엉뚱한 좌표를 누르지 않는다.
+            await act(() => prepareTap(page, motion.tapMs));
+            await act(() => locator.click({ timeout: step.timeoutMs,
+              delay: motion.clickHoldMs + Math.round(random() * motion.clickJitterMs) }));
+            const clicked = await act(() => lastTap(page));
+            if (clicked) record.point = cursor = clicked;
             if (step.verb === "type") {
-              await sleep(motion.typeLeadMs);
+              const input = await act(() => locator.elementHandle({ timeout: step.timeoutMs }));
+              if (!input) throw new Error("입력할 대상이 사라졌습니다.");
+              try { await act(() => input.waitForElementState("editable", { timeout: step.timeoutMs })); }
+              finally { await input.dispose(); }
+              await sleep(motion.typeLeadMs, running);
               for (const char of step.text) {
-                await page.keyboard.type(char);
-                await sleep(motion.typeDelayMs.min + random() * (motion.typeDelayMs.max - motion.typeDelayMs.min));
+                await act(() => locator.pressSequentially(char, { timeout: step.timeoutMs }));
+                await sleep(motion.typeDelayMs.min + random() * (motion.typeDelayMs.max - motion.typeDelayMs.min), running);
               }
             }
           }
         }
       } catch (error) {
         const where = step.target ? ` (${describeTarget(step.target)})` : "";
-        throw new Error(`장면 ${scene.id}의 ${step.verb}${where}에서 멈췄습니다: ${error.message}`, { cause: error });
-      }
+        const reason = running.aborted ? running.reason : error;
+        throw new Error(`장면 ${scene.id}의 ${step.verb}${where}에서 멈췄습니다: ${reason.message}`, { cause: reason });
+      } finally { clearTimeout(timer); }
       record.endMs = clock();
       steps.push(record);
+      onEvent({ phase: "step-complete", scene: scene.id, step: index + 1, record });
     }
     // 장면이 끝난 화면의 글. 대본 초안의 근거이며 대본 자체는 여기서 만들지 않는다.
-    const screenText = await page.locator(scene.textFrom).first().innerText({ timeout: 2000 })
-      .then(text => text.replace(/\n{3,}/g, "\n\n").trim())
-      .catch(() => null);
-    scenes.push({ id: scene.id, startMs, endMs: clock(), timeScale: scene.timeScale, steps, screenText });
+    await rememberText();
+    scenes.push({ id: scene.id, startMs, endMs: clock(), timeScale: scene.timeScale, camera: scene.camera, steps, screenText });
   }
   return scenes;
 }

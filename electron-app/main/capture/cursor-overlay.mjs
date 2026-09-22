@@ -7,7 +7,8 @@
 // hover는 그대로 일어나고, 그림만 우리가 아는 좌표를 따른다.
 function overlaySource() {
   return () => {
-    if (window.__appDemoCursor) return;
+    if (window.__appDemoCursor && document.getElementById("app-demo-cursor")) return;
+    window.__appDemoCursor?.dispose?.();
     const install = () => {
       if (!document.body || document.getElementById("app-demo-cursor")) return;
       const style = document.createElement("style");
@@ -52,6 +53,8 @@ function overlaySource() {
       let at = "translate(-9999px, -9999px)";
       window.__appDemoCursor = {
         drawn: 0,
+        tapMs: 420,
+        lastClick: null,
         place(x, y) {
           at = `translate(${x}px, ${y}px)`;
           point.style.transform = at;
@@ -84,6 +87,16 @@ function overlaySource() {
           ring.dataset.on = "true";
         },
       };
+      // locator가 레이아웃 변화 뒤 클릭 지점을 다시 골랐을 때도 실제 누른 곳에
+      // 표시와 확대가 맞아야 한다. mousemove는 여전히 그림을 끌고 가지 않는다.
+      const onPointerDown = event => {
+        const cursor = window.__appDemoCursor;
+        cursor.lastClick = { x: event.clientX, y: event.clientY };
+        cursor.place(event.clientX, event.clientY);
+        cursor.tap(cursor.tapMs);
+      };
+      addEventListener("pointerdown", onPointerDown, true);
+      window.__appDemoCursor.dispose = () => removeEventListener("pointerdown", onPointerDown, true);
     };
     if (document.body) install();
     else addEventListener("DOMContentLoaded", install, { once: true });
@@ -109,8 +122,17 @@ export async function moveCursor(page, x, y) {
 
 export const TAP_MS = 420;
 
-export async function showTap(page, ms = TAP_MS) {
-  await page.evaluate(value => window.__appDemoCursor?.tap(value), ms).catch(() => {});
+export async function prepareTap(page, ms = TAP_MS) {
+  await page.evaluate(value => {
+    if (!window.__appDemoCursor) return;
+    window.__appDemoCursor.tapMs = value;
+    window.__appDemoCursor.lastClick = null;
+  }, ms);
+}
+
+export async function lastTap(page) {
+  // 클릭이 문서 이동을 일으켰으면 이전 문서의 좌표는 이미 사라졌다.
+  return page.evaluate(() => window.__appDemoCursor?.lastClick ?? null).catch(() => null);
 }
 
 /**

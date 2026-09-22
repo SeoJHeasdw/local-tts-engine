@@ -183,6 +183,8 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
   }
   return {
     fail,
+    // 앱 조작도 이 실패를 함께 기다린다. 인코더가 죽은 뒤 다음 버튼을 누르지 않는다.
+    failed,
     async ready() {
       if (phase !== 'created') throw failure || new Error('촬영 준비를 중복 호출했습니다.');
       phase = 'preparing';
@@ -222,7 +224,9 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
       if (phase !== 'recording') throw failure || new Error('진행 중인 촬영이 없습니다.');
       if (endAt !== null) {
         if (!Number.isFinite(endAt) || endAt <= startedAt) throw new Error('촬영 종료 시각이 시작보다 뒤여야 합니다.');
-        capFrames = Math.min(capFrames, captureFrameCount(endAt - startedAt, fps));
+        const requested = captureFrameCount(endAt - startedAt, fps);
+        if (requested > capFrames) throw new Error('촬영이 예정한 상한을 넘었습니다. 뒤가 잘린 영상을 완료로 남기지 않습니다.');
+        capFrames = requested;
       }
       clearInterval(timer); timer = null; phase = 'finishing'; clearAcks(); unlisten();
       try {

@@ -10,12 +10,27 @@ import { normalizeScenario, resolvePlaceholders } from "../../shared/demo-scenar
 import { launchDemoApp, runScenes } from "./app-page.mjs";
 import { startScreencastEncoder } from "./recorder.mjs";
 import { writeCaptureReport } from "./encoding.mjs";
+import { abortable, demoDelay } from "./demo-runtime.mjs";
 
 export const RAW_FILE = "raw.mkv";
 export const SCENES_FILE = "scenes.json";
 // 촬영이 제한 시간을 다 쓰고도 끝나지 않는 일을 대비한 상한. 프레임 수는 상한일
 // 뿐이라 실제 길이는 finish({ endAt })가 정한다.
 const BUDGET_MARGIN_MS = 60_000;
+
+// 실패 진단만 남은 폴더는 같은 이름으로 다시 찍을 수 있다. 대본·원본·다른 파일이
+// 하나라도 있으면 사용자의 작업일 수 있으므로 재사용하지 않는다.
+export async function isRetryableDemoFailure(outDir, io = fs.promises) {
+  try {
+    const entries = await io.readdir(outDir);
+    if (entries.length !== 1 || entries[0] !== "demo") return false;
+    const demoDir = path.join(outDir, "demo");
+    const names = await io.readdir(demoDir);
+    if (names.some(name => !["failure.json", "failure.png"].includes(name))) return false;
+    const report = JSON.parse(await io.readFile(path.join(demoDir, "failure.json"), "utf8"));
+    return report.operation === "app-demo-record" && report.status === "failed";
+  } catch { return false; }
+}
 
 export function losslessRecordArgs({ fps, output }) {
   return [
@@ -62,43 +77,63 @@ export function readScenario(file, workDir) {
  * 앱 데모를 찍는다. 성공하면 결과 폴더의 `demo/`에 무손실 원본과 촬영 기록을 남긴다.
  *
  * 끝내지 못한 원본은 지운다. 잘린 mkv가 다음 렌더의 입력으로 읽히면 안 된다.
- * 그 밖의 기록은 남긴다 — 어디까지 갔는지가 다음 시도의 근거다. 앱 화면에서
- * 취소로 결과 폴더째 버리는 길은 화면 메뉴를 만들 때 함께 붙인다.
+ * 실패 단계와 완료한 걸음은 진단으로 남긴다. 사용자가 취소한 미완료 결과 폴더는
+ * 앱 서비스가 정리한다.
  */
 export async function recordAppDemo({ scenarioFile, outDir, name, fps = 25, onEvent = () => {}, signal = null }) {
   const demoDir = path.join(outDir, "demo");
   const workDir = path.join(demoDir, "work");
-  fs.mkdirSync(workDir, { recursive: true });
+  signal?.throwIfAborted();
+  if (fs.existsSync(outDir) && fs.readdirSync(outDir).length && !await isRetryableDemoFailure(outDir)) {
+    throw new Error(`같은 이름의 촬영이 이미 있습니다: ${outDir}`);
+  }
   const scenario = readScenario(scenarioFile, workDir);
   const { frame } = scenario.viewport;
   const rawFile = path.join(demoDir, RAW_FILE);
 
-  onEvent({ phase: "launching", scenario: scenario.name });
-  const app = await launchDemoApp(scenario, { workDir, onLog: text => onEvent({ phase: "log", text }) });
+  const controller = new AbortController();
+  const running = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  let app = null, timer = null, progress = null;
+  const completedSteps = [];
+  const announce = event => {
+    if (["launching", "recording", "scene", "step"].includes(event.phase)) progress = event;
+    if (event.phase === "step-complete") completedSteps.push(event);
+    onEvent(event);
+  };
   let recorder = null;
   let finished = false;
   try {
-    signal?.throwIfAborted();
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.rmSync(path.join(demoDir, "failure.png"), { force: true });
+    announce({ phase: "launching", scenario: scenario.name });
+    app = await launchDemoApp(scenario, { workDir, signal: running,
+      onLog: text => announce({ phase: "log", text }) });
+    running.throwIfAborted();
     recorder = startScreencastEncoder({
       session: app.session,
       ffmpegArgs: losslessRecordArgs({ fps, output: rawFile }),
       width: frame.width, height: frame.height, fps,
     });
-    await recorder.ready();
+    recorder.failed.catch(error => controller.abort(error));
+    app.page.once("crash", () => recorder?.fail(new Error("촬영 페이지가 중단됐습니다.")));
+    app.page.once("close", () => recorder?.fail(new Error("촬영 페이지가 닫혔습니다.")));
+    await abortable(recorder.ready(), running);
     // 첫 프레임의 브라우저 시각이 시스템 시계보다 몇 ms 앞설 수 있다. 바로 시작하면
     // 시작 시각 이전의 프레임이 없어 촬영이 그 자리에서 멈춘다.
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await demoDelay(150, running);
     const startedAt = Date.now();
     const startedMono = performance.now();
     recorder.begin(startedAt, Math.ceil((scenario.budgetMs + BUDGET_MARGIN_MS) * fps / 1000));
-    onEvent({ phase: "recording", scenario: scenario.name, scenes: scenario.scenes.length });
+    timer = setTimeout(() => controller.abort(new Error("시나리오의 촬영 상한 시간이 지났습니다.")),
+      scenario.budgetMs + BUDGET_MARGIN_MS);
+    announce({ phase: "recording", scenario: scenario.name, scenes: scenario.scenes.length });
 
     const clock = () => Math.round(performance.now() - startedMono);
-    const recorded = await runScenes(app.page, scenario, { clock, onEvent });
+    const recorded = await runScenes(app.page, scenario, { clock, onEvent: announce, signal: app.signal });
     const endAt = Date.now();
-    const frames = await recorder.finish({ endAt });
+    clearTimeout(timer);
+    const frames = await abortable(recorder.finish({ endAt }), running);
     recorder = null;
-    finished = true;
 
     const durationMs = Math.round(frames.written * 1000 / fps);
     const scenes = stitchScenes(recorded, durationMs);
@@ -118,12 +153,32 @@ export async function recordAppDemo({ scenarioFile, outDir, name, fps = 25, onEv
       scenes,
       generatedAt: new Date().toISOString(),
     };
+    running.throwIfAborted();
     writeCaptureReport(path.join(demoDir, SCENES_FILE), record);
-    onEvent({ phase: "recorded", durationMs, frames: frames.written, duplicated: frames.duplicated });
+    finished = true;
+    fs.rmSync(path.join(demoDir, "failure.json"), { force: true });
+    fs.rmSync(path.join(demoDir, "failure.png"), { force: true });
+    announce({ phase: "recorded", durationMs, frames: frames.written, duplicated: frames.duplicated });
     return record;
+  } catch (error) {
+    const reason = running.aborted ? running.reason : error;
+    // 실행 실패의 근거는 남기되 잘린 영상은 성공 입력으로 남기지 않는다.
+    if (!signal?.aborted) {
+      if (app && !app.page.isClosed()) {
+        await app.page.screenshot({ path: path.join(demoDir, "failure.png"), timeout: 1500 }).catch(() => {});
+      }
+      try {
+        writeCaptureReport(path.join(demoDir, "failure.json"), {
+          schemaVersion: 1, operation: "app-demo-record", status: "failed", scenario: scenario.name,
+          message: reason.message, progress, completedSteps, generatedAt: new Date().toISOString(),
+        });
+      } catch { /* 원래 실패 원인을 보존한다. */ }
+    }
+    throw reason;
   } finally {
+    clearTimeout(timer);
     if (recorder) await recorder.abort().catch(() => {});
-    await app.close();
+    await app?.close();
     // 작업 폴더는 이번 촬영의 앱 데이터다. 결과에 남길 이유가 없다.
     fs.rmSync(workDir, { recursive: true, force: true });
     if (!finished) fs.rmSync(rawFile, { force: true });

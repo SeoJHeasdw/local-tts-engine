@@ -57,7 +57,7 @@ export function createStudio({
     emit, jobSnapshot, monitor, readAppSettings, requireRuntimeTool, runProcess, state,
   });
   const {
-    listDemoScenarios, pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, saveDemoScript,
+    listDemoScenarios, pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, readDemoCameraPreview, saveDemoScript,
     startDemoRecord, startDemoVoice, startDemoRender,
   } = createAppDemoService({
     dialog, emit, jobSnapshot, readAppSettings, requireRuntimeTool, runProcess, state,
@@ -94,7 +94,7 @@ export function createStudio({
     deleteOutput, dialog, emit, findVideoTimeline, finishRecording,
     finishedUnitNames, ipcMain, jobSnapshot, launchPipeline,
     listDemoScenarios, listOutputs, listRecordingSources, loadCatalog, pickDemoProject, pickDemoScenario,
-    readActiveJob, readAppSettings, readDemoProject, readDemoScenario,
+    readActiveJob, readAppSettings, readDemoProject, readDemoScenario, readDemoCameraPreview,
     registerSelected, renameOutput, requireRuntimeTool, resolveOutputFile,
     runFineTune, runTextVoiceCandidates, runVideoEdit, saveAppSettings, saveDemoScript,
     selectTextVoice, setClearedFindings, setOutputReview, shell,

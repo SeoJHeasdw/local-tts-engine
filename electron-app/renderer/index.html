@@ -674,6 +674,43 @@
       </main>
     </div>
 
+    <dialog class="modal demo-camera-modal" id="demo-camera-dialog" aria-labelledby="demo-camera-title">
+      <div class="modal-head"><h2 id="demo-camera-title">구도 편집</h2></div>
+      <p id="demo-camera-status" role="status"></p>
+      <div class="demo-camera-controls">
+        <label class="field"><span>보여 줄 방식</span><select id="demo-camera-mode">
+          <option value="inherit">촬영 설정 따름</option><option value="overview">전체 화면</option>
+          <option value="auto">촬영 기록으로 자동 확대</option><option value="focus">직접 영역 지정</option>
+        </select></label>
+        <button type="button" class="secondary-small" id="demo-camera-auto-point">자동 확대 지점 보기</button>
+      </div>
+      <div class="demo-camera-pictures">
+        <section><h3>① 원본에서 보여 줄 영역을 드래그</h3>
+          <div id="demo-camera-source" class="demo-camera-frame demo-camera-source" tabindex="0"
+            aria-label="확대 영역 선택. 드래그로 그리고 방향키로 이동합니다.">
+            <img id="demo-camera-image" alt="선택한 장면의 촬영 원본" draggable="false">
+            <div id="demo-camera-selection" class="demo-camera-selection hidden"></div>
+          </div>
+          <small>다시 드래그하면 영역을 바꿉니다. 방향키로 이동할 수도 있습니다.</small>
+        </section>
+        <section><h3>② 반영될 구도 바로 보기</h3>
+          <div id="demo-camera-result-frame" class="demo-camera-frame"><img id="demo-camera-result" alt="선택한 구도의 사진 미리보기" draggable="false"></div>
+          <small id="demo-camera-result-note"></small>
+        </section>
+      </div>
+      <label class="field"><span id="demo-camera-time-label">미리 볼 시점</span><input id="demo-camera-time" type="range" min="0" max="1" step="40" value="0"></label>
+      <div id="demo-camera-adjustments" class="demo-camera-controls hidden">
+        <label class="field"><span>최대 확대</span><input id="demo-camera-zoom" type="range" min="1" max="3" step="0.05" value="1.6"></label>
+        <label class="field"><span>영역 주변 여백</span><input id="demo-camera-padding" type="range" min="0" max="160" step="4" value="48"></label>
+      </div>
+      <p class="demo-camera-help">직접 고른 영역은 이 장면 전체에 적용됩니다. 더 크게 보려면 영역을 작게 그리세요. 사진은 즉시 바뀌고, 완성 영상은 아래 ‘저장하고 영상에 적용’을 누르면 만들어집니다.</p>
+      <div class="demo-camera-actions">
+        <button type="button" class="secondary-small" id="demo-camera-cancel">취소</button>
+        <button type="button" class="secondary-small" id="demo-camera-save">구도만 저장</button>
+        <button type="button" class="primary-small" id="demo-camera-apply">저장하고 영상에 적용</button>
+      </div>
+    </dialog>
+
     <dialog class="modal settings-modal" id="model-settings-dialog" aria-labelledby="settings-title">
       <div class="modal-head"><h2 id="settings-title">설정</h2><button type="button" class="icon-button" data-close-dialog="model-settings-dialog" aria-label="설정 닫기">×</button></div>
       <div class="settings-shell">

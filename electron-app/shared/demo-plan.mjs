@@ -1,3 +1,5 @@
+import { cameraSetting, cameraKeyframes, clampCenter, frameForBox } from "./demo-camera.mjs";
+
 // 촬영 기록(scenes.json)과 장면별 내레이션 길이에서 편집 계획을 만든다.
 // 순수 계산이다. ffmpeg 인자는 main/editing/demo-render.mjs가 이 계획을 받아 만든다.
 //
@@ -13,6 +15,7 @@ export const PLAN_DEFAULTS = Object.freeze({
   zoomInMs: 600,
   holdAfterMs: 800,   // 걸음이 끝나고 이 만큼 더 확대를 유지한다
   zoomOutMs: 600,
+  mergeDistance: 0.22, // 화면 비율로 잰 중심 거리. 먼 대상은 전체 화면을 거쳐 간다
   mergeGapMs: 1500,   // 다음 확대가 이 안에 오면 되돌리지 않고 옮겨 간다
   narrationLeadMs: 300,
   narrationTailMs: 500,
@@ -142,45 +145,6 @@ function planScene(scene, narrationMs, options, frameMs) {
   return { segments, holdFrames, outFrames: played + holdFrames };
 }
 
-function clampCenter(point, z, viewport) {
-  const half = { x: viewport.width / (2 * z), y: viewport.height / (2 * z) };
-  return {
-    cx: Math.min(Math.max(point.cx, half.x), viewport.width - half.x),
-    cy: Math.min(Math.max(point.cy, half.y), viewport.height - half.y),
-  };
-}
-
-// 확대 키프레임. 값은 CSS px이고 시각은 완성 영상 기준이다. z=1에서는 화면 전체가
-// 보이므로 중심은 언제나 화면 한가운데다 — 가두기가 그 사실을 만든다.
-function zoomKeyframes(marks, options, frameMs, totalFrames, viewport) {
-  const frame = ms => Math.round(ms / frameMs);
-  const middle = { cx: viewport.width / 2, cy: viewport.height / 2 };
-  const keys = [];
-  const push = (atFrame, z, point) => {
-    const at = Math.min(Math.max(atFrame, 0), totalFrames);
-    const { cx, cy } = clampCenter(point, z, viewport);
-    const last = keys.at(-1);
-    if (last && last.atFrame === at) { last.z = z; last.cx = cx; last.cy = cy; return; }
-    if (last && last.atFrame > at) return;
-    keys.push({ atFrame: at, z, cx, cy });
-  };
-  for (const [index, mark] of marks.entries()) {
-    const point = { cx: mark.point.x, cy: mark.point.y };
-    const inFrom = mark.startFrame - frame(options.leadMs);
-    const inTo = inFrom + frame(options.zoomInMs);
-    const holdTo = Math.max(inTo, mark.endFrame + frame(options.holdAfterMs));
-    const next = marks[index + 1];
-    const nextInFrom = next ? next.startFrame - frame(options.leadMs) : null;
-    // 되돌리는 도중에 다음 확대가 오면 축소 자체가 깜빡임이 된다. 유지한 채 옮긴다.
-    const merged = next !== undefined && nextInFrom - holdTo <= frame(options.mergeGapMs);
-    if (keys.length === 0 || keys.at(-1).z === 1) push(inFrom, 1, middle);
-    push(inTo, options.zoom, point);
-    push(holdTo, options.zoom, point);
-    if (!merged) push(holdTo + frame(options.zoomOutMs), 1, middle);
-  }
-  return keys;
-}
-
 /**
  * 촬영 기록과 장면별 내레이션 길이로 편집 계획을 만든다.
  *
@@ -188,7 +152,7 @@ function zoomKeyframes(marks, options, frameMs, totalFrames, viewport) {
  * 원본 길이를 따른다. 대본을 확정하지 않은 장면이 있어도 계획은 만들어진다 —
  * 길이만 달라지므로 대본을 고치고 다시 계획해도 다시 찍을 필요가 없다.
  */
-export function buildEditPlan(scenes, { narration = {}, options = {} } = {}) {
+export function buildEditPlan(scenes, { narration = {}, cameras = {}, options = {} } = {}) {
   if (!scenes || typeof scenes !== "object") fail("촬영 기록이 없습니다.");
   if (scenes.schemaVersion !== 1) fail("촬영 기록의 schemaVersion은 1이어야 합니다.");
   const list = Array.isArray(scenes.scenes) ? scenes.scenes : [];
@@ -234,17 +198,38 @@ export function buildEditPlan(scenes, { narration = {}, options = {} } = {}) {
       }
       return at;
     };
-    for (const step of scene.steps || []) {
-      if (!ZOOM_VERBS.has(step.verb) || step.zoom === false || !step.point) continue;
-      marks.push({
-        sceneId: scene.id,
-        startFrame: toOut(Math.round(step.startMs / frameMs)),
-        endFrame: toOut(Math.round(step.endMs / frameMs)),
-        point: step.point,
-      });
+    const camera = cameraSetting(cameras[scene.id] ?? scene.camera ?? "auto", viewport);
+    const mode = typeof camera === "string" ? camera : camera.mode;
+    const directed = (scene.steps || []).some(step => ["focus", "overview"].includes(step.verb));
+    const cameraSteps = (scene.steps || []).filter(step => ["focus", "overview"].includes(step.verb));
+    if (mode === "focus") {
+      marks.push({ sceneId: scene.id, sceneStartFrame: sceneStart, sceneEndFrame: outFrame,
+        startFrame: sceneStart, endFrame: outFrame, directed: true, framing: frameForBox(camera.box, viewport, camera) });
+    } else if (mode !== "overview") {
+      for (const [index, step] of (directed ? cameraSteps : scene.steps || []).entries()) {
+        if (step.verb === "overview") continue;
+        const focus = step.verb === "focus";
+        if (!focus && (!ZOOM_VERBS.has(step.verb) || step.zoom === false || !step.point)) continue;
+        marks.push({
+          sceneId: scene.id,
+          sceneStartFrame: sceneStart,
+          sceneEndFrame: focus && cameraSteps[index + 1]
+            ? toOut(Math.round(cameraSteps[index + 1].endMs / frameMs)) : outFrame,
+          directed: focus,
+          cutBefore: focus && cameraSteps[index - 1]?.verb === "overview",
+          // focus는 대상이 나타난 뒤부터 보여 준다. 기다리는 동안 먼저 확대하지 않는다.
+          startFrame: toOut(Math.round((focus ? step.endMs : step.startMs) / frameMs)),
+          endFrame: focus
+            ? (cameraSteps[index + 1] ? toOut(Math.round(cameraSteps[index + 1].endMs / frameMs)) : outFrame)
+            : toOut(Math.round(step.endMs / frameMs)),
+          point: step.point,
+          ...(focus ? { framing: frameForBox(step.box, viewport, { padding: step.padding, maxZoom: step.maxZoom }) } : {}),
+        });
+      }
     }
     planned.push({
       id: scene.id,
+      camera,
       srcStartMs: Math.round(scene.startMs / frameMs) * frameMs,
       srcEndMs: Math.round(scene.endMs / frameMs) * frameMs,
       outStartMs: sceneStart * frameMs,
@@ -257,7 +242,7 @@ export function buildEditPlan(scenes, { narration = {}, options = {} } = {}) {
     });
   }
 
-  const zoom = zoomKeyframes(marks, settings, frameMs, outFrame, viewport)
+  const zoom = cameraKeyframes(marks, settings, frameMs, outFrame, viewport)
     .map(key => ({ atMs: key.atFrame * frameMs, z: key.z, cx: key.cx, cy: key.cy }));
 
   return {
@@ -298,7 +283,8 @@ export function zoomAt(plan, atMs) {
   const span = to.atMs - from.atMs;
   const ratio = span > 0 ? (1 - Math.cos(Math.PI * (atMs - from.atMs) / span)) / 2 : 1;
   const mix = (a, b) => a + (b - a) * ratio;
-  const z = mix(from.z, to.z);
+  // 보이는 사각형 크기를 보간해야 두 끝에서 들어오던 제목이 전환 도중 잘리지 않는다.
+  const z = 1 / mix(1 / from.z, 1 / to.z);
   return { z, ...clampCenter({ cx: mix(from.cx, to.cx), cy: mix(from.cy, to.cy) }, z, plan.viewport) };
 }
 

@@ -46,6 +46,7 @@ export function createIpcService({
   readActiveJob,
   readAppSettings,
   readDemoProject,
+  readDemoCameraPreview,
   readDemoScenario,
   registerSelected,
   renameOutput,
@@ -523,6 +524,11 @@ export function createIpcService({
     ipcMain.handle("studio:save-demo-script", async (event, outDir, scenes) => {
       guard(event);
       return saveDemoScript(String(outDir || ""), Array.isArray(scenes) ? scenes : []);
+    });
+
+    ipcMain.handle("studio:demo-camera-preview", async (event, options = {}) => {
+      guard(event);
+      return readDemoCameraPreview({ outDir: String(options.outDir || ""), sceneId: String(options.sceneId || ""), atMs: options.atMs });
     });
 
     ipcMain.handle("studio:start-demo-record", async (event, options = {}) => {

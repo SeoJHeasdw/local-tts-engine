@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld("ttsStudio", {
   pickDemoProject: () => ipcRenderer.invoke("studio:pick-demo-project"),
   readDemoScenario: (file) => ipcRenderer.invoke("studio:read-demo-scenario", file),
   readDemoProject: (outDir) => ipcRenderer.invoke("studio:read-demo-project", outDir),
+  readDemoCameraPreview: (options) => ipcRenderer.invoke("studio:demo-camera-preview", options),
   saveDemoScript: (outDir, scenes) => ipcRenderer.invoke("studio:save-demo-script", outDir, scenes),
   startDemoRecord: (options) => ipcRenderer.invoke("studio:start-demo-record", options),
   startDemoVoice: (options) => ipcRenderer.invoke("studio:start-demo-voice", options),

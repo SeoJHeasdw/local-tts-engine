@@ -5,7 +5,10 @@ import { pathToFileURL } from "node:url";
 import { ROOT, dateFolder, runtimePaths } from "./paths.mjs";
 import { normalizeEditName } from "../shared/index.mjs";
 import { normalizeScenario } from "../shared/demo-scenario.mjs";
+import { cameraSetting } from "../shared/demo-camera.mjs";
+import { createDemoCameraPreview } from "./editing/demo-camera-preview.mjs";
 import { collectReview } from "./editing/demo-review.mjs";
+import { isRetryableDemoFailure } from "./capture/record-app.mjs";
 
 // 앱 데모 촬영을 화면에서 돌린다. 세 단계(촬영 → 목소리 → 렌더)는 CLI와 같은
 // 작업자(`workers/demo.mjs`)를 별도 프로세스로 실행한다. 한 가지 일에 두 벌의
@@ -24,6 +27,13 @@ export function createAppDemoService({
   state,
 }) {
   const WORKER = path.join(ROOT, "electron-app/main/workers/demo.mjs");
+  const previewCamera = createDemoCameraPreview({
+    ffmpeg: () => requireRuntimeTool("ffmpeg", "FFmpeg"), ffprobe: () => requireRuntimeTool("ffprobe", "FFprobe"),
+  });
+  async function readDemoCameraPreview(options) {
+    assertIdle();
+    return previewCamera(options);
+  }
 
   const busy = () => state.activeJob && ["running", "cancelling"].includes(state.activeJob.state);
 
@@ -147,7 +157,12 @@ export function createAppDemoService({
       scenario: scenes.scenario,
       durationMs: scenes.durationMs,
       frame: review.frame,
-      videos: review.videos.map(video => ({ ...video, url: pathToFileURL(path.join(outDir, video.name)).href })),
+      viewport: scenes.viewport,
+      videos: review.videos.map(video => {
+        const url = pathToFileURL(path.join(outDir, video.name));
+        url.searchParams.set("v", video.revision);
+        return { ...video, url: url.href };
+      }),
       plan: review.plan,
       captions: review.captions,
       checks: review.checks,
@@ -160,6 +175,9 @@ export function createAppDemoService({
           startMs: scene.startMs,
           endMs: scene.endMs,
           timeScale: scene.timeScale ?? 1,
+          camera: text?.camera ?? null,
+          cameraModifiedAt: text?.cameraModifiedAt ?? null,
+          recordedCamera: scene.camera ?? "auto",
           // 대본 초안의 근거다. 찍은 화면의 글을 그대로 보여 준다.
           screenText: scene.screenText || "",
           text: text?.text || "",
@@ -189,12 +207,18 @@ export function createAppDemoService({
   async function saveDemoScript(outDir, scenes) {
     const file = path.join(outDir, "demo", "script.json");
     const script = JSON.parse(await fs.readFile(file, "utf8"));
+    const recording = JSON.parse(await fs.readFile(path.join(outDir, "demo", "scenes.json"), "utf8"));
     const edits = new Map((scenes || []).map(scene => [String(scene.id), scene]));
     for (const scene of script.scenes) {
       const edit = edits.get(scene.id);
       if (!edit) continue;
       if (typeof edit.text === "string") scene.text = edit.text.trim();
       if (edit.status === "approved" || edit.status === "draft") scene.status = edit.status;
+      if (Object.hasOwn(edit, "camera")) {
+        const camera = cameraSetting(edit.camera, recording.viewport);
+        if (JSON.stringify(scene.camera ?? null) !== JSON.stringify(camera)) scene.cameraModifiedAt = new Date().toISOString();
+        scene.camera = camera;
+      }
       if (edit.selected === null || typeof edit.selected === "string") {
         const candidates = scene.voice?.candidates || [];
         if (edit.selected && !candidates.includes(edit.selected)) {
@@ -208,6 +232,8 @@ export function createAppDemoService({
   }
 
   function startJob(kind, options) {
+    // 시나리오·설정을 읽는 await 사이에 다른 화면이 시작했을 수 있다.
+    assertIdle();
     state.activeJob = {
       id: crypto.randomUUID(),
       kind,
@@ -222,13 +248,17 @@ export function createAppDemoService({
   }
 
   async function runDemoWorker(job, args, done) {
-    const node = requireRuntimeTool("node", "Node.js");
     try {
+      const node = requireRuntimeTool("node", "Node.js");
       await runProcess("demo", node, [WORKER, ...args]);
       if (state.activeJob !== job) return;
+      if (job.cancelled) throw new Error("작업을 중지했습니다.");
+      const result = await done();
+      if (state.activeJob !== job) return;
+      if (job.cancelled) throw new Error("작업을 중지했습니다.");
       job.state = "done";
       job.stage = "done";
-      emit({ type: "demo-complete", step: job.kind, ...(await done()) });
+      emit({ type: "demo-complete", step: job.kind, ...result });
     } catch (error) {
       if (state.activeJob !== job) return;
       // 굽다 멈춘 임시 파일은 작업자가 치우지만, 강제 종료까지 가면 남는다. 결과 폴더에 반쪽
@@ -258,7 +288,7 @@ export function createAppDemoService({
     const scenario = await readDemoScenario(scenarioFile);
     const name = normalizeEditName(raw.name || scenario.name);
     const outDir = await demoOutputDir(name);
-    if ((await fs.readdir(outDir).catch(() => []))?.length) {
+    if ((await fs.readdir(outDir).catch(() => []))?.length && !await isRetryableDemoFailure(outDir, fs)) {
       throw new Error("같은 이름의 촬영이 이미 있습니다. 다른 이름을 쓰거나 예전 결과를 옮겨 주세요.");
     }
     const job = startJob("demo-record", { name, scenarioFile, outDir });
@@ -307,7 +337,7 @@ export function createAppDemoService({
   }
 
   return {
-    listDemoScenarios, pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, saveDemoScript,
+    listDemoScenarios, pickDemoScenario, pickDemoProject, readDemoScenario, readDemoProject, readDemoCameraPreview, saveDemoScript,
     startDemoRecord, startDemoVoice, startDemoRender,
   };
 }

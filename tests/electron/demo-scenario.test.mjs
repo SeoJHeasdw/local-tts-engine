@@ -32,8 +32,15 @@ test('동사·대상·장면 id를 굳히고 확대 기본값을 정한다', () 
   assert.equal(scene.steps[2].zoom, true, '사람이 누르는 자리는 기본으로 확대한다');
   assert.equal(scene.steps[0].zoom, false, '기다림은 확대 대상이 아니다');
   assert.equal(scene.steps[3].delta, -400);
-  // 제한 시간의 총합이 촬영 상한이 된다.
-  assert.equal(value.budgetMs, 180000 + 1500 + 15000 + 15000);
+  assert.ok(value.budgetMs > 180000 + 1500 + 15000 + 15000, '대상 대기 외의 연출·화면 글 읽는 시간도 포함한다');
+});
+
+test('긴 타이핑과 느린 장면의 실제 길이를 녹화 상한에 포함한다', () => {
+  const value = scenario({ scenes: [{ id: 'long', timeScale: 0.125,
+    steps: [{ type: 'textarea', text: '가'.repeat(2000) }] }] });
+  assert.ok(value.budgetMs > 2000 * 70 * 8, '타이핑만 18분이 넘으므로 15초로 계산하면 안 된다');
+  assert.throws(() => scenario({ scenes: [{ id: 'bad', timeScale: 1e-20,
+    steps: [{ click: 'button' }] }] }), /촬영 상한/);
 });
 
 test('대상은 선택자 하나 또는 getBy* 하나로만 적는다', () => {
@@ -70,6 +77,20 @@ test('웹 화면은 주소만 있으면 된다', () => {
   const value = normalizeScenario({ ...base, app: { kind: 'web', url: 'http://127.0.0.1:4173/' } });
   assert.equal(value.app.url, 'http://127.0.0.1:4173/');
   assert.deepEqual(value.viewport.frame, { width: 3840, height: 2160 });
+});
+
+test('구도는 조작과 분리하며 focus 영역·여백·배율을 촬영 전에 검증한다', () => {
+  const value = scenario({ scenes: [{ id: 'explain', camera: 'overview', steps: [
+    { focus: '#content', padding: 64, maxZoom: 1.4 }, { pause: 2000 }, { overview: true },
+  ] }] });
+  assert.equal(value.scenes[0].camera, 'overview');
+  assert.equal(value.scenes[0].steps[0].verb, 'focus');
+  assert.equal(value.scenes[0].steps[0].padding, 64);
+  assert.equal(value.scenes[0].steps[0].maxZoom, 1.4);
+  for (const step of [{ focus: '#x', padding: -1 }, { focus: '#x', maxZoom: Infinity }, { overview: false }]) {
+    assert.throws(() => scenario({ scenes: [{ id: 'bad', steps: [step] }] }));
+  }
+  assert.throws(() => scenario({ scenes: [{ id: 'bad', camera: 'typo', steps: [{ pause: 100 }] }] }), /장면 구도/);
 });
 
 test('자리표시자는 실행 시점에 풀고 모르는 표시는 조용히 넘기지 않는다', () => {

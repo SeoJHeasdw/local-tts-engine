@@ -157,27 +157,84 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 | --- | --- |
 | `shared/demo-scenario.mjs` | 시나리오 검증·정규화: 동사·선택자·자리표시자·제한 시간. 순수 |
 | `shared/demo-plan.mjs` | scenes.json + 내레이션 길이 → 편집 계획. 순수 |
+| `shared/demo-camera.mjs` | 지정 영역·여백을 포함하는 구도, 장면 경계·대상 거리를 고려한 확대 전환. 순수 |
 | `main/capture/app-page.mjs` | 앱 띄우기(electron·web), 준비·서버·ready 대기, 에뮬레이션, 동사 실행, 장면 기록 |
+| `main/capture/demo-runtime.mjs` | 촬영 중단 신호·중단 가능한 대기, 준비 명령·서버의 프로세스 그룹 수명 |
 | `main/capture/cursor-overlay.mjs` | 페이지에 넣는 커서·클릭 표시. 실제 마우스 사건을 따라 그린다 |
 | `main/capture/record-app.mjs` | `record` 한 번: 작업 폴더·무손실 녹화·scenes.json |
 | `main/editing/demo-render.mjs` | 편집 계획 → ffmpeg 한 번, 음성·자막, 검증·보고서 |
+| `main/editing/demo-camera-preview.mjs` | 렌더와 같은 입력·계획에서 원본 프레임 미리보기, 오래된 요청 취소·직렬 디코딩 |
 | `main/editing/demo-review.mjs` | 결과 폴더 → 검수 데이터(`collectReview`)와 CLI용 `review.html`. 앱은 같은 데이터를 다듬기에 그린다 |
 | `main/editing/demo-captions.mjs` | 자막 굽기(선택): 강의와 같은 자막 모양(`capture/caption-style.mjs`)을 투명 그림으로 뜨고 ffconcat 목록을 쓴다 |
 | `main/workers/demo.mjs` | CLI 진입점: `record`·`voice`·`render` |
 | `main/app-demo.mjs` | 앱 화면의 세 단계. 같은 작업자를 별도 프로세스로 부르고 `script.json`을 읽고 쓴다 |
 | `renderer/controllers/app-demo.mjs` | 새로 만들기의 앱 데모: 시나리오 고르기·촬영, 끝나면 다듬기로 넘기는 결과 카드 |
 | `renderer/controllers/demo-polish.mjs` | 다듬기의 앱 데모 작업면: 완성본·화질 비교·자막 겹침·시간 막대, 장면 대본·확정, 후보를 영상에 맞춰 듣고 고르기, 후보 만들기·굽기 |
+| `renderer/controllers/demo-camera.mjs` | 원본 사진에서 드래그하는 구도 편집, 즉시 사진 미리보기와 저장·렌더 연결 |
 
 **앱을 아는 것은 시나리오 파일뿐이다.** 촬영 엔진은 앱 이름을 모른다. 덱 고유의 조작이
 `deck-page.mjs`에 모이듯 앱 고유의 사정은 시나리오에 모인다. 시나리오는 그 앱의 저장소가
 가진다(`demo/scenarios/<이름>.json`). 이 저장소에는 시나리오를 두지 않는다 — 앱이 바뀌면
 같이 바뀌어야 하기 때문이다. RICE 시나리오는 `bob/rice/demo/scenarios/rice-core-flow.json`이다.
 
-시나리오의 동사는 `click`·`type`·`press`·`hover`·`scroll`·`waitFor`·`waitGone`·`pause`다.
+시나리오의 동사는 `click`·`type`·`press`·`hover`·`scroll`·`waitFor`·`waitGone`·`pause`·`focus`·`overview`다.
 대상은 선택자 문자열이거나 `{ role, name, exact }`·`{ placeholder }`·`{ text }`·`{ label }`
 중 하나다. 글자로 찾는 버튼은 `exact: true`로 둔다("승인"이 "승인하고 적용"에 걸리지 않게).
 `{scenario}`는 시나리오 파일 폴더, `{work}`는 이번 촬영의 작업 폴더이며 끝나면 지운다.
 장면의 대본은 시나리오에 두지 않는다 — 찍은 뒤 `script.json`에 쓴다.
+
+조작 대상은 하나여야 한다. 일치한 첫 요소를 임의로 고르지 않으며, 화면 밖 대상은 보이게
+옮기고 클릭은 Playwright의 안정·활성·가림 검사를 거친다. 클릭 표시와 확대 좌표는 실제
+pointerdown 위치를 사용한다. `zoom: false`도 촬영 기록에 남긴다.
+
+장면의 `camera`는 `auto`(기본) 또는 `overview`다. `overview`는 장면 전체에서 원본
+구도를 유지한다. `script.json` 장면의 같은 필드로 다시 굽는 구도를 바꿀 수 있고,
+`null`이면 촬영 설정을 따른다. 다듬기의 구도 편집은 직접 그린 영역도 같은 필드에
+`{ mode: "focus", box: { x, y, w, h }, padding, maxZoom }`으로 저장한다. 좌표는 원본의
+CSS px이며 장면 전체에 적용한다. 촬영 시나리오의 `focus` 동사와는 별개의 편집 설정이다.
+
+구도 편집의 사진은 이미 잘린 완성본이 아니라 `demo/raw.mkv`에서 읽는다. 렌더와
+`loadDemoRenderInput`을 공유해 실제 음성 길이·빨리 감기·멈춤을 반영한 계획을 만들고,
+`sourceTimeAt`으로 완성 시각을 원본 프레임에 되돌린다. FFmpeg는 미리보기 사진만 메모리로
+반환하며 결과 파일·편집 계획을 덮어쓰지 않는다. 드래그·배율 변경은 renderer에서 같은
+구도 계산으로 즉시 보이고, `저장하고 영상에 적용`이 기존 렌더 작업자를 실행한다.
+
+각 완성본의 `.capture.json`에 실제 적용한 `cameraSettings`를 남겨 화질별 적용 여부를
+구분한다. 정보가 없는 예전 영상은 적용을 추정하지 않는다. 저장한 구도 변경 시각이
+영상보다 새로우면 미반영으로 표시한다. 영상 URL에 파일 수정 시각·크기를 넣어 같은
+이름으로 다시 구워도 재생기가 새 파일을 읽도록 한다.
+
+`focus`는 클릭하지 않고 보여 줄 영역을 기록하는 동사다. `padding`은 CSS px 여백
+(기본 48), `maxZoom`은 확대 상한(기본 1.6, 1~3)이다. 대상이 안정되고 화면 안에 전부
+보여야 하며, 화면 밖이면 먼저 `scroll`로 보이게 해야 한다. 편집은 영역과 여백을 모두
+담는 배율로 잡는다. 그 장면에 `focus`·`overview`가 있으면 클릭 자동 확대를 대신하며,
+다음 구도 지시 또는 장면 끝까지 유지한다. `{ "overview": true }`로 전체 화면으로 돌아온다.
+
+```json
+{ "id": "result", "steps": [
+  { "waitFor": "#result-panel" },
+  { "focus": "#result-panel", "padding": 48, "maxZoom": 1.6 },
+  { "pause": 3000 },
+  { "overview": true },
+  { "pause": 1000 }
+] }
+```
+
+클릭 확대는 같은 장면의 가까운 영역끼리만 이어 간다. 먼 대상이나 장면 경계에서는
+전체 화면을 거치고, 0.6초 확대·축소를 놓을 틈이 없는 짧은 구간은 확대하지 않는다.
+`textFrom`의 글은 화면을 떠나는 클릭·키 입력 직전과 장면 끝에 읽는다. 대상이 이미
+사라졌다면 직전 기록을 보존해 닫힌 안내문도 대본 근거로 남긴다.
+
+준비 명령의 제한은 `app.prepareTimeoutMs`(기본 5분), 서버 대기는 `app.server.timeoutMs`,
+앱 기동·준비는 `app.ready.timeoutMs`다. HTTP 요청 자체에도 서버 제한이 적용된다. 준비
+콘솔은 선택한 창의 초기 기록까지 읽는다. 각 걸음과 전체 촬영 상한은 대상 대기 외에
+타이핑·스크롤·느린 장면의 연출 시간을 포함한다. 상한을 넘긴 영상을 잘라 완료하지 않는다.
+
+사용자 중지·인코더 실패·서버 종료는 앱 조작을 함께 중단한다. 준비 명령과 서버는 자신이
+띄운 프로세스 그룹을 정리한다. 실패한 촬영은 원본·작업 프로필을 지우고
+`demo/failure.json`에 실패 단계와 완료한 걸음을 남긴다. 페이지가 살아 있으면
+`demo/failure.png`도 남긴다. 이 진단 파일만 있는 폴더는 같은 이름으로 재시도할 수 있다.
+대본·원본·완성본 등 다른 파일이 있으면 재사용하지 않는다.
 
 장면은 `timeScale`(0 초과 1 이하, 기본 1)을 적을 수 있다. 그 장면에서는 **엔진이 그리는
 움직임도 같은 배율로 늘어난다**(`sceneMotion`) — 커서 이동·클릭 표시·타이핑 속도다. 앱만
