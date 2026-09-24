@@ -123,6 +123,7 @@ from .restarts import RESTART_POLICY
 from .speech_quality import (
     ASR_LICENSE,
     ASR_REPOSITORY,
+    apply_english_checks,
     LEXICAL_FAILURE_DISTANCE,
     LEXICAL_WARNING_DISTANCE,
     MAX_AUTOMATIC_ATTEMPTS,
@@ -135,9 +136,12 @@ from .speech_quality import (
     quality_summary,
     read_timed_words,
     review_candidate_prosody,
+    review_transcriptions,
 )
 from .transcript_coverage import (
     COVERAGE_POLICY,
+    REPETITION_POLICY,
+    NEGATION_POLICY,
     omission_recovery_parts,
     repeated_omissions,
     saved_omissions,
@@ -694,18 +698,9 @@ def synthesize_excerpt(
                 seed=int(candidate["seed"]),
                 speech_parts=candidate.get("voiceRouting", {}).get("segments"),
             )
-            if english_checks:
-                result["englishChecks"] = english_checks
-                mismatches = sum(not item["passed"] for item in english_checks)
-                if mismatches:
-                    result["warnings"].append("영어 구절 받아쓰기 확인 필요")
-                    result["passed"] = False
-                    result["score"] += 10 * mismatches
-            return result
+            return apply_english_checks(result, english_checks)
 
-        evaluation = read(0.0)
-        if not evaluation["passed"]:
-            evaluation = better_evaluation(evaluation, read(0.2))
+        evaluation = review_transcriptions(read)
         started = time.perf_counter()
         evaluation = review_candidate_prosody(
             evaluation,
@@ -1077,6 +1072,9 @@ def synthesize_excerpt(
             "license": ASR_LICENSE if automatic_quality else None,
             "maxAttempts": quality_attempts if automatic_quality else 1,
             "secondOpinion": automatic_quality,
+            "transcriptEvidence": "all-performed-readings-v1" if automatic_quality else None,
+            "repetitionGate": {"enabled": automatic_quality, "policy": REPETITION_POLICY},
+            "negationGate": {"enabled": automatic_quality, "policy": NEGATION_POLICY},
             "coverageGate": {"enabled": automatic_quality, "policy": COVERAGE_POLICY,
                              "recoveryAfterRepeatedOmissions": 2, "sharesAttemptLimit": True},
             "prosodyGate": {

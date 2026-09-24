@@ -108,3 +108,13 @@ def test_every_supported_counter_value_is_resolved_and_idempotent() -> None:
             assert apply_korean_naturalness(reading) == reading
             if (counter, number) not in APPROVED_COUNTER_READINGS:
                 assert reading == f"{korean_native_counter_integer(number)} {counter}"
+
+
+@pytest.mark.parametrize("source", ["3명령어", "2시간표", "2시점", "2개발팀", "1배포", "x_12시간", "B/10개"])
+def test_counter_prefixes_inside_words_and_identifiers_are_not_rewritten(source: str) -> None:
+    assert apply_korean_naturalness(source) == source
+
+
+@pytest.mark.parametrize("suffix", ["가", "는", "에", "부터", "까지", "마다", "짜리", "씩", "당", "예요", "인", "일", "이상", "라도", "면", "라고", "입니다", "입니까", "처럼", "동안", "밖에"])
+def test_counter_grammatical_suffixes_keep_the_native_reading(suffix: str) -> None:
+    assert apply_korean_naturalness(f"3개{suffix}") == f"세 개{suffix}"

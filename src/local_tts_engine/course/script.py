@@ -39,12 +39,34 @@ def normalize_script_text(text: str) -> str:
     처리 항목:
         - [링크 텍스트](URL) → 링크 텍스트만 남김
         - *강조*, _밑줄_, `코드`, ~취소선~ 등 인라인 마커 제거
+        - 코드 내용과 식별자 안의 밑줄은 원문대로 보존
         - 불릿 포인트(-, +) 앞 마커 제거
         - 연속 공백 정규화
     """
+    code_spans: list[str] = []
+
+    def protect_code(match: re.Match[str]) -> str:
+        code_spans.append(match.group(1))
+        return chr(0xF0000 + len(code_spans) - 1)
+
+    # Formatting characters inside code are data, including snake_case names.
+    # Removing every underscore changed exec_command into a different token
+    # before the pronunciation dictionary or review could ever see it.
+    text = re.sub(r"`+([^`]+)`+", protect_code, text)
     text = re.sub(r"\[([^]]+)]\([^)]*\)", r"\1", text)
-    text = re.sub(r"[*_`~]", "", text)
+    text = re.sub(r"[*`~]", "", text)
+    text = re.sub(
+        r"_+",
+        lambda match: match.group(0) if (
+            match.start() > 0 and match.end() < len(text)
+            and re.fullmatch(r"[A-Za-z0-9]", text[match.start() - 1])
+            and re.fullmatch(r"[A-Za-z0-9]", text[match.end()])
+        ) else "",
+        text,
+    )
     text = re.sub(r"^\s*[-+]\s+", "", text, flags=re.MULTILINE)
+    for index, code in enumerate(code_spans):
+        text = text.replace(chr(0xF0000 + index), code)
     return re.sub(r"\s+", " ", text).strip()
 
 

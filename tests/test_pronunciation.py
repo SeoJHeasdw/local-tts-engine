@@ -393,3 +393,140 @@ def test_a_plain_number_range_is_still_read() -> None:
     # digits is a number, and §21 is explicit that a number left as digits is a
     # number the model gets to guess at.
     assert apply_pronunciation("2020-2024년 사이입니다.", []) == "이천이십-이천이십사 년 사이입니다."
+
+
+def test_numeric_rules_preserve_every_part_of_an_unregistered_identifier() -> None:
+    for token in ("model.v1.2", "release-1.2", "A-2041", "x_12", "B/10", "v1.2.3"):
+        report = pronunciation_preflight(f"식별자 {token} 주문을 확인합니다.", [])
+        assert report["ttsText"] == report["sourceText"]
+        assert report["requiredPronunciations"] == []
+        assert report["naturalnessWarnings"]
+        assert token in report["unresolvedAscii"]
+
+
+def test_unknown_identifier_digits_do_not_become_a_native_counter() -> None:
+    assert apply_pronunciation("x_12시간과 B/10개", []) == "x_12시간과 B/10개"
+
+
+def test_a_dictionary_identifier_does_not_require_a_second_cardinal_reading() -> None:
+    report = pronunciation_preflight(
+        "이번 호출에는 A-2041 주문, 관련 정책을 고릅니다.",
+        [{"from": "A-2041", "to": "에이 이공사일"}],
+    )
+    assert report["ttsText"] == "이번 호출에는 에이 이공사일 주문, 관련 정책을 고릅니다."
+    assert report["requiredPronunciations"] == ["에이 이공사일"]
+
+
+def test_a_number_crossing_the_end_of_a_dictionary_phrase_is_not_required_twice() -> None:
+    report = pronunciation_preflight(
+        "버전 3.6 초안을 확인합니다.",
+        [{"from": "버전 3.6", "to": "버전 삼쩜육"}],
+    )
+    assert report["ttsText"] == "버전 삼쩜육 초안을 확인합니다."
+    assert report["requiredPronunciations"] == ["버전 삼쩜육"]
+
+
+def test_dictionary_decimals_own_their_declared_reading() -> None:
+    report = pronunciation_preflight("버전 3.6입니다", [{"from": "3.6", "to": "삼쩜육"}])
+    assert report["requiredPronunciations"] == ["삼쩜육"]
+
+
+def test_preserving_identifiers_does_not_hide_supported_models_or_outside_numbers() -> None:
+    report = pronunciation_preflight("model.v1.2와 Qwen 3.6-27B, 10개, 1.5GB", [])
+    assert report["ttsText"] == "model.v1.2와 큐웬삼점육 이십칠비, 열 개, 일점오 기가바이트"
+    assert "열 개" in report["requiredPronunciations"]
+    assert "큐웬삼점육 이십칠비" in report["requiredPronunciations"]
+
+
+def test_a_counter_prefix_of_a_noun_does_not_invent_a_required_unit() -> None:
+    report = pronunciation_preflight("3명령어, 2시점, 3주문, 2점검, 3분석", [])
+    assert report["ttsText"] == "삼명령어, 이시점, 삼주문, 이점검, 삼분석"
+    assert report["requiredPronunciations"] == ["삼", "이"]
+
+
+def test_preserved_underscores_use_existing_compact_dictionary_readings() -> None:
+    dictionary = [
+        {"from": "gmailsend", "to": "지메일 센드"},
+        {"from": "refundorder", "to": "리펀드 오더"},
+        {"from": "TAILCHECK", "to": "테일 체크"},
+    ]
+    report = pronunciation_preflight("gmail_send와 refund_order, TAIL_CHECK", dictionary)
+    assert report["ttsText"] == "지메일 센드와 리펀드 오더, 테일 체크"
+    assert report["unresolvedAscii"] == []
+    assert report["requiredPronunciations"] == ["리펀드 오더", "지메일 센드", "테일 체크"]
+
+
+def test_an_exact_underscore_entry_still_wins_over_a_legacy_compact_entry() -> None:
+    assert apply_pronunciation("gmail_send", [
+        {"from": "gmailsend", "to": "기존 읽기"},
+        {"from": "gmail_send", "to": "명시한 읽기"},
+    ]) == "명시한 읽기"
+
+
+def test_a_known_word_inside_an_unknown_underscore_identifier_is_not_rewritten() -> None:
+    assert apply_pronunciation("custom_command와 new_Agent를 봅니다", [
+        {"from": "command", "to": "커맨드"},
+        {"from": "Agent", "to": "에이전트"},
+    ]) == "custom_command와 new_Agent를 봅니다"
+
+
+def test_comparison_keeps_asr_decimal_spelling_without_changing_unknown_tts_identifiers() -> None:
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    source = "모델 QN3.6 27B를 봅니다"
+    assert apply_pronunciation(source, []) == "모델 QN3.6 이십칠비를 봅니다"
+    assert comparison_pronunciation(source, []) == "모델 QN삼점육 이십칠비를 봅니다"
+
+
+def test_asr_omitted_hyphen_reuses_only_the_registered_identifier_reading() -> None:
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    dictionary = [{"from": "A-2041", "to": "에이 이공사일"}]
+    assert comparison_pronunciation("주문 A2041을 봅니다", dictionary) == "주문 에이 이공사일을 봅니다"
+    assert apply_pronunciation("주문 A2041을 봅니다", dictionary) == "주문 A2041을 봅니다"
+    for token in ("A2042", "B2041", "A241", "A02041", "XA2041", "A2041X", "A2041-extra", "model.A2041"):
+        assert "이공사일" not in comparison_pronunciation(f"주문 {token}을 봅니다", dictionary)
+
+
+def test_asr_identifier_normalization_preserves_repeated_occurrences() -> None:
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    dictionary = [{"from": "A-2041", "to": "에이 이공사일"}]
+    assert comparison_pronunciation("A2041과 A-2041, A2041을 확인합니다", dictionary).count("에이 이공사일") == 3
+
+
+def test_asr_identifier_normalization_does_not_enter_protected_english() -> None:
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    dictionary = [{"from": "A-2041", "to": "에이 이공사일"}]
+    assert comparison_pronunciation('"The order is A2041."이라고 읽습니다', dictionary) == (
+        '"The order is A2041."이라고 읽습니다'
+    )
+
+
+def test_ambiguous_compact_identifiers_are_not_given_an_arbitrary_reading() -> None:
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    dictionary = [
+        {"from": "A-2041", "to": "에이 이공사일"},
+        {"from": "A-20-41", "to": "다른 식별자"},
+    ]
+    assert comparison_pronunciation("주문 A2041", dictionary) == "주문 A2041"
+
+
+def test_an_explicit_compact_dictionary_entry_owns_its_asr_reading() -> None:
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    dictionary = [
+        {"from": "A-2041", "to": "에이 이공사일"},
+        {"from": "A2041", "to": "명시한 별도 읽기"},
+    ]
+    assert comparison_pronunciation("주문 A2041", dictionary) == "주문 명시한 별도 읽기"
+
+
+def test_asr_identifier_normalization_keeps_dictionary_case_policy() -> None:
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    dictionary = [{"from": "A-2041", "to": "에이 이공사일", "caseSensitive": True}]
+    assert comparison_pronunciation("주문 A2041", dictionary) == "주문 에이 이공사일"
+    assert comparison_pronunciation("주문 a2041", dictionary) == "주문 a2041"

@@ -254,6 +254,29 @@ def test_a_reading_the_asr_only_doubted_once_is_settled_by_the_second_opinion(st
     assert len(lecture.tts.calls) == 1
     assert [temperature for _, temperature in lecture.asr.calls] == [0.0, 0.2]
     assert manifest["quality"]["summary"]["clean"] is True
+    evidence = manifest["quality"]["chunks"][0]["selected"]["transcriptReview"]
+    assert evidence["selectedReading"] == 2
+    assert evidence["readings"][0]["passed"] is False
+    assert evidence["readings"][1]["passed"] is True
+
+
+@pytest.mark.parametrize("defect", ["negation", "repetition"])
+def test_local_content_defects_trigger_a_retry_and_clean_take_is_selected(studio, defect):
+    text = ("오늘은 도구를 안전하게 사용하는 방법을 설명합니다. 먼저 권한과 실행 환경을 확인합니다. "
+            "승인이 없으면 실행을 안 합니다. 다음으로 결과를 확인합니다.")
+    misread = text.replace("안 합니다", "합니다") if defect == "negation" else text.replace("다음으로", "다음으로 다음으로")
+    lecture = studio(slides={"ch00": ["local-content"]},
+                     scripts={"ch00": f"## local-content\n### 1\n{text}\n"},
+                     readings={text: [misread, text]})
+    manifest = lecture.run(start_page=1, end_page=1)
+    record = manifest["quality"]["chunks"][0]
+    assert len(lecture.tts.calls) == 2
+    assert record["selected"]["attempt"] == 2
+    assert record["severity"] == "ok"
+    first = record["candidates"][0]
+    assert first["phoneticErrorRate"] < .1
+    assert first["contentChecks"]
+    assert len(first["transcriptReview"]["readings"]) == 2
 
 
 def test_turning_the_reviewer_off_generates_once_and_claims_nothing(studio) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -23,6 +24,7 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+from local_tts_engine.course.settings import DEFAULT_SOURCE_PROJECT
 
 SAMPLES = (
     (
@@ -55,7 +57,7 @@ class Tee:
         self.log.flush()
 
 
-def prepare_input(directory: Path) -> Path:
+def prepare_input(directory: Path, source_project: Path = DEFAULT_SOURCE_PROJECT, samples=SAMPLES) -> Path:
     source = directory / "sample-input"
     deck = source / "deck"
     chapters = deck / "src/production/chapters"
@@ -65,17 +67,129 @@ def prepare_input(directory: Path) -> Path:
         folder.mkdir(parents=True)
     (chapters / "ch00-validation.ts").write_text(
         "export default [\n" + "\n".join(
-            f'  {{\n    id: "{name}",\n  }},' for name, _ in SAMPLES
+            f'  {{\n    id: "{name}",\n  }},' for name, _ in samples
         ) + "\n];\n", encoding="utf-8"
     )
     (scripts / "ch00.md").write_text(
-        "\n".join(f"## {name}\n### 1\n{text}\n" for name, text in SAMPLES), encoding="utf-8"
+        "\n".join(f"## {name}\n### 1\n{text}\n" for name, text in samples), encoding="utf-8"
     )
     shutil.copyfile(
-        ROOT.parent / "udemy-agent/deck/narration/pronunciation.ko.json",
+        source_project / "deck/narration/pronunciation.ko.json",
         narration / "pronunciation.ko.json",
     )
     return source
+
+
+def load_samples(path: Path | None):
+    """Accept a bounded, explicitly saved review set; never generate a course."""
+    if path is None:
+        return SAMPLES
+    import re
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list) or not 1 <= len(data) <= 16:
+        raise ValueError("검증 대본은 1~16개여야 합니다.")
+    result = []
+    for item in data:
+        name, text = str(item["name"]), str(item["text"]).strip()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) or name in {n for n, _ in result}:
+            raise ValueError("검증 대본의 이름은 중복 없는 영문 소문자·숫자·하이픈이어야 합니다.")
+        if not text or len(text) > 500 or "\n" in text:
+            raise ValueError("검증 대본은 500자 이하의 한 문단이어야 합니다.")
+        result.append((name, text))
+    return tuple(result)
+
+
+def review_content(previous, prepared, routing, dictionary, read_once):
+    """Read the actual saved WAV again with production language/quality rules."""
+    import numpy as np
+    import soundfile as sf
+    from local_tts_engine.english_voice import read_routed_transcript
+    from local_tts_engine.speech_quality import (
+        apply_english_checks, asr_reading_windows, evaluate_candidate, review_transcriptions,
+    )
+
+    if prepared["ttsText"] != previous["expectedText"]:
+        raise ValueError("합성 입력이 변경되어 기존 음성을 동일 조건으로 재검할 수 없습니다.")
+    path = Path(previous["audioPath"])
+
+    def read(temperature):
+        english_checks = []
+        if routing:
+            recognized, english_checks = read_routed_transcript(path, routing, read_once, temperature)
+        else:
+            samples, rate = sf.read(path, dtype="float32", always_2d=True)
+            mono = np.mean(samples, axis=1, dtype=np.float32)
+            windows = asr_reading_windows(mono, rate)
+            if len(windows) == 1:
+                recognized = read_once(str(path), temperature, "ko")
+            else:
+                readings = []
+                with tempfile.TemporaryDirectory(prefix="tts-review-asr-") as scratch:
+                    for index, (start, end) in enumerate(windows):
+                        piece = Path(scratch) / f"{index}.wav"
+                        sf.write(piece, mono[start:end], rate)
+                        readings.append(read_once(str(piece), temperature, "ko").strip())
+                recognized = " ".join(readings)
+        evaluated = evaluate_candidate(
+            expected_text=prepared["ttsText"], recognized_text=recognized, audio_path=path,
+            dictionary=dictionary, required_pronunciations=prepared["requiredPronunciations"],
+            attempt=previous["attempt"], seed=previous.get("seed"),
+            speech_parts=routing.get("segments") if routing else None,
+        )
+        return apply_english_checks(evaluated, english_checks)
+
+    return review_transcriptions(read)
+
+
+def review_passed(chunks, synthetic_probe=None):
+    """A course sample does not contain the default synthetic pause experiment."""
+    return bool(chunks) and all(c["passed"] for c in chunks) and (
+        synthetic_probe is None or synthetic_probe.get("status") == "detected"
+    )
+
+
+def listening_prosody_input(evaluation, chunk_key, annotations, dictionary):
+    """Unlock a diagnostic timing check for one exact, user-heard false alarm.
+
+    Never change the automatic verdict. This temporary input is used only for
+    the extra prosody result, and any additional problem still blocks it.
+    """
+    from local_tts_engine.pronunciation import comparison_pronunciation
+    if evaluation["passed"] or evaluation.get("failures"):
+        return None, []
+    if any(c.get("status") != "ok" for c in evaluation.get("contentChecks", [])):
+        return None, []
+    if any(not c.get("passed") for c in evaluation.get("englishChecks", [])):
+        return None, []
+    checks = [c for c in evaluation.get("pronunciationChecks", []) if c.get("status") != "ok"]
+    if len(checks) != 1 or checks[0].get("status") != "warning":
+        return None, []
+    check = checks[0]
+    if set(evaluation.get("warnings", [])) != {check.get("reason")}:
+        return None, []
+    digest = hashlib.sha256(Path(evaluation["audioPath"]).read_bytes()).hexdigest()
+    expected = evaluation["expectedText"]
+    recognized = comparison_pronunciation(evaluation["recognizedText"], dictionary)
+    for annotation in annotations:
+        scope, finding = annotation.get("scope", {}), annotation.get("finding", {})
+        if annotation.get("disposition") != "accepted-asr-variation":
+            continue
+        if not (scope.get("chunkKey") == chunk_key and scope.get("audioSha256") == digest
+                and scope.get("expectedText") == expected
+                and scope.get("attempt") == evaluation.get("attempt")):
+            continue
+        fields = ("kind", "term", "reason", "status", "expectedCount")
+        if any(finding.get(key) != check.get(key) for key in fields):
+            continue
+        begin, end = finding.get("expectedStart"), finding.get("expectedEnd")
+        if not isinstance(begin, int) or not isinstance(end, int) or expected[begin:end] != check["term"]:
+            continue
+        expected_excerpt = annotation.get("expectedExcerpt", "")
+        heard_excerpt = annotation.get("recognizedExcerpt", "")
+        if not expected_excerpt or expected.count(expected_excerpt) != 1 or not heard_excerpt or heard_excerpt not in recognized:
+            continue
+        return {**evaluation, "passed": True, "warnings": []}, [annotation["id"]]
+    return None, []
 
 
 def review_existing(directory: Path) -> int:
@@ -88,9 +202,17 @@ def review_existing(directory: Path) -> int:
     report_path = directory / f"review-{stamp}.json"
     report = {
         "status": "reviewing", "sourceManifest": str(manifest_path),
-        "method": "Stored content transcripts; fresh Whisper timing with independent Qwen confirmation of findings; original audio unchanged.",
+        "method": "Fresh language-routed Whisper transcripts and timing with independent Qwen confirmation; original audio and manifest unchanged.",
         "chunks": [], "listeningReview": "not-performed",
     }
+    annotation_path = directory / "listening-review.json"
+    annotations = []
+    if annotation_path.is_file():
+        listening = json.loads(annotation_path.read_text(encoding="utf-8"))
+        annotations = listening.get("annotations", [])
+        report["listeningReview"] = "partial-user-feedback-recorded"
+        report["listeningReviewPath"] = str(annotation_path)
+        report["listeningRefinements"] = listening.get("refinements", [])
     with (directory / f"review-{stamp}.log").open("w", encoding="utf-8") as log:
         with contextlib.redirect_stdout(Tee(sys.stdout, log)), contextlib.redirect_stderr(Tee(sys.stderr, log)):
             try:
@@ -102,29 +224,50 @@ def review_existing(directory: Path) -> int:
                 from local_tts_engine.course_pilot import LOCAL_QUALITY_ASR_PATH, course_pronunciation_dictionary, read_independent_word_times
                 from local_tts_engine.pronunciation import pronunciation_preflight
                 from local_tts_engine.speech_quality import evaluate_candidate, read_timed_words, review_candidate_prosody
+                from local_tts_engine.english_voice import read_routed_timings
+                from local_tts_engine.short_word_review import short_word_review_candidates
 
                 mx.eval(mx.array([1.0, 2.0]) * 2)
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 dictionary = course_pronunciation_dictionary(directory / "sample-input")
                 model = load_model(LOCAL_QUALITY_ASR_PATH)
+                def read_once(path, temperature, language):
+                    return model.generate(path, language=language, task="transcribe", temperature=temperature,
+                        return_timestamps=False, condition_on_previous_text=False, max_tokens=768).text
+                tracks = {chunk["key"]: chunk for chunk in manifest["chunks"]}
                 for chunk in manifest["quality"]["chunks"]:
                     entries = [e for e in manifest["entries"] if e["chunkKey"] == chunk["chunkKey"]]
                     prepared = pronunciation_preflight(" ".join(e["source_text"] for e in entries), dictionary)
                     previous = chunk["selected"]
-                    if prepared["ttsText"] != previous["expectedText"]:
-                        raise ValueError("합성 입력이 변경되어 기존 음성을 동일 조건으로 재검할 수 없습니다.")
-                    evaluation = evaluate_candidate(
-                        expected_text=prepared["ttsText"], recognized_text=previous["recognizedText"],
-                        audio_path=Path(previous["audioPath"]), dictionary=dictionary,
-                        required_pronunciations=prepared["requiredPronunciations"],
-                        attempt=previous["attempt"], seed=previous["seed"],
-                    )
+                    routing = tracks[chunk["chunkKey"]].get("voiceRouting")
+                    evaluation = review_content(previous, prepared, routing, dictionary, read_once)
                     reviewed = review_candidate_prosody(
-                        evaluation, lambda path, temperature: read_timed_words(model, path, temperature),
+                        evaluation, lambda path, temperature: read_routed_timings(model, path, temperature, routing)
+                            if routing else read_timed_words(model, path, temperature),
                         read_independent_word_times,
+                    )
+                    accepted_input, acceptance_ids = listening_prosody_input(
+                        evaluation, chunk["chunkKey"], annotations, dictionary,
+                    )
+                    if accepted_input is not None:
+                        extra = review_candidate_prosody(
+                            accepted_input, lambda path, temperature: read_routed_timings(model, path, temperature, routing)
+                                if routing else read_timed_words(model, path, temperature),
+                            read_independent_word_times,
+                        )
+                        reviewed["contentListeningAcceptance"] = acceptance_ids
+                        reviewed["prosodyAfterListening"] = {key: extra[key] for key in
+                            ("passed", "warnings", "prosody", "restarts") if key in extra}
+                    # Research evidence only: short words have legitimate liaison
+                    # and spelling ambiguity. Never change score/pass/retries.
+                    reviewed["shortWordReviewCandidates"] = short_word_review_candidates(
+                        evaluation["expectedText"], evaluation["recognizedText"], dictionary,
                     )
                     report["chunks"].append({"chunkKey": chunk["chunkKey"], **reviewed})
                     print(f"{chunk['chunkKey']}: {'통과' if reviewed['passed'] else '확인 필요'} · {reviewed['prosody']['status']}", flush=True)
+                    if acceptance_ids:
+                        print("  기록된 청취 확인을 반영한 추가 운율 검사: " +
+                              ("통과" if extra["passed"] else "확인 필요") + " (원래 자동 판정은 보존)", flush=True)
 
                     # A known perturbation checks that real ASR timings can
                     # locate a pause, rather than merely accepting clean audio.
@@ -143,7 +286,7 @@ def review_existing(directory: Path) -> int:
                                     samples[:cut], np.zeros(round(rate * 0.4), dtype=np.float32), samples[cut:],
                                 ]), rate, subtype="PCM_24")
                                 probe = evaluate_candidate(
-                                    expected_text=prepared["ttsText"], recognized_text=previous["recognizedText"],
+                                    expected_text=prepared["ttsText"], recognized_text=evaluation["recognizedText"],
                                     audio_path=probe_path, dictionary=dictionary,
                                     required_pronunciations=prepared["requiredPronunciations"],
                                 )
@@ -159,11 +302,12 @@ def review_existing(directory: Path) -> int:
                             }
                             print(f"검사용 끊김 탐지: {report['syntheticPauseProbe']['status']}", flush=True)
                 report["status"] = "completed"
-                report["selectedTakesPassed"] = all(c["passed"] for c in report["chunks"])
-                report["passed"] = (
-                    report["selectedTakesPassed"]
-                    and report.get("syntheticPauseProbe", {}).get("status") == "detected"
-                )
+                report["selectedTakesPassed"] = bool(report["chunks"]) and all(c["passed"] for c in report["chunks"])
+                report["passed"] = review_passed(report["chunks"], report.get("syntheticPauseProbe"))
+                report["contentListeningAcceptedChunks"] = [c["chunkKey"] for c in report["chunks"]
+                    if c.get("contentListeningAcceptance")]
+                report["unresolvedReviewChunks"] = [c["chunkKey"] for c in report["chunks"]
+                    if not c["passed"] and not c.get("prosodyAfterListening", {}).get("passed")]
                 return 0 if report["passed"] else 2
             except Exception as error:
                 report.update({"status": "failed", "error": str(error)})
@@ -179,6 +323,8 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--prepare-only", action="store_true", help="모델 실행 없이 검증 대본·발음문만 확인")
     mode.add_argument("--review-existing", type=Path, help="기존 검증 폴더의 음성을 새로 생성하지 않고 재검")
+    parser.add_argument("--source-project", type=Path, default=DEFAULT_SOURCE_PROJECT)
+    parser.add_argument("--samples-file", type=Path, help="1~16개의 {name, text}를 담은 고정 검증 대본 JSON")
     args = parser.parse_args()
     if args.review_existing:
         return review_existing(args.review_existing)
@@ -199,11 +345,13 @@ def main() -> int:
                 os.environ["HF_HUB_OFFLINE"] = "1"
                 from local_tts_engine.course_pilot import course_entries, synthesize_excerpt
 
-                source = prepare_input(directory)
-                entries = course_entries(source, "ch00", end_slide_number=2)
-                if len(entries) != 2 or any(e.unresolved_tokens or e.naturalness_warnings for e in entries):
+                samples = load_samples(args.samples_file)
+                source = prepare_input(directory, args.source_project, samples)
+                entries = course_entries(source, "ch00", end_slide_number=len(samples))
+                if len(entries) != len(samples):
                     raise RuntimeError("검증 대본의 발음 지정과 페이지 구성을 확인하지 못했습니다.")
-                status["inputs"] = [{"sourceText": e.source_text, "ttsText": e.tts_text} for e in entries]
+                status["inputs"] = [{"sourceText": e.source_text, "ttsText": e.tts_text,
+                                     "unresolvedTokens": list(e.unresolved_tokens)} for e in entries]
                 status["voiceProfile"] = "jaeho-ko-r16-v1"
                 status["adapterScale"] = 0.60
                 save()
@@ -227,7 +375,7 @@ def main() -> int:
                     reference_path=ROOT / "artifacts/benchmarks/2026-08-23/reference.wav",
                     reference_text_path=ROOT / "artifacts/benchmarks/2026-08-23/reference.txt",
                     target_seconds=45,
-                    start_chapter="ch00", start_slide=None, start_page=1, end_page=2,
+                    start_chapter="ch00", start_slide=None, start_page=1, end_page=len(samples),
                     seed=20260906,
                     adapter_path=ROOT / "artifacts/finetune-runs/2026-08-25/jaeho-ko-r16-v1/adapters",
                     adapter_scale=0.60, use_cache=False, automatic_quality=True, quality_attempts=4,
@@ -248,6 +396,11 @@ def main() -> int:
                 })
                 save()
                 print(f"완료: {manifest['durationMs'] / 1000:.2f}초 · {manifest['previewPath']}")
+                if args.samples_file:
+                    status["status"] = "generated-for-review"
+                    save()
+                    print("고정 대본 생성·자동 검수 완료. 자연스러움의 청취 판정은 별도입니다.")
+                    return 0 if manifest["quality"]["summary"]["clean"] else 2
                 print("실제 두 정렬기의 교차 확인과 검사용 끊김 탐지를 이어서 검사합니다.")
                 review_exit = review_existing(directory)
                 status["liveReviewPassed"] = review_exit == 0

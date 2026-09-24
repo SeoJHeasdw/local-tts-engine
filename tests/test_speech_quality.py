@@ -27,6 +27,7 @@ from local_tts_engine.speech_quality import (
     numeral_written_as_digits,
     phonetic_error_rate,
     quality_summary,
+    review_transcriptions,
 )
 
 DICTIONARY = [
@@ -350,6 +351,72 @@ def test_a_single_warned_attempt_is_not_yet_evidence_of_a_pattern() -> None:
 def test_a_failure_is_a_failure_however_many_seeds_were_tried() -> None:
     failed = {"warnings": [], "failures": ["받아쓰기 불일치"], "recognizedText": "x"}
     assert chunk_severity([failed], failed) == "failed"
+
+
+def test_different_words_with_the_same_warning_do_not_establish_a_repeated_defect():
+    def candidate(*terms):
+        return {"warnings": ["단어 일부 누락"], "failures": [], "recognizedText": "판독",
+                "pronunciationChecks": [{"term": t, "status": "warning", "reason": "단어 일부 누락"}
+                                        for t in terms]}
+    first, second = candidate("반환"), candidate("지메일")
+    assert chunk_severity([first, second, candidate("반환", "지메일")], first) == "warning"
+    assert chunk_severity([first, candidate("반환", "지메일")], first) == "failed"
+
+
+def test_different_english_insertions_are_not_the_same_repeated_defect():
+    from local_tts_engine.english_voice import english_reading_check
+    text = "Do my Bots share one computer?"
+    def candidate(inserted):
+        return {"warnings": ["영어 구절 받아쓰기 확인 필요"], "failures": [], "recognizedText": inserted,
+                "englishChecks": [english_reading_check(text, text.replace("share", f"{inserted} share"))]}
+    first, second = candidate("always"), candidate("never")
+    assert chunk_severity([first, second], first) == "warning"
+    assert chunk_severity([first, candidate("always")], first) == "failed"
+
+
+def test_second_decoding_keeps_the_evidence_it_cleared():
+    seen = []
+    def read(temperature):
+        seen.append(temperature)
+        return {"recognizedText": "런팀" if temperature == 0 else "런타임", "passed": temperature > 0,
+                "failures": [], "warnings": ["지정 발음 확인 필요"] if temperature == 0 else [],
+                "score": 6 if temperature == 0 else 0}
+    result = review_transcriptions(read)
+    assert result["passed"]
+    assert seen == [0.0, 0.2]
+    assert result["recognizedText"] == "런타임"
+    assert result["transcriptReview"]["selectedReading"] == 2
+    assert [r["recognizedText"] for r in result["transcriptReview"]["readings"]] == ["런팀", "런타임"]
+
+
+def test_clean_first_decoding_records_exactly_one_reading():
+    result = review_transcriptions(lambda temperature: {"passed": True, "warnings": [], "failures": [],
+                                                        "recognizedText": "정상", "score": 0})
+    assert result["transcriptReview"]["selectedReading"] == 1
+    assert len(result["transcriptReview"]["readings"]) == 1
+
+
+def test_nonfinite_audio_cannot_silently_pass(tmp_path):
+    path = tmp_path / "corrupt.wav"
+    samples = np.full(24000, .1, dtype=np.float32)
+    samples[100] = np.nan
+    sf.write(path, samples, 24000, subtype="FLOAT")
+    result = evaluate_candidate(expected_text="음성입니다", recognized_text="음성입니다", audio_path=path)
+    assert not result["passed"]
+    assert "유효하지 않은 오디오 샘플" in result["failures"]
+    assert result["waveform"]["invalidSamples"] == 1
+    import json
+    json.dumps(result, allow_nan=False)
+
+
+def test_empty_audio_fails_with_serializable_evidence(tmp_path):
+    import json
+    path = tmp_path / "empty.wav"
+    sf.write(path, np.zeros(0, dtype=np.float32), 24000)
+    result = evaluate_candidate(expected_text="음성입니다", recognized_text="음성입니다", audio_path=path)
+    assert not result["passed"]
+    assert result["speakingCharactersPerSecond"] is None
+    json.dumps(result, allow_nan=False)
 
 
 # ─── the run summary ─────────────────────────────────────────────────────────

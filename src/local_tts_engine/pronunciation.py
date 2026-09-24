@@ -17,7 +17,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .korean_naturalness import korean_naturalness_preflight
+from .korean_naturalness import (
+    KOREAN_COUNTER_BOUNDARY,
+    MIXED_IDENTIFIER_PATTERN,
+    SAFE_STRUCTURED_IDENTIFIER_PATTERNS,
+    korean_naturalness_preflight,
+)
 
 
 ASCII_TOKEN_PATTERN = re.compile(
@@ -35,7 +40,7 @@ COUNTED_NUMBER_PATTERN = re.compile(
     r"(킬로바이트|메가바이트|기가바이트|테라바이트|개월|페이지|퍼센트|달러|"
     r"시간|회차|단계|토큰|가지|개|건|명|번|장|살|턴|초|분(?!의)|일|주|년|"
     r"원|점|회|배|시|%|KB|MB|GB|TB)"
-    r"(?![A-Za-z])",
+    + KOREAN_COUNTER_BOUNDARY,
     re.IGNORECASE,
 )
 PARAMETER_SIZE_PATTERN = re.compile(
@@ -238,14 +243,19 @@ def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:
     """
     source = str(item["from"])
     escaped = re.escape(source)
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9]+", source):
+        # Older script normalization removed every underscore, and existing
+        # approved entries therefore include gmailsend/refundorder. Keep those
+        # readings working when captions now preserve gmail_send/refund_order.
+        # Only underscore removal is allowed; no new reading is guessed or
+        # stored for an otherwise unknown identifier.
+        escaped = "_*".join(re.escape(character) for character in source)
     if re.search(r"[A-Za-z0-9]", source):
         if source[0].isalnum():
-            escaped = rf"(?<![A-Za-z0-9])(?<![A-Za-z0-9]-){escaped}"
+            escaped = rf"(?<![A-Za-z0-9_])(?<![A-Za-z0-9_]-){escaped}"
         if source[-1].isalnum():
-            escaped = rf"{escaped}(?![A-Za-z0-9])(?!-[A-Za-z0-9])"
+            escaped = rf"{escaped}(?![A-Za-z0-9_])(?!-[A-Za-z0-9_])"
     flags = 0 if item.get("caseSensitive") else re.IGNORECASE
-    if item.get("inline"):
-        escaped = rf"(?<![A-Za-z0-9_])(?<![A-Za-z0-9_]-){re.escape(source)}(?![A-Za-z0-9_])(?!-[A-Za-z0-9_])"
     return re.compile(escaped, flags)
 
 
@@ -315,9 +325,70 @@ def _restore_literal_spans(text: str, kept: list[str]) -> str:
     return text
 
 
+def _protect_unstructured_identifiers(text: str, kept: list[str]) -> str:
+    """Keep an unanswered identifier whole while general numeric rules run.
+
+    Protecting only bare numbers was insufficient: decimal and counter rules
+    still changed ``model.v1.2`` and ``A-2041 주문``. Dictionary decisions have
+    already run at this point, and supported model/memory forms retain their
+    explicit structural normalization. Unknown forms remain review findings.
+    """
+    model_spans = [match.span() for match in QWEN_MODEL_PATTERN.finditer(text)]
+
+    def protect(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if any(pattern.fullmatch(token) for pattern in SAFE_STRUCTURED_IDENTIFIER_PATTERNS) or any(
+            start <= match.start() and match.end() <= end for start, end in model_spans
+        ):
+            return token
+        kept.append(token)
+        return chr(PROTECTED_PLACEHOLDER_START + len(kept) - 1)
+
+    return MIXED_IDENTIFIER_PATTERN.sub(protect, text)
+
+
+def _restore_comparison_identifier_separators(
+    text: str, dictionary: list[dict[str, Any]]
+) -> str:
+    """Recognize an approved identifier when ASR omits its hyphen.
+
+    Whisper writes A2041 for the already approved A-2041. Leaving that token
+    untouched compares its zero as 영 against the approved 공, falsely reporting
+    a missing syllable in 이공사일. Match the entire identical alphanumeric
+    sequence only; unknown identifiers and conflicting compact forms are not
+    assigned a reading. This helper never runs on synthesis input.
+    """
+    by_compact: dict[str, list[dict[str, Any]]] = {}
+    explicit = {str(item["from"]).casefold() for item in dictionary}
+    for item in dictionary:
+        source = str(item["from"])
+        if not re.fullmatch(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+", source):
+            continue
+        if not re.search(r"[A-Za-z]", source) or not re.search(r"[0-9]", source):
+            continue
+        by_compact.setdefault(source.replace("-", "").casefold(), []).append(item)
+
+    output = text
+    for key, items in by_compact.items():
+        if key in explicit or len(items) != 1:
+            continue
+        item = items[0]
+        source = str(item["from"])
+        compact = source.replace("-", "")
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9_])(?<![A-Za-z0-9][._+/#-]){re.escape(compact)}"
+            r"(?![A-Za-z0-9_])(?![._+/#-][A-Za-z0-9])",
+            0 if item.get("caseSensitive") else re.IGNORECASE,
+        )
+        output = pattern.sub(lambda _: source, output)
+    return output
+
+
 def _apply_dictionary(
     text: str,
     dictionary: list[dict[str, Any]],
+    *,
+    comparison: bool = False,
 ) -> tuple[str, list[str]]:
     """Dictionary, naturalness, and structural normalization before fallback.
 
@@ -331,10 +402,14 @@ def _apply_dictionary(
     """
     merged = merge_pronunciation_dictionaries(dictionary)
     output, protected = _protect_literal_spans(text, merged)
+    if comparison:
+        output = _restore_comparison_identifier_separators(output, merged)
     for item in merged:
         if item.get("literal"):
             continue
         output = _dictionary_pattern(item).sub(str(item["to"]), output)
+    if not comparison:
+        output = _protect_unstructured_identifiers(output, protected)
     output = str(korean_naturalness_preflight(output)["text"])
     return normalize_structured_tokens(output), protected
 
@@ -353,7 +428,13 @@ def comparison_pronunciation(text: str, dictionary: list[dict[str, Any]]) -> str
     is only a comparison key; it is not fed to the synthesizer or used to approve
     an accent. The same content/omission thresholds still apply.
     """
-    output = apply_pronunciation(text, dictionary)
+    # Synthesis must not guess at an unknown identifier. ASR comparison still
+    # needs its deterministic numeric spelling: QN3.6 contains 삼점육, not 삼육.
+    # Keep the existing comparison representation without changing the text
+    # sent to the voice or accepting any new term reading.
+    output, protected = _apply_dictionary(text, dictionary, comparison=True)
+    output = _restore_literal_spans(read_remaining_numbers(output), protected)
+    output = re.sub(r"[ \t]+", " ", output).strip()
     for item in merge_pronunciation_dictionaries(dictionary):
         if item.get("inline"):
             output = _dictionary_pattern({**item, "from": item["to"]}).sub(item["comparisonReading"], output)
@@ -392,24 +473,42 @@ def pronunciation_preflight(
 
     def covered_by_dictionary(match: re.Match[str]) -> bool:
         start, end = match.span()
-        return any(start >= item_start and end <= item_end for item_start, item_end in dictionary_spans)
+        # A numeric rule can cross the end of a dictionary span: A-2041 주문
+        # formerly demanded 이천사십일 주 in addition to approved 이공사일.
+        return any(start < item_end and end > item_start for item_start, item_end in dictionary_spans)
 
-    if QWEN_MODEL_PATTERN.search(inspection_text):
+    # Match coordinates must stay aligned with dictionary_spans. Mask unknown
+    # identifiers with the same number of non-matching characters, so a later
+    # number cannot appear to overlap an earlier dictionary decision.
+    model_spans = [match.span() for match in QWEN_MODEL_PATTERN.finditer(inspection_text)]
+    numeric_inspection = MIXED_IDENTIFIER_PATTERN.sub(
+        lambda match: match.group(0) if any(
+            pattern.fullmatch(match.group(0)) for pattern in SAFE_STRUCTURED_IDENTIFIER_PATTERNS
+        ) or any(
+            start <= match.start() and match.end() <= end for start, end in model_spans
+        ) else "\uefff" * len(match.group(0)),
+        inspection_text,
+    )
+
+    if QWEN_MODEL_PATTERN.search(numeric_inspection):
         matched.append({"from": "Qwen<version>-<size>B", "to": "큐웬<버전> <크기>비"})
-    counted_matches = list(COUNTED_NUMBER_PATTERN.finditer(inspection_text))
+    counted_matches = list(COUNTED_NUMBER_PATTERN.finditer(numeric_inspection))
     counted = [match.group(0) for match in counted_matches]
-    for match in QWEN_MODEL_PATTERN.finditer(inspection_text):
-        required.append(apply_pronunciation(match.group(0), dictionary))
-    for match in FRACTION_NUMBER_PATTERN.finditer(inspection_text):
+    for match in QWEN_MODEL_PATTERN.finditer(numeric_inspection):
+        if not covered_by_dictionary(match):
+            required.append(apply_pronunciation(match.group(0), dictionary))
+    for match in FRACTION_NUMBER_PATTERN.finditer(numeric_inspection):
         if not covered_by_dictionary(match):
             required.append(apply_pronunciation(match.group(0), dictionary))
     for match in counted_matches:
         if not covered_by_dictionary(match):
             required.append(apply_pronunciation(match.group(0), dictionary))
-    for match in PARAMETER_SIZE_PATTERN.finditer(inspection_text):
-        required.append(apply_pronunciation(match.group(0), dictionary))
-    for match in DECIMAL_NUMBER_PATTERN.finditer(inspection_text):
-        required.append(apply_pronunciation(match.group(0), dictionary))
+    for match in PARAMETER_SIZE_PATTERN.finditer(numeric_inspection):
+        if not covered_by_dictionary(match):
+            required.append(apply_pronunciation(match.group(0), dictionary))
+    for match in DECIMAL_NUMBER_PATTERN.finditer(numeric_inspection):
+        if not covered_by_dictionary(match):
+            required.append(apply_pronunciation(match.group(0), dictionary))
     for match in BARE_NUMBER_PATTERN.finditer(_apply_dictionary(source_text, dictionary)[0]):
         required.append(korean_sino_integer(match.group(1)))
     # A deliberately English span is an answered question, not a term nobody

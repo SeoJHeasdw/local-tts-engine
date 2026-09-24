@@ -87,6 +87,8 @@ L04 선택을 전역 사전으로 확대하지 않는다. 결과·청취 기록 
 | 2026-09-10 | `comparisonReading`이 있는 영어 용어는 선언 표기와 승인된 `comparisonVariants`로 검사. 전역 거리 문턱은 유지 |
 | 2026-09-11 | 사전 누락으로 제작을 중단하거나 제작 중 발음 승인을 요구하지 않음. 완성 후 기존 확인·페이지 재생성 기능 사용 |
 | 2026-09-11 | 레슨 분할 제작은 개별 실패 후 나머지를 계속하고 완료·실패 결과를 나눠 기록. 사용자 중지·공통 입력 오류는 전체 중단 |
+| 2026-09-24 | 사용자가 한국어·연음·영어 자동화 진단과 개선 전반을 위임. 입력 보존·검수 사각지대·오탐을 개선하되, 새 합성 근거 없이 제작 목소리·전역 발음 허용 문턱을 바꾸거나 98% 달성을 주장하지 않음 |
+| 2026-09-24 | 실제 표본 청취: `하나에`는 괜찮음. `봇이`는 약간 뭉개지지만 일반 강의 청취에서는 넘어갈 수준이며 개선 가능하면 희망. 이 판단은 해당 녹음에 한정하고 새로운 `보시` 발음문·전역 사전·전체 품질률의 승인으로 확대하지 않음 |
 
 Anthropic의 `안쓰로픽`과 `엔트로픽`은 모두 거리 0.100으로 문턱 0.15만으로
 가려지지 않았다. 과거 3,090건 재판정에서 Anthropic 23건(안쓰로픽 9, 엔트로픽 14)을
@@ -121,12 +123,12 @@ Anthropic의 `안쓰로픽`과 `엔트로픽`은 모두 거리 0.100으로 문�
 
 | 확인일 | 대상·당시 판단 | 출처 |
 | --- | --- | --- |
-| 2026-08-23, 09-03, 09-09 | Qwen3-TTS 1.7B Base: Apache-2.0, 제작 채택 | [모델 카드](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base), [공식 저장소](https://github.com/QwenLM/Qwen3-TTS) |
-| 2026-08-23, 09-03 | MLX-Audio 0.5.0: MIT, Apple Silicon 추론 | [라이선스](https://github.com/Blaizzy/mlx-audio/blob/main/LICENSE), [Qwen 문서](https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/qwen3-tts.md) |
+| 2026-08-23, 09-03, 09-09, 09-24 | Qwen3-TTS 1.7B Base: Apache-2.0, 제작 채택 유지. 상업 이용 가능한 원본 라이선스 재확인 | [모델 카드](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base), [공식 저장소](https://github.com/QwenLM/Qwen3-TTS) |
+| 2026-08-23, 09-03, 09-24 | MLX-Audio 0.5.0: MIT, Apple Silicon 추론. 원본 라이선스 재확인 | [라이선스](https://github.com/Blaizzy/mlx-audio/blob/main/LICENSE), [Qwen 문서](https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/qwen3-tts.md) |
 | 2026-08-23 | Chatterbox Multilingual V3: MIT. 비교 후 제작에서 제외 | [원본](https://huggingface.co/ResembleAI/chatterbox), [MLX 모델](https://huggingface.co/mlx-community/chatterbox-multilingual-v3), [MLX 문서](https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/chatterbox.md) |
-| 2026-08-24 | Qwen3-ForcedAligner 0.6B: Apache-2.0, 단어 정렬 채택 | [원본](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B), [MLX 8-bit](https://huggingface.co/mlx-community/Qwen3-ForcedAligner-0.6B-8bit) |
+| 2026-08-24, 09-24 | Qwen3-ForcedAligner 0.6B: Apache-2.0, 단어 정렬 채택. 원본 라이선스 재확인 | [원본](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B), [MLX 8-bit](https://huggingface.co/mlx-community/Qwen3-ForcedAligner-0.6B-8bit) |
 | 2026-08-25 | MLX-Tune 0.6.0: Apache-2.0, `.venv-train`에서 LoRA 학습 | [저장소](https://github.com/ARahim3/mlx-tune), [Qwen 학습 예제](https://github.com/ARahim3/mlx-tune/blob/main/examples/20_qwen3_tts_finetuning.py) |
-| 2026-09-03 | Whisper 원본 코드·가중치: MIT. 독립 검수에 MLX FP16 변환 모델 사용 | [Whisper 라이선스](https://github.com/openai/whisper/blob/main/LICENSE), [변환 모델](https://huggingface.co/mlx-community/whisper-large-v3-turbo-asr-fp16) |
+| 2026-09-03, 09-24 | Whisper 원본 코드·가중치: MIT, 원본 라이선스 재확인. 독립 검수에 기존 MLX FP16 변환 모델 사용 | [Whisper 라이선스](https://github.com/openai/whisper/blob/main/LICENSE), [변환 모델](https://huggingface.co/mlx-community/whisper-large-v3-turbo-asr-fp16) |
 | 2026-08-23 | Fish S2 Pro: 상업 이용에 별도 서면 라이선스 필요, 후보 제외. S2.1 Pro 클라우드 경로도 로컬·비공개 목표와 맞지 않아 제외 | [S2 Pro 라이선스](https://huggingface.co/fishaudio/s2-pro/blob/main/LICENSE.md), [S2.1 당시 안내](https://fish.audio/blog/s2-1-pro-free-api/) |
 | 2026-09-18 | Playwright 1.62.0: Apache-2.0, 화면 촬영용 브라우저 구동에 채택. 내려받는 Chromium은 BSD 계열이며 이 저장소에 커밋하지 않는다 | [라이선스](https://github.com/microsoft/playwright/blob/main/LICENSE), [Chromium 라이선스](https://chromium.googlesource.com/chromium/src/+/main/LICENSE) |
 

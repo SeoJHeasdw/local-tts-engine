@@ -32,16 +32,30 @@ NATIVE_COUNTER_LIMITS = {
     "시간": 12,
 }
 
-# 개월 must not be mistaken for 개. The pattern still permits Korean particles
-# and suffixes: 10개가, 3살짜리, 2턴째.
+# A counter must end before a boundary or a grammatical suffix, not inside a
+# different noun: 2시점 and 3명령어 are not two o'clock and three people.
+# Particles and counter suffixes remain attached in the source (10개가,
+# 3살짜리, 2턴째); their spelling is never rewritten by this rule.
+KOREAN_COUNTER_BOUNDARY = (
+    r"(?=$|[^A-Za-z가-힣]|"
+    r"[이가은는을를에도와과의로]|으로|에서|부터|까지|보다|만큼|"
+    r"이상|이하|미만|정도|쯤|짜리|째|씩|마다|만|뿐|당|치|경|예요|인|일|"
+    r"라도|라면|라서|라는|라고|랑|면|며|였|여서|야|요|입니다|입니까|"
+    r"처럼|동안|밖에|하고|든|나마|나(?=$|[^가-힣]))"
+)
+
+# 개월 must not be mistaken for 개. A number joined to an identifier also
+# stays untouched until a complete dictionary entry answers its reading.
 NATIVE_COUNTER_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9.])(?P<number>\d{1,2})\s*"
+    r"(?<![A-Za-z0-9._+/#-])(?P<number>\d{1,2})\s*"
     r"(?P<counter>시간|가지|개(?!월)|건|명|살|턴|시|배)"
+    + KOREAN_COUNTER_BOUNDARY
 )
 
 COUNTER_SPACING_PATTERN = re.compile(
     r"(?P<quantity>몇|두어|서너|너댓|대여섯|한두)"
     r"(?P<counter>시간|가지|개(?!월)|건|명|살|턴)"
+    + KOREAN_COUNTER_BOUNDARY
 )
 
 # Letter-number identifiers require a pronunciation decision. Reading the
@@ -57,7 +71,7 @@ MIXED_IDENTIFIER_PATTERN = re.compile(
 SAFE_STRUCTURED_IDENTIFIER_PATTERNS = (
     re.compile(r"Qwen\d+(?:\.\d+)?-\d+B", re.IGNORECASE),
     re.compile(r"\d+B", re.IGNORECASE),
-    re.compile(r"\d+(?:KB|MB|GB|TB)", re.IGNORECASE),
+    re.compile(r"\d+(?:\.\d+)?(?:KB|MB|GB|TB)", re.IGNORECASE),
 )
 
 _NATIVE_ONES = (

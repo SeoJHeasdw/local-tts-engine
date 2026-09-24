@@ -41,7 +41,7 @@ from .korean_phonetics import (
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
 from .pronunciation import comparison_pronunciation, declared_readings
 from .prosody import PAUSE_WARNING, confirm_pause_checks, interior_silences, pause_checks
-from .transcript_coverage import clause_omissions
+from .transcript_coverage import clause_omissions, adjacent_repetitions, negation_omissions
 
 
 ASR_REPOSITORY = "mlx-community/whisper-large-v3-turbo-asr-fp16"
@@ -398,6 +398,11 @@ def waveform_metrics(audio_path: Path) -> dict[str, float | int]:
     """Measure inexpensive acoustic failure signals from a mono mixdown."""
     audio, sample_rate = sf.read(audio_path, dtype="float32", always_2d=True)
     samples = np.mean(audio, axis=1, dtype=np.float32)
+    return _sample_metrics(samples, sample_rate)
+
+
+def _sample_metrics(samples: np.ndarray, sample_rate: int) -> dict[str, float | int]:
+    """Keep corrupt floating-point audio from passing comparisons with NaN."""
     duration_seconds = len(samples) / sample_rate if sample_rate else 0.0
     if not len(samples):
         return {
@@ -407,6 +412,11 @@ def waveform_metrics(audio_path: Path) -> dict[str, float | int]:
             "silenceRatio": 1.0,
             "clippingRatio": 0.0,
         }
+    invalid = int(np.count_nonzero(~np.isfinite(samples)))
+    if invalid:
+        return {"durationMs": round(duration_seconds * 1000), "peak": 0.0,
+                "rms": 0.0, "silenceRatio": 1.0, "clippingRatio": 0.0,
+                "invalidSamples": invalid}
     peak = float(np.max(np.abs(samples)))
     rms = float(np.sqrt(np.mean(samples**2) + 1e-12))
     frame = max(1, round(sample_rate * 0.02))
@@ -514,7 +524,7 @@ def evaluate_candidate(
     per = phonetic_error_rate(expected_text, recognized_text, dictionary)
     waveform = waveform_metrics(audio_path)
     duration_seconds = float(waveform["durationMs"]) / 1000
-    pace = len(expected) / duration_seconds if duration_seconds else float("inf")
+    pace = len(expected) / duration_seconds if duration_seconds else None
     english_rates = []
     if speech_parts:
         korean_parts = [part for part in speech_parts if part["language"] != "English"]
@@ -534,15 +544,20 @@ def evaluate_candidate(
         dictionary,
         required_pronunciations,
     )
-    content_checks = clause_omissions(expected_text, recognized_text, dictionary)
+    content_checks = [*clause_omissions(expected_text, recognized_text, dictionary),
+                      *adjacent_repetitions(expected_text, recognized_text, dictionary),
+                      *negation_omissions(expected_text, recognized_text, dictionary)]
     checks = [*required_checks, *lexical_checks]
     failures: list[str] = []
     warnings: list[str] = []
-    failures.extend(dict.fromkeys(check["reason"] for check in content_checks))
+    failures.extend(dict.fromkeys(check["reason"] for check in content_checks if check["status"] == "failed"))
+    warnings.extend(dict.fromkeys(check["reason"] for check in content_checks if check["status"] == "warning"))
     if not expected:
         failures.append("비교할 발음문 없음")
     if per > MAX_PHONETIC_ERROR_RATE:
         failures.append("받아쓰기 불일치")
+    if waveform.get("invalidSamples"):
+        failures.append("유효하지 않은 오디오 샘플")
     if float(waveform["rms"]) < 0.001:
         failures.append("음성 신호 부족")
     if float(waveform["silenceRatio"]) > MAX_SILENCE_RATIO:
@@ -693,6 +708,39 @@ def better_evaluation(left: dict[str, Any], right: dict[str, Any]) -> dict[str, 
     return min((left, right), key=_candidate_rank)
 
 
+def review_transcriptions(read: Any) -> dict[str, Any]:
+    """Retain both independent decodings, including evidence later cleared.
+
+    Selection remains lenient about ASR spelling noise; retaining the rejected
+    reading makes that decision auditable instead of silently losing it.
+    """
+    readings = [{**read(0.0), "decodingTemperature": 0.0}]
+    if not readings[0]["passed"]:
+        readings.append({**read(0.2), "decodingTemperature": 0.2})
+    selected = min(readings, key=_candidate_rank)
+    return {**selected, "transcriptReview": {
+        "policy": "independent-asr-two-readings-v1",
+        "selectedReading": readings.index(selected) + 1,
+        "readings": [{key: item[key] for key in (
+            "decodingTemperature", "recognizedText", "passed", "failures", "warnings",
+            "phoneticErrorRate", "pronunciationChecks", "contentChecks", "englishChecks",
+        ) if key in item} for item in readings],
+    }}
+
+
+def apply_english_checks(evaluation: dict[str, Any], checks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Use the same English evidence and ranking in production and re-review."""
+    if not checks:
+        return evaluation
+    result = {**evaluation, "englishChecks": checks}
+    mismatches = [check for check in checks if not check["passed"]]
+    if mismatches:
+        result["warnings"] = [*evaluation["warnings"], "영어 구절 받아쓰기 확인 필요"]
+        result["passed"] = False
+        result["score"] = evaluation["score"] + 10 * sum(max(1, c.get("editCount", 1)) for c in mismatches)
+    return result
+
+
 def _candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, float, int]:
     return (
         len(candidate.get("failures", [])),
@@ -726,11 +774,49 @@ def chunk_severity(candidates: list[dict[str, Any]], selected: dict[str, Any]) -
     if not warnings:
         return "warning"
     evaluated = [candidate for candidate in candidates if candidate.get("recognizedText") is not None]
-    if len(evaluated) > 1 and all(
-        set(warnings) <= set(candidate.get("warnings") or []) for candidate in evaluated
-    ):
+    # A shared label ("단어 일부 누락") does not establish a shared defect:
+    # one take can miss 반환 and another 지메일. Compare the actual word/span.
+    # Historical records without detailed checks keep their old interpretation.
+    persistent = _warning_identities(selected)
+    for candidate in evaluated:
+        persistent &= _warning_identities(candidate)
+    if len(evaluated) > 1 and persistent:
         return "failed"
     return "warning"
+
+
+def _warning_identities(candidate: dict[str, Any]) -> set[tuple]:
+    reasons = set(candidate.get("warnings") or []) - {PAUSE_WARNING, RESTART_WARNING}
+    identities: set[tuple] = set()
+    explained: set[str] = set()
+    for check in candidate.get("pronunciationChecks", []):
+        reason = check.get("reason")
+        if reason in reasons and check.get("status") == "warning":
+            identities.add((reason, "term", check.get("term")))
+            explained.add(reason)
+    for check in candidate.get("contentChecks", []):
+        reason = check.get("reason")
+        if reason in reasons and check.get("status") == "warning":
+            identities.add((reason, "content", check.get("expectedStart"),
+                            check.get("expectedEnd"), check.get("text")))
+            explained.add(reason)
+    english_reason = "영어 구절 받아쓰기 확인 필요"
+    if english_reason in reasons and candidate.get("englishChecks"):
+        explained.add(english_reason)
+        for index, check in enumerate(candidate["englishChecks"]):
+            if not check.get("passed"):
+                # Timing varies between takes; segment order and source do not.
+                edits = check.get("wordEdits") or []
+                if edits:
+                    for edit in edits:
+                        identities.add((english_reason, index, check.get("expectedText"),
+                                        edit.get("kind"), edit.get("expectedWordIndex"),
+                                        edit.get("recognizedWord") if edit.get("kind") == "insertion"
+                                        else edit.get("expectedWord")))
+                else:
+                    identities.add((english_reason, index, check.get("expectedText")))
+    identities.update((reason,) for reason in reasons - explained)
+    return identities
 
 
 def quality_summary(items: list[dict[str, Any]]) -> dict[str, Any]:

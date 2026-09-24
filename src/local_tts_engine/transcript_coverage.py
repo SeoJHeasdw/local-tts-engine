@@ -16,7 +16,86 @@ from .pronunciation import QUOTED_ENGLISH_PATTERN, apply_pronunciation, is_engli
 
 COVERAGE_POLICY = "ko-clause-omission-v1"
 OMISSION_REASON = "받아쓰기에서 구절 누락"
+REPETITION_POLICY = "ko-adjacent-repetition-v1"
+REPETITION_REASON = "받아쓰기에서 불필요한 반복"
+NEGATION_POLICY = "ko-negation-omission-v1"
+NEGATION_REASON = "받아쓰기에서 부정어 누락"
 WORD = re.compile(r"[가-힣]+|[A-Za-z0-9]+")
+
+
+def negation_omissions(expected: str, recognized: str, dictionary=None) -> list[dict[str, Any]]:
+    """Check short meaning-changing deletions below the normal lexical length.
+
+    Only standalone 안/못 deleted between otherwise matched words qualify.
+    This does not equate spellings or infer a negation from a substring of a
+    longer word (안전, 동안); ambiguous substitutions remain in the old gates.
+    """
+    left = list(WORD.finditer(expected))
+    right = list(WORD.finditer(apply_pronunciation(recognized, dictionary or [])))
+    a = [phonetic_variants(word.group())[0] for word in left]
+    b = [phonetic_variants(word.group())[0] for word in right]
+    operations = SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
+    checks = []
+    for index, (kind, i, j, k, l) in enumerate(operations):
+        if kind != "delete" or j - i != 1 or left[i].group() not in {"안", "못"}:
+            continue
+        if not (index > 0 and index + 1 < len(operations)
+                and operations[index - 1][0] == operations[index + 1][0] == "equal"):
+            continue
+        word = left[i]
+        checks.append({"kind": "negation-omission", "status": "warning", "reason": NEGATION_REASON,
+                       "expectedStart": word.start(), "expectedEnd": word.end(),
+                       "text": word.group(), "wordCount": 1})
+    return checks
+
+
+def adjacent_repetitions(expected: str, recognized: str, dictionary=None) -> list[dict[str, Any]]:
+    """Find extra complete Korean words repeated next to their source phrase.
+
+    Whole-text distance can hide a short repeated phrase in a long chunk. Only
+    a pure insertion duplicating an adjacent source span qualifies; source
+    repetitions, spacing differences, substitutions and arbitrary extra speech
+    are not judged by this gate. ASR evidence stays a warning, not acoustic proof.
+    """
+    left = list(WORD.finditer(expected))
+    heard = apply_pronunciation(recognized, dictionary or [])
+    right = list(WORD.finditer(heard))
+    a = [phonetic_variants(word.group())[0] for word in left]
+    b = [phonetic_variants(word.group())[0] for word in right]
+    checks = []
+    for kind, i, j, k, l in SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if kind != "insert":
+            continue
+        extra = right[k:l]
+        if any(not re.fullmatch(r"[가-힣]+", w.group()) for w in extra):
+            continue
+        # A short particle/ASR spacing fragment is not enough evidence.
+        if sum(len(w.group()) for w in extra) < 3:
+            continue
+        for width in range(1, min(8, l - k) + 1):
+            if (l - k) % width:
+                continue
+            for start in (i - width, i):
+                end = start + width
+                if start < 0 or end > len(a):
+                    continue
+                phrase = a[start:end]
+                if phrase * ((l - k) // width) != b[k:l]:
+                    continue
+                source = left[start:end]
+                if any(not re.fullmatch(r"[가-힣]+", w.group()) for w in source):
+                    continue
+                begin, finish = source[0].start(), source[-1].end()
+                checks.append({"kind": "repetition", "status": "warning",
+                    "reason": REPETITION_REASON, "expectedStart": begin, "expectedEnd": finish,
+                    "text": expected[begin:finish], "wordCount": width,
+                    "extraOccurrences": (l - k) // width,
+                    "heardText": heard[extra[0].start():extra[-1].end()]})
+                break
+            else:
+                continue
+            break
+    return checks
 
 
 def clause_omissions(expected: str, recognized: str, dictionary=None) -> list[dict[str, Any]]:

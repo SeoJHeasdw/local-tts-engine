@@ -10,7 +10,9 @@ from local_tts_engine.course_pilot import (
     CourseChunk, CourseEntry, generate_candidate_audio, resolve_chunk_take,
 )
 from local_tts_engine.english_voice import speech_segments
-from local_tts_engine.transcript_coverage import clause_omissions, omission_recovery_parts, saved_omissions
+from local_tts_engine.transcript_coverage import (
+    clause_omissions, omission_recovery_parts, saved_omissions, adjacent_repetitions, negation_omissions,
+)
 from local_tts_engine.speech_quality import evaluate_candidate, better_evaluation
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/ch02-l04-omission.json").read_text())
@@ -208,3 +210,57 @@ def test_recovery_cuts_never_split_a_quoted_english_sentence():
     assert " ".join(parts) == " ".join(text.split())
     # 인용문 밖의 문장 경계는 그대로 자를 수 있어야 한다.
     assert len(parts) == 3
+
+
+@pytest.mark.parametrize("phrase", ["다음으로", "결과를 확인하고"])
+def test_local_repetition_is_visible_below_the_whole_text_error_gate(tmp_path, phrase):
+    expected = ("오늘은 도구와 실행 환경을 자세하게 살펴보겠습니다. 화면의 설정도 하나씩 살펴봅니다. 각각의 역할과 동작 원리를 "
+                f"이해하면 문제를 더 쉽게 해결할 수 있습니다. {phrase} 안전하게 작업을 마칩니다.")
+    recognized = expected.replace(phrase, f"{phrase} {phrase}")
+    rate = 24000
+    path = tmp_path / "repetition.wav"
+    sf.write(path, .1 * np.sin(2 * np.pi * 220 * np.arange(25 * rate) / rate), rate)
+    result = evaluate_candidate(expected_text=expected, recognized_text=recognized, audio_path=path)
+    assert result["phoneticErrorRate"] < .1
+    assert "받아쓰기에서 불필요한 반복" in result["warnings"]
+    check = next(c for c in result["contentChecks"] if c["kind"] == "repetition")
+    assert check["text"] == phrase
+    assert expected[check["expectedStart"]:check["expectedEnd"]] == phrase
+    assert check["extraOccurrences"] == 1
+
+
+@pytest.mark.parametrize("expected,recognized", [
+    ("결과를 확인하고 결과를 확인하고 끝냅니다.", "결과를 확인하고 결과를 확인하고 끝냅니다."),
+    ("함께 볼 수 있습니다.", "함께 볼수 있습니다."),
+    ("안 해도 됩니다.", "안 안 해도 됩니다."),
+    ("새 방법을 설명합니다.", "다른 방법을 설명합니다."),
+    ("다음으로 설명합니다.", "다음으로 새로운 내용을 설명합니다."),
+    ("We use tools.", "We use use tools."),
+])
+def test_repetition_gate_leaves_source_repetition_spacing_and_ambiguous_short_tokens_alone(expected, recognized):
+    assert adjacent_repetitions(expected, recognized) == []
+
+
+@pytest.mark.parametrize("word", ["안", "못"])
+def test_single_syllable_negation_cannot_disappear_in_a_long_chunk(tmp_path, word):
+    text = ("도구를 사용하기 전에 권한을 확인합니다. 필요한 권한을 정확하게 지정해야 합니다. "
+            f"승인이 없으면 실행을 {word} 합니다. 이 조건은 모든 작업에 적용됩니다.")
+    heard = text.replace(f"{word} 합니다", "합니다")
+    rate = 24000
+    path = tmp_path / "negation.wav"
+    sf.write(path, .1 * np.sin(2 * np.pi * 220 * np.arange(22 * rate) / rate), rate)
+    result = evaluate_candidate(expected_text=text, recognized_text=heard, audio_path=path)
+    assert result["phoneticErrorRate"] < .1
+    assert "받아쓰기에서 부정어 누락" in result["warnings"]
+    assert any(c["text"] == word and c["kind"] == "negation-omission" for c in result["contentChecks"])
+
+
+@pytest.mark.parametrize("text,heard", [
+    ("실행하면 안 됩니다.", "실행하면 안됩니다."),
+    ("이것은 못 합니다.", "이것은 못합니다."),
+    ("안전한 도구입니다.", "도구입니다."),
+    ("실행하면 안 됩니다.", "실행하면 안 됩니다."),
+    ("승인 없이 안 됩니다.", "설명할 수 있습니다."),
+])
+def test_negation_gate_does_not_treat_spacing_or_word_substrings_as_omission(text, heard):
+    assert negation_omissions(text, heard) == []

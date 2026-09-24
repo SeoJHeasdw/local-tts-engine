@@ -106,6 +106,75 @@ def test_english_word_check_detects_short_omission_without_judging_accent():
     assert not english_reading_check("Do not use separate Bots.", "Do use separate bots.")['passed']
 
 
+@pytest.mark.parametrize(("expected", "recognized"), [
+    ("We'll use a tool.", "Well, use a tool."),
+    ("We're done.", "Were done."),
+    ("I'll call the tool.", "Ill call the tool."),
+    ("Do not use separate Bots.", "Do use separate bots."),
+    (QUOTE, f"{QUOTE} 구독해주세요"),
+    (QUOTE, ""),
+])
+def test_english_check_cannot_hide_contractions_negation_or_extra_korean(expected, recognized):
+    check = english_reading_check(expected, recognized)
+    assert not check['passed']
+    assert check['editCount'] >= 1
+    assert check['wordErrorRate'] > 0
+
+
+def test_english_check_records_missing_repeated_and_replaced_words_in_order():
+    missing = english_reading_check("Do not use separate Bots.", "Do use separate Bots.")
+    assert missing['wordEdits'] == [{
+        'kind': 'deletion', 'expectedWord': 'not', 'recognizedWord': '',
+        'expectedWordIndex': 1, 'recognizedWordIndex': 1,
+    }]
+    repeated = english_reading_check(QUOTE, "Do my my bots share one computer?")
+    assert repeated['editCount'] == 1
+    assert repeated['wordEdits'][0]['kind'] == 'insertion'
+    assert repeated['wordEdits'][0]['recognizedWord'] == 'my'
+    replaced = english_reading_check(QUOTE, "Do my bots share two computers?")
+    assert [(edit['expectedWord'], edit['recognizedWord']) for edit in replaced['wordEdits']] == [
+        ('one', 'two'), ('computer', 'computers'),
+    ]
+    assert replaced['editCount'] == 2 and replaced['wordErrorRate'] == round(2 / 6, 6)
+
+
+def test_english_check_normalizes_only_typography_and_preserves_evidence():
+    check = english_reading_check('“We’ll use a tool.”', "WE'LL USE A TOOL!", startMs=120, durationMs=900)
+    assert check['passed'] and check['editCount'] == 0
+    assert check['expectedWords'] == check['recognizedWords'] == ["we'll", 'use', 'a', 'tool']
+    assert check['recognizedText'] == "WE'LL USE A TOOL!"
+    assert check['startMs'] == 120 and check['durationMs'] == 900
+    assert not english_reading_check('...', '')['passed']
+
+
+@pytest.mark.parametrize('text', [
+    f'질문은 "{QUOTE}".',
+    f'"{QUOTE}", "Should each bot use one?" 다음입니다.',
+    f'질문은 "{QUOTE}" "Should each bot use one?"입니다.',
+    f'("{QUOTE}")라고 묻습니다.',
+])
+def test_quote_punctuation_never_becomes_an_isolated_korean_generation(text):
+    parts = speech_segments(text, DICTIONARY)
+    assert len(parts) == 2 or len(parts) == 3
+    assert all(any(char.isalnum() for char in part['text']) for part in parts)
+    assert ''.join(''.join(part['text'].split()) for part in parts) == ''.join(text.split())
+    assert sum(part['language'] == 'English' for part in parts) == 1
+
+
+def test_english_quote_followed_by_punctuation_does_not_synthesize_a_phantom_syllable():
+    calls = []
+
+    def generate(**kwargs):
+        calls.append((kwargs['text'], kwargs['lang_code']))
+        yield SimpleNamespace(audio=np.full(2400, .05, dtype=np.float32), sample_rate=24000, peak_memory_usage=1.)
+
+    text = f'질문은 "{QUOTE}".'
+    result = generate_candidate_audio(generate, {'text': text, 'lang_code': 'Korean'},
+                                      voice_router=EnglishVoiceRouter(DICTIONARY))
+    assert calls == [('질문은', 'Korean'), (f'"{QUOTE}".', 'English')]
+    assert len(result['cleanup']['voiceRouting']['segments']) == 2
+
+
 def test_korean_only_keeps_the_original_single_call_and_metadata():
     args = {"text": "질문이 있습니다.", "lang_code": "Korean", "ref_text": "참조", "ref_audio": "ref"}
     calls = []

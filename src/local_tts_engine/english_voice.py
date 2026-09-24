@@ -8,14 +8,17 @@ from __future__ import annotations
 from contextlib import contextmanager
 import re
 from typing import Any
+import unicodedata
 
-from .pronunciation import _dictionary_pattern, merge_pronunciation_dictionaries, is_english_sentence
+from .pronunciation import (
+    QUOTED_ENGLISH_PATTERN, _dictionary_pattern, merge_pronunciation_dictionaries,
+    is_english_sentence,
+)
 
 ENGLISH_VOICE_POLICY = "english-speaker-only-v1"
 LANGUAGE_GAP_MS = 120
 _HANGUL = re.compile(r"[가-힣ㄱ-ㅎㅏ-ㅣ]")
 _WORD = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
-_QUOTED = re.compile(r'''["“]([^"“”\n]+)["”]''')
 
 
 def speech_segments(text: str, dictionary: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -40,7 +43,7 @@ def speech_segments(text: str, dictionary: list[dict[str, Any]]) -> list[dict[st
             intervals.append((start, end))
     # New quoted sentences are safe to route even before a literal dictionary
     # entry is added. Korean pronunciation replacements still take precedence.
-    for match in _QUOTED.finditer(text):
+    for match in QUOTED_ENGLISH_PATTERN.finditer(text):
         value = match.group(1)
         if is_english_sentence(value):
             intervals.append(match.span())
@@ -53,13 +56,33 @@ def speech_segments(text: str, dictionary: list[dict[str, Any]]) -> list[dict[st
     if not merged:
         return [{"text": text, "language": "Korean"}]
     result, cursor = [], 0
+
+    def append(value: str, language: str):
+        if not value.strip():
+            if result:
+                result[-1]["text"] += value
+            return
+        # Quote separators and trailing punctuation carry no Korean speech.
+        # Generating them alone can invent a syllable or a long empty clip.
+        if not any(char.isalnum() for char in value):
+            if result:
+                result[-1]["text"] += value
+            else:
+                result.append({"text": value, "language": language})
+        elif result and (result[-1]["language"] == language or
+                         not any(char.isalnum() for char in result[-1]["text"])):
+            result[-1]["text"] += value
+            result[-1]["language"] = language
+        else:
+            result.append({"text": value, "language": language})
+
     for start, end in merged:
-        if text[cursor:start].strip():
-            result.append({"text": text[cursor:start].strip(), "language": "Korean"})
-        result.append({"text": text[start:end].strip(), "language": "English"})
+        append(text[cursor:start], "Korean")
+        append(text[start:end], "English")
         cursor = end
-    if text[cursor:].strip():
-        result.append({"text": text[cursor:].strip(), "language": "Korean"})
+    append(text[cursor:], "Korean")
+    for segment in result:
+        segment["text"] = segment["text"].strip()
     return result
 
 
@@ -143,14 +166,58 @@ def match_english_level(audio, rate, segments):
 
 
 def english_words(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", text.casefold().replace("’", "'").replace("'", ""))
+    """Comparison words, retaining contractions and unexpected other languages.
+
+    Removing apostrophes equated ``we'll`` with ``well`` and ``we're`` with
+    ``were``. Discarding non-ASCII letters also hid an extra Korean utterance
+    after an otherwise correct English quote. Only typography is normalized.
+    """
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("’", "'")
+    return re.findall(r"[^\W_]+(?:'[^\W_]+)*", normalized)
+
+
+def _word_edits(expected: list[str], heard: list[str]) -> list[dict[str, Any]]:
+    """Minimum word edits with positions, retaining repeated-word evidence."""
+    distances = [list(range(len(heard) + 1))]
+    for i, expected_word in enumerate(expected, 1):
+        row = [i]
+        for j, heard_word in enumerate(heard, 1):
+            row.append(min(distances[-1][j] + 1, row[-1] + 1,
+                           distances[-1][j - 1] + (expected_word != heard_word)))
+        distances.append(row)
+    i, j = len(expected), len(heard)
+    edits = []
+    while i or j:
+        if i and j and expected[i - 1] == heard[j - 1]:
+            i, j = i - 1, j - 1
+        elif i and j and distances[i][j] == distances[i - 1][j - 1] + 1:
+            i, j = i - 1, j - 1
+            edits.append({"kind": "substitution", "expectedWord": expected[i],
+                          "recognizedWord": heard[j], "expectedWordIndex": i,
+                          "recognizedWordIndex": j})
+        elif i and distances[i][j] == distances[i - 1][j] + 1:
+            i -= 1
+            edits.append({"kind": "deletion", "expectedWord": expected[i],
+                          "recognizedWord": "", "expectedWordIndex": i,
+                          "recognizedWordIndex": j})
+        else:
+            j -= 1
+            edits.append({"kind": "insertion", "expectedWord": "",
+                          "recognizedWord": heard[j], "expectedWordIndex": i,
+                          "recognizedWordIndex": j})
+    return list(reversed(edits))
 
 
 def english_reading_check(expected: str, recognized: str, **timing) -> dict[str, Any]:
     """Record lexical differences; this cannot evaluate accent or naturalness."""
     expected_words, heard_words = english_words(expected), english_words(recognized)
+    edits = _word_edits(expected_words, heard_words)
     return {"expectedText": expected, "recognizedText": recognized,
-            "passed": expected_words == heard_words, **timing}
+            "passed": bool(expected_words) and not edits,
+            "expectedWords": expected_words, "recognizedWords": heard_words,
+            "wordEdits": edits, "editCount": len(edits),
+            "wordErrorRate": round(len(edits) / max(1, len(expected_words)), 6),
+            **timing}
 
 
 def _audio_parts(path, routing):
