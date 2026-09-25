@@ -90,6 +90,10 @@ for (const profile of Object.values(VIDEO_QUALITIES)) {
       validateCaptureStream(probe, profile, 25);
       assert.equal(frames.written, 25);
       assert.ok(frames.duplicated > 0, '정적인 프레임을 복제해도 영상 시계는 유지해야 한다');
+      assert.equal(frames.duplicateRuns.reduce((sum, run) => sum + run.frames, 0), frames.duplicated);
+      assert.equal(Math.max(...frames.backlogPeakBytesBySecond), frames.peakBacklog);
+      assert.equal(frames.backlogLimitBytes, 512 * 1024 * 1024);
+      if (frames.peakBacklog > 0) assert.ok(frames.peakBacklogAtMs >= 0 && frames.peakBacklogAtMs < 1000);
       assert.equal(probe.streams[0].color_primaries, 'bt709');
       // Sparse updates must not reveal the future state ahead of its 400ms timestamp.
       const pixels = (await ffmpeg(['-i', out, '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'])).stdout;

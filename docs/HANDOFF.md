@@ -1,12 +1,28 @@
 # 현재 상태와 인수인계
 
-갱신: 2026-09-24. 작업 절차는 [AGENTS](../AGENTS.md), 실행은 [README](../README.md),
+갱신: 2026-09-25. 작업 절차는 [AGENTS](../AGENTS.md), 실행은 [README](../README.md),
 구조는 [ARCHITECTURE](ARCHITECTURE.md), 음성 규칙은 [QUALITY](QUALITY.md), 영상 규격·측정은
 [VIDEO-QUALITY](VIDEO-QUALITY.md), 승인·결정 근거는 [DECISIONS](DECISIONS.md)를 따른다.
 이 문서는 지금 상태와 결과 위치만 둔다. 지난 작업의 경위는 git 기록에 있다.
 
 ## 남은 일
 
+- **CH00 3D 음성·자막본:** 사용자가 확인한 47상태 고정본(`output/reviews/2026-09-25/3d-capture-live/frozen-input`)
+  기준으로 `scripts/build_ch00_3d_narrated.mjs`를 준비했다. 승인 Qwen3-TTS·LoRA 0.60을
+  새로 합성해 실제 길이로 자막을 만들고 1440p 자막 합성 영상을 다시 찍는다. 준비 검사와
+  모델 캐시 확인은 통과했다. 이 세션의 Metal 권한이 막혀 실제 생성은 일반 Mac 터미널에서
+  `node scripts/build_ch00_3d_narrated.mjs` 실행이 필요하다. 결과는 새
+  `output/reviews/2026-09-25/ch00-3d-narrated-v2/`에만 남기며 자동 파일 검사와 최종 청취
+  승인을 구분한다. 옛 CH00 음성은 41상태라 재사용하지 않는다.
+- **3D 강의 촬영 실측:** 촬영기에 3D 첫 그림·WebGL 실패 확인과 메모리 계측을 더했다.
+  사용자 터미널에서 CH00 전체 1440p와 1080p·4K 대표 장면, 다른 3D 유형 여섯 곳의
+  진단 14/14회가 완료됐다(`output/reviews/2026-09-25/3d-capture-live-retry/probe-results.json`).
+  CH00 1440p는 282초·7050프레임이며 메모리 압박·스왑 증가는 없었다. 다만 복제
+  9.21%, 인코더 입력 적체 최대 378.5MiB/512MiB라 향후 긴 3D 편의 관찰이 필요하다.
+  대표 프레임에서 빈 화면·대체 화면은 없었고 실제 음성·전체 시청 승인은 별도다.
+  이후 촬영부터 복제 연속 구간·초별 적체 시각을 기록한다. 현 덱이 계속 수정 중이므로
+  새 장면 판단은 다시 고정한 입력으로 한다. 조건·측정 한계는
+  [VIDEO-QUALITY](VIDEO-QUALITY.md#3d-장표-촬영-진단-2026-09-25).
 - **음성 자동화의 필수 재검 완료, 남은 것은 `봇이`의 경미한 개선:**
   `artifacts/validation/prosody/20260924-040133-3f33ab/review-20260924-140300-610f15.json`에서
   **15개 자동 통과 + 1개 기존 청취 수용 후 추가 운율 통과**를 확인했다. 7·8번의

@@ -29,6 +29,8 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
   let buffered = [], bufferedBytes = 0, lastWritten = null, lastTimestamp = -Infinity;
   let startedAt = 0, startedMono = 0, capFrames = 0;
   let written = 0, received = 0, duplicated = 0, reordered = 0, superseded = 0, peakBacklog = 0, peakBufferedBytes = 0;
+  let peakBacklogAtMs = null;
+  const backlogPeakBytesBySecond = [], duplicateRuns = [];
   let stall = 0, longestStall = 0;
   let nextAck = 0, lastAckSent = -Infinity;
   const ackTimers = new Set();
@@ -157,10 +159,17 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
         fail(new Error('영상 인코더가 실시간 촬영을 따라가지 못해 중단했습니다. 다른 실행 작업을 마친 뒤 같은 화질로 다시 촬영해 주세요.'));
         return;
       }
-      if (frame === lastWritten) { duplicated++; stall++; longestStall = Math.max(longestStall, stall); }
+      if (frame === lastWritten) {
+        duplicated++; stall++; longestStall = Math.max(longestStall, stall);
+        if (stall === 1) duplicateRuns.push({ startFrame: written, frames: 0 });
+        duplicateRuns.at(-1).frames++;
+      }
       else stall = 0;
       ffmpeg.stdin.write(frame.data);
-      peakBacklog = Math.max(peakBacklog, ffmpeg.stdin.writableLength);
+      const backlog = ffmpeg.stdin.writableLength;
+      if (backlog > peakBacklog) { peakBacklog = backlog; peakBacklogAtMs = Math.round(written * frameMs); }
+      const second = Math.floor(written / fps);
+      backlogPeakBytesBySecond[second] = Math.max(backlogPeakBytesBySecond[second] ?? 0, backlog);
       lastWritten = frame; written++;
       while (buffered.length && buffered[0].ts <= target + .001) bufferedBytes -= buffered.shift().data.length;
     }
@@ -182,6 +191,7 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
     } finally { clearTimeout(timeout); }
   }
   return {
+    encoderPid: ffmpeg.pid ?? null,
     fail,
     // 앱 조작도 이 실패를 함께 기다린다. 인코더가 죽은 뒤 다음 버튼을 누르지 않는다.
     failed,
@@ -236,7 +246,9 @@ export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, heig
         ffmpeg.stdin.end();
         await encoded;
         phase = 'finished';
-        const result = { written, received, duplicated, reordered, superseded, peakBacklog, peakBufferedBytes, longestStall, timestamped: true };
+        const result = { written, received, duplicated, reordered, superseded, peakBacklog, peakBufferedBytes,
+          peakBacklogAtMs, backlogLimitBytes: maxBacklogBytes, backlogPeakBytesBySecond, duplicateRuns,
+          longestStall, timestamped: true };
         buffered = []; bufferedBytes = 0; lastWritten = null;
         return result;
       } catch (error) { fail(error); throw failure || error; }

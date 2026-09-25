@@ -11,8 +11,9 @@ import { captureFrameCount, captureVideoFileName, videoQuality } from "../../sha
 import { fileSha256 } from "../files.mjs";
 import { captureMuxArgs, validateCaptureStream, writeCaptureReport } from "./encoding.mjs";
 import { startScreencastEncoder } from "./recorder.mjs";
+import { createCaptureResourceSampler } from "./resource-metrics.mjs";
 import { startCaptureServer, waitForServer } from "./site.mjs";
-import { advanceToEntry, auditCapturePage, gotoFirstEntry, prepareDeckPage, startCaptions } from "./deck-page.mjs";
+import { advanceToEntry, auditCapturePage, gotoFirstEntry, prepareDeckPage, replayFirstEntry, startCaptions } from "./deck-page.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -113,6 +114,8 @@ export async function captureVideo({
   let browser = null;
   let context = null;
   let recorder = null;
+  let resourceSampler = null;
+  let resourceUsage = null;
   let captureCompleted = false;
   const sourceResolutionLimits = [];
   try {
@@ -120,6 +123,11 @@ export async function captureVideo({
       headless: !headful,
       args: ["--enable-gpu", "--use-gl=angle", "--use-angle=metal", ...(noCache ? ["--disable-http-cache"] : [])],
     });
+    resourceSampler = createCaptureResourceSampler();
+    // Playwright Browser does not expose a stable process() API. The sampler
+    // can still report worker and system pressure; the diagnostic runner also
+    // records the complete child process tree through libproc on macOS.
+    resourceSampler.start();
     context = await browser.newContext({
       viewport: { width: profile.width, height: profile.height },
       // 실제 뷰포트를 키워 텍스트·벡터를 해당 해상도로 렌더링한다.
@@ -131,6 +139,16 @@ export async function captureVideo({
     page.on("crash", () => recorder?.fail(new Error("촬영 페이지가 중단됐습니다.")));
     page.on("close", () => recorder?.fail(new Error("촬영 페이지가 닫혔습니다.")));
     const session = await context.newCDPSession(page);
+    try {
+      await session.send("Performance.enable");
+      resourceSampler.setPageJsHeapReader(async () => {
+        const metrics = await session.send("Performance.getMetrics");
+        return metrics.metrics?.find(metric => metric.name === "JSHeapUsedSize")?.value ?? null;
+      });
+    } catch (error) {
+      // CDP heap is optional diagnostics; a failed probe cannot invalidate video.
+      resourceSampler.setPageHeapError(error);
+    }
     if (noCache) {
       await page.setExtraHTTPHeaders({ "Cache-Control": "no-cache", Pragma: "no-cache" });
       await session.send("Network.enable");
@@ -152,7 +170,10 @@ export async function captureVideo({
       );
     };
 
-    await prepareDeckPage(page, profile, { burnCaptions });
+    await prepareDeckPage(page, profile, {
+      burnCaptions,
+      onCaptureFailure: error => recorder?.fail(error),
+    });
 
     const first = timeline.entries[0];
     await gotoFirstEntry(page, first);
@@ -162,13 +183,23 @@ export async function captureVideo({
     // 시작하는 순간이 곧 영상의 0초라, 예전처럼 마커를 찍어 인코더의 시작
     // 시점을 되짚고 앞을 잘라낼 필요가 없다.
     recorder = startScreencastEncoder({ session, ffmpegArgs, width: profile.width, height: profile.height, fps: profile.fps });
+    resourceSampler.setEncoderPid(recorder.encoderPid);
+    await resourceSampler.sample().catch(() => {});
     await recorder.ready();
 
     const captureStart = performance.now();
+    resourceSampler.setPhase("recording");
     recorder.begin(Date.now(), totalFrames);
     captureStarted = true;
     if (burnCaptions) await startCaptions(page, captions);
-    await page.keyboard.press("r");
+    const firstReplayRenderMs = await replayFirstEntry(page, first);
+    const firstSceneReadyAtMs = Math.round(performance.now() - captureStart);
+    if (Number.isFinite(first.speechStartMs) && firstSceneReadyAtMs > first.speechStartMs) {
+      throw new Error(
+        `첫 화면이 발화 시작 뒤에 준비됐습니다: 화면 ${firstSceneReadyAtMs}ms, 발화 ${first.speechStartMs}ms. ` +
+        "늦은 장면이 포함된 영상을 완료로 남기지 않습니다.",
+      );
+    }
 
     for (let i = 0; i < timeline.entries.length; i++) {
       const entry = timeline.entries[i];
@@ -187,6 +218,11 @@ export async function captureVideo({
     refreshed();
     const frames = await recorder.finish();
     recorder = null;
+    resourceSampler.setEncoderPid(null);
+    resourceSampler.setPhase("finalizing");
+    resourceUsage = await resourceSampler.stop().catch(error => ({
+      status: "unavailable", error: String(error?.message || error),
+    }));
     const { stdout } = await run("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", workFile]);
     const probe = JSON.parse(stdout);
     const stream = validateCaptureStream(probe, profile, totalFrames);
@@ -199,7 +235,9 @@ export async function captureVideo({
     const captureReport = {
       schemaVersion: 1, profile, frameFormat: "png", encoder: "libx264", preset: "slow",
       frames, durationMs: finalDurationMs, video: stream, file: finalFile, fileSha256: digest,
+      firstReplayRenderMs, firstSceneReadyAtMs,
       sourceResolutionLimits: sourceResolutionLimits.filter(state => state.assets.length),
+      resourceUsage,
       sourceContract: timeline.sourceContract || null, generatedAt: new Date().toISOString(),
     };
     writeCaptureReport(`${finalFile}.capture.json`, captureReport);
@@ -214,6 +252,16 @@ export async function captureVideo({
     await context.close();
     context = null;
   } finally {
+    if (resourceSampler && !captureCompleted) {
+      if (!resourceUsage) resourceUsage = await resourceSampler.stop().catch(() => null);
+      if (resourceUsage) {
+        try {
+          writeCaptureReport(path.join(outDir, "capture-resource.json"), {
+            status: "incomplete", resourceUsage, generatedAt: new Date().toISOString(),
+          });
+        } catch { /* Diagnostic file failure must not replace the capture error. */ }
+      }
+    }
     if (recorder) await recorder.abort().catch(() => {});
     if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
