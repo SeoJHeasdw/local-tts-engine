@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -29,13 +30,31 @@ def _output_range(chunk: dict[str, Any], source_rate: int, output_rate: int) -> 
     )
 
 
+def _comparison_samples(source: np.ndarray, source_rate: int, output_rate: int) -> np.ndarray:
+    """Put the reference on the delivered sample grid using audio resampling.
+
+    Linear interpolation attenuates high frequencies between native samples.
+    Comparing it with FFmpeg's band-limited output can falsely report lost
+    speech. Resample only the reference; leave the delivered waveform intact.
+    """
+    if source_rate == output_rate:
+        return source
+    result = subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "f32le", "-ar", str(source_rate),
+        "-ac", "1", "-i", "pipe:0", "-ar", str(output_rate), "-ac", "1",
+        "-f", "f32le", "pipe:1",
+    ], input=np.asarray(source, dtype="<f4").tobytes(), capture_output=True, check=True)
+    return np.frombuffer(result.stdout, dtype="<f4")
+
+
 def _waveform_similarity(source: np.ndarray, output: np.ndarray, source_rate: int,
                          output_rate: int) -> tuple[float, float | None]:
     """Compare the whole clip and its audible quarter-second spans."""
     if len(source) < 100 or len(output) < 100:
         return 0.0, None
-    # Use at most 200k evenly spaced points, so a long course clip does not
-    # create another full-size resampled waveform in memory.
+    source = _comparison_samples(source, source_rate, output_rate)
+    # The reference is now on the same sample grid as the delivered waveform.
+    # Bound comparison vectors while retaining the existing local audit windows.
     stride = max(1, math.ceil(len(output) / 200_000))
     positions = np.arange(0, len(output), stride, dtype=np.float64)
     output_view = np.asarray(output[::stride], dtype=np.float64)
@@ -43,7 +62,7 @@ def _waveform_similarity(source: np.ndarray, output: np.ndarray, source_rate: in
     best_source_view: np.ndarray | None = None
     for delay in range(-8, 9, 2):
         source_view = np.interp(
-            (positions + delay) * source_rate / output_rate,
+            positions + delay,
             np.arange(len(source)), source,
             left=0.0, right=0.0,
         )

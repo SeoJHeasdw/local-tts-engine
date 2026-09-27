@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -160,4 +162,30 @@ def test_quiet_spoken_span_is_still_compared_locally(tmp_path) -> None:
         issue["code"] for issue in inspect_final_track(native, final, [
             {"key": "clip", "audioPath": str(clip), "startSample": 0, "endSample": len(speech)},
         ])["issues"]
+    }
+
+
+@pytest.mark.parametrize("output_rate", [48_000, 44_100])
+def test_resampled_high_frequency_span_preserves_signal_and_detects_loss(tmp_path, output_rate) -> None:
+    rate = 24_000
+    t = np.arange(3 * rate, dtype=np.float64) / rate
+    speech = 0.1 * np.sin(2 * np.pi * 190 * t)
+    # Quiet high frequencies expose linear interpolation's attenuation between
+    # native samples. Resampling must pass; deleting this span must still fail.
+    speech[rate:rate + rate // 4] = 0.003 * np.sin(2 * np.pi * 10_000 * t[:rate // 4])
+    clip, native, final = (tmp_path / name for name in ("clip.wav", "native.wav", "final.wav"))
+    sf.write(clip, speech, rate, subtype="PCM_24")
+    sf.write(native, speech, rate, subtype="PCM_24")
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-i", str(native), "-af", "volume=1.5",
+        "-ar", str(output_rate), "-c:a", "pcm_s24le", str(final),
+    ], check=True, capture_output=True)
+    chunks = [{"key": "clip", "audioPath": str(clip), "startSample": 0, "endSample": len(speech)}]
+    assert inspect_final_track(native, final, chunks)["status"] == "ok"
+
+    missing, _ = sf.read(final, dtype="float32")
+    missing[output_rate:output_rate + output_rate // 4] = 0
+    sf.write(final, missing, output_rate, subtype="PCM_24")
+    assert "local-waveform-changed" in {
+        issue["code"] for issue in inspect_final_track(native, final, chunks)["issues"]
     }
