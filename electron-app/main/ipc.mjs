@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
-import { FINETUNE_TRAIN_JSONL, RENDERER_DIR, ROOT, runtimePaths } from "./paths.mjs";
+import { FINETUNE_TRAIN_JSONL, RENDERER_DIR, runtimePaths } from "./paths.mjs";
 import { audioEnvelope, makeRegionPreview, newPreviewDirectory } from "./editing/review-media.mjs";
 import { cancelJobProcesses, pauseJobProcesses, resumeJobProcesses } from "./job-process.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isInside, normalizeEditName, normalizeOptions, normalizeVoiceText, pendingUnits } from "../shared/index.mjs";
 import { renameMediaFile, repointReportFile, safeStat } from "./files.mjs";
+import { inspectVoiceReadiness } from "./voice-readiness.mjs";
 
 // ffmpeg 가 읽는 흔한 컨테이너는 모두 받는다. 코덱·색 형식이 편집에 맞지 않으면
 // 렌더 직전의 검사가 그 이유를 따로 말해 주므로, 담는 문턱에서 미리 막지 않는다.
@@ -38,6 +39,7 @@ export function createIpcService({
   jobSnapshot,
   launchPipeline,
   listOutputs,
+  listTextVoiceCandidates,
   listRecordingSources,
   listDemoScenarios,
   loadCatalog,
@@ -58,6 +60,7 @@ export function createIpcService({
   saveAppSettings,
   saveDemoScript,
   selectTextVoice,
+  selectTextVoiceFromHistory,
   setClearedFindings,
   setOutputReview,
   shell,
@@ -126,28 +129,31 @@ export function createIpcService({
       guard(event);
       const settings = await readAppSettings();
       const studio = runtimePaths(settings.paths);
-      const selectedAdapter = settings.adapters.find((item) => item.id === settings.adapterId) || null;
+      const readiness = await inspectVoiceReadiness(settings, studio, { fs });
+      const ready = (item) => item?.state === "ready";
       const runtime = {
         basePython: Boolean(state.runtimeTools.basePython),
         trainPython: Boolean(state.runtimeTools.trainPython),
         node: Boolean(state.runtimeTools.node),
         ffmpeg: Boolean(state.runtimeTools.ffmpeg),
         ffprobe: Boolean(state.runtimeTools.ffprobe),
-        voice: Boolean(await safeStat(studio.referenceAudioPath)),
+        voice: ready(readiness.referenceAudio),
+        referenceText: ready(readiness.referenceText),
         voiceLibrary: Boolean(await safeStat(studio.voiceLibraryRoot)),
-        adapter: settings.adapterId === "none" || Boolean(await safeStat(selectedAdapter?.path)),
-        qualityModel: Boolean(
-          await safeStat(path.join(ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16/config.json"))
-          && await safeStat(path.join(ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16/model.safetensors")),
-        ),
+        adapter: settings.adapterId === "none" || ready(readiness.adapter),
+        model: ready(readiness.models[settings.modelId]),
+        qualityModel: ready(readiness.quality),
+        aligner: ready(readiness.aligner),
         deck: Boolean(await safeStat(studio.configPath))
           && Boolean(await safeStat(path.join(studio.deckRoot, "script/course"))),
       };
       const capabilities = {
-        textVoice: runtime.trainPython && runtime.ffprobe && runtime.voice && runtime.adapter,
+        textVoice: runtime.trainPython && runtime.ffprobe && runtime.voice && runtime.referenceText
+          && runtime.adapter && runtime.model && runtime.qualityModel,
         editing: runtime.ffmpeg && runtime.ffprobe,
         course: runtime.trainPython && runtime.basePython && runtime.node && runtime.ffmpeg
-          && runtime.ffprobe && runtime.voice && runtime.adapter && runtime.qualityModel && runtime.deck,
+          && runtime.ffprobe && runtime.voice && runtime.referenceText && runtime.adapter
+          && runtime.model && runtime.qualityModel && runtime.aligner && runtime.deck,
       };
       const setupIssues = [];
       let catalog = { pages: [], lessons: [], totalPages: 0 };
@@ -163,6 +169,7 @@ export function createIpcService({
       return {
         activeJob: jobSnapshot(),
         runtime,
+        readiness,
         capabilities,
         setupIssues,
         catalog,
@@ -406,6 +413,16 @@ export function createIpcService({
     ipcMain.handle("studio:select-text-voice", async (event, token) => {
       guard(event);
       return selectTextVoice(String(token || ""));
+    });
+
+    ipcMain.handle("studio:list-text-voice-candidates", async (event, target) => {
+      guard(event);
+      return listTextVoiceCandidates(target);
+    });
+
+    ipcMain.handle("studio:select-text-voice-from-history", async (event, target, candidateIndex) => {
+      guard(event);
+      return selectTextVoiceFromHistory(target, candidateIndex);
     });
 
     ipcMain.handle("studio:start-finetune", async (event, rawOptions = {}) => {

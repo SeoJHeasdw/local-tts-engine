@@ -29,6 +29,23 @@ test('대본이 없는 실제 입력 오류는 첫 생성 전에 중단한다', 
   assert.ok(run.calls.every(call => call.stage === 'snapshot'));
 });
 
+test('완성 음성 조립 검사가 실패한 manifest는 파일 길이가 맞아도 검증 실패다', async t => {
+  const run = await productionFixture(t, { mode: 'lesson', chapterMode: 'single' });
+  const sourceDir = path.join(run.studio.ttsOutputRoot, '2026-09-27', 'integrity-failed');
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.writeFile(path.join(sourceDir, 'manifest.json'), JSON.stringify({
+    audioPath: path.join(sourceDir, 'voice.wav'), durationMs: 1000,
+    entries: [{ key: 'spoken' }], quality: { enabled: true,
+      summary: { clean: true, needsReview: [] }, chunks: [],
+      finalTrack: { status: 'failed', integrity: { status: 'failed', issues: [{ code: 'missing-speech' }] } } },
+  }));
+  await assert.rejects(run.service.validateResult({ sourceDir, renderDir: sourceDir,
+    options: { ...run.options, deliverable: 'audio' }, studio: run.studio }), /완성 음성 조립 무결성/);
+  const report = JSON.parse(await fs.readFile(path.join(sourceDir, 'validation-report.json'), 'utf8'));
+  assert.equal(report.summary.ok, false);
+  assert.deepEqual(report.summary.failed, ['완성 음성 조립 무결성']);
+});
+
 test('중간 레슨 실패 후 나머지 제작·부분 완료·실패 레슨 재시작을 모두 보존한다', async t => {
   const run = await productionFixture(t, { quality: 'ultra' });
   run.failures.set('test-ch03-l02', 'voice');

@@ -5,6 +5,7 @@ import { captureVideoFileName, videoFrameRate, videoQuality } from "../shared/vi
 import { ACTIVE_JOB_PATH, ADAPTER, ROOT, dateFolder, runtimePaths } from "./paths.mjs";
 import { combineChapterReports, pendingUnits, mapWithConcurrency, presetFromManifest, providerForOptions, summarizeChecks, voiceQualityFindings } from "../shared/index.mjs";
 import { fileSha256, findVideo, publishVideo, safeStat, writeReport } from "./files.mjs";
+import { assertCurrentCourseManifest } from "./course-run-state.mjs";
 
 export function createProductionService({
   emit,
@@ -68,7 +69,18 @@ export function createProductionService({
 
   async function validateResult({ sourceDir, renderDir, options, studio }) {
     const manifest = JSON.parse(await fs.readFile(path.join(sourceDir, "manifest.json"), "utf8"));
+    await assertCurrentCourseManifest(sourceDir, manifest, fs);
     const voiceQuality = manifest.quality?.enabled ? manifest.quality.summary : null;
+    const finalTrack = manifest.quality?.finalTrack;
+    const voiceFinalTrack = finalTrack ? {
+      status: finalTrack.status,
+      humanApproved: false,
+      integrity: { status: finalTrack.integrity?.status, issues: finalTrack.integrity?.issues || [] },
+      transcript: {
+        status: finalTrack.transcript?.status,
+        needsReview: finalTrack.transcript?.needsReview || [],
+      },
+    } : null;
     const voiceFindings = voiceQualityFindings(manifest);
     const audioProbe = await ffprobe(manifest.audioPath);
     const audioDurationMs = Math.round(Number(audioProbe.format?.duration || 0) * 1000);
@@ -76,6 +88,7 @@ export function createProductionService({
       { label: "음성 파일", ok: audioProbe.streams?.some((stream) => stream.codec_type === "audio") },
       { label: "음성 길이", ok: Math.abs(audioDurationMs - Number(manifest.durationMs)) <= 150 },
       { label: "타임라인", ok: Array.isArray(manifest.entries) && manifest.entries.length > 0 },
+      ...(finalTrack ? [{ label: "완성 음성 조립 무결성", ok: finalTrack.integrity?.status === "ok" }] : []),
     ];
     let videoPath = null;
     let capture = null;
@@ -135,6 +148,7 @@ export function createProductionService({
       name: options.name,
       displayName: options.title,
       sourceContract: manifest.sourceContract || null,
+      voiceRunId: manifest.runId || null,
       lessonReview,
       sourceDir,
       renderDir: options.deliverable === "audio" ? null : renderDir,
@@ -146,8 +160,11 @@ export function createProductionService({
       videoQuality: options.deliverable === "video" ? videoQuality(options.videoQuality ?? "standard") : null,
       capture,
       voiceQuality,
+      voiceFinalTrack,
       voiceFindings,
-      needsReview: voiceQuality?.needsReview || [],
+      needsReview: [...(voiceQuality?.needsReview || []), ...(voiceFinalTrack?.transcript?.needsReview || [])]
+        .filter((item, index, all) => all.findIndex((other) => other.chapter === item.chapter
+          && other.slideId === item.slideId && other.slideNumber === item.slideNumber) === index),
       listenSuggested: voiceQuality?.listenSuggested || [],
       target: options.deliverable === "audio"
         ? { root: "pilot", day: path.basename(path.dirname(sourceDir)), name: options.name }
@@ -183,6 +200,7 @@ export function createProductionService({
 
     await runProcess("voice", requireRuntimeTool("trainPython", "음성 생성 Python"), ttsArgs);
     const manifest = JSON.parse(await fs.readFile(path.join(sourceDir, "manifest.json"), "utf8"));
+    await assertCurrentCourseManifest(sourceDir, manifest, fs);
     // 촬영은 강의 길이만큼 실시간으로 돈다. 그 길이는 합성이 끝나야 알 수 있으므로
     // 여기서 한 번 알려, 남은 시간이 촬영·검증 단계에서도 답을 낼 수 있게 한다.
     emit({ type: "unit-duration", durationMs: Number(manifest.durationMs) || 0 });

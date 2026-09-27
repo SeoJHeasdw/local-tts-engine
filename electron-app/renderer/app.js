@@ -66,9 +66,12 @@ let totalPages = 715;
 let latestTarget = null;
 const mediaState = { latestEditTarget: null, voiceVideo: null };
 let appSettings = null;
+let voiceReadiness = null;
+let runtimeReadiness = null;
 let voiceCandidates = [];
 let selectedCandidateToken = null;
 let candidatePurpose = "edit";
+let textVoiceHistoryTarget = null;
 let catalogChapters = [];
 let creationState = "idle";
 
@@ -690,13 +693,24 @@ function renderVoiceCandidates(candidates) {
     // Every take is read back by the independent reviewer, so the listener is
     // told what the machine heard before deciding what their own ear prefers.
     const findings = candidate.voiceFindings || [];
-    const verdict = candidate.voiceFindings === undefined
+    const review = candidate.qualityReview;
+    const reviewCount = review?.findings?.length || 0;
+    const verdict = review
+      ? review.status === "passed"
+        ? " · 자동 내용 검사 통과"
+        : review.status === "not-checked"
+          ? " · 내용 자동 검사 안 함"
+          : ` · 자동 검사 확인 ${reviewCount || 1}곳`
+      : candidate.voiceFindings === undefined
       ? ""
       : findings.length
         ? ` · ${summarizeVoiceFindings(findings).title}`
         : " · 자동 검수 통과";
     meta.textContent =
       `${candidate.durationMs ? `${formatDuration(candidate.durationMs)} 길이` : "새로 만든 발화"}${verdict}`;
+    if (reviewCount) meta.title = review.findings.map((finding) =>
+      `${finding.chunkIndex || "?"}번째 구간 · ${[...(finding.failures || []), ...(finding.warnings || [])].join(", ")}`,
+    ).join("\n");
     if (findings.length) {
       card.dataset.verdict = summarizeVoiceFindings(findings).tone;
       meta.title = findings.map((finding) => `${finding.slideNumber}페이지 · ${voiceFindingReason(finding)}`).join("\n");
@@ -849,6 +863,25 @@ function handleTextVoiceEvent(event) {
   }
 }
 
+async function reopenTextVoiceCandidates(target) {
+  const saved = await api.listTextVoiceCandidates(target);
+  textVoiceHistoryTarget = target;
+  candidatePurpose = "text-history";
+  $('#edit-job-dialog .job-modal-body').append($('#candidate-gallery'));
+  $('#edit-job-dialog .modal-actions').append($('#apply-voice-candidate'));
+  openJobDialog("지난 목소리 후보 비교");
+  renderVoiceCandidates(saved.candidates.map((candidate) => ({
+    ...candidate,
+    token: String(candidate.index),
+  })));
+  $('#edit-dialog-spinner').classList.add('hidden');
+  $('#candidate-gallery').classList.remove('hidden');
+  $('#cancel-edit-button').classList.add('hidden');
+  $('#apply-voice-candidate').textContent = '새 선택본으로 저장';
+  $('#apply-voice-candidate').classList.remove('hidden');
+  $('#close-edit-dialog').classList.remove('hidden');
+}
+
 const demoPolish = createDemoPolishController({ $, api, showToast,
   show: () => { showPolishBench("demo"); navigateToView("review"); } });
 
@@ -856,7 +889,8 @@ const appDemo = createAppDemoController({ $, $$, api, showToast, setIconStatus,
   openInPolish: (project) => (project.scenes ? demoPolish.load(project) : demoPolish.open(project.outDir)) });
 appDemo.bind();
 
-const outputs = createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, demoPolish });
+const outputs = createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, demoPolish,
+  reopenVoiceCandidates: reopenTextVoiceCandidates });
 
 const recording = createRecordingController({ $, api, showToast, setIconStatus, formatDuration, review, outputs,
   suggestName: suggestedRecordingName });
@@ -894,6 +928,40 @@ function renderSettings(settings) {
   updateProductionBrief();
   updateVoiceDesign();
   updateProfileGuard();
+  paintVoiceReadiness();
+}
+
+const READINESS_LABELS = {
+  ready: '로컬 파일 확인됨', missing: '로컬 파일 없음', incomplete: '파일 불완전',
+  unknown: '확인할 수 없음', unused: '사용 안 함',
+};
+
+function paintVoiceReadiness() {
+  const models = voiceReadiness?.models || {};
+  const modelNames = { 'qwen3-tts': 'Qwen3-TTS 1.7B Base', 'chatterbox-v3': 'Chatterbox Multilingual V3' };
+  for (const option of $('#global-model').children || []) {
+    if (modelNames[option.value]) option.textContent = `${modelNames[option.value]} · ${READINESS_LABELS[models[option.value]?.state] || '확인 전'}`;
+  }
+  const rows = {
+    trainPython: runtimeReadiness?.trainPython == null ? null : { state: runtimeReadiness.trainPython ? 'ready' : 'missing' },
+    ffprobe: runtimeReadiness?.ffprobe == null ? null : { state: runtimeReadiness.ffprobe ? 'ready' : 'missing' },
+    model: models[appSettings?.modelId], referenceAudio: voiceReadiness?.referenceAudio,
+    referenceText: voiceReadiness?.referenceText, adapter: voiceReadiness?.adapter,
+    quality: voiceReadiness?.quality, aligner: voiceReadiness?.aligner,
+  };
+  const names = { trainPython: '제작 Python', ffprobe: '길이 검사 도구', model: '적용된 모델',
+    referenceAudio: '참조 음성', referenceText: '참조 전사문', adapter: '목소리 어댑터',
+    quality: '자동 검수 모델', aligner: '단어 정렬 모델' };
+  for (const [key, item] of Object.entries(rows)) {
+    const field = $(`#voice-ready-${key}`);
+    field.textContent = READINESS_LABELS[item?.state] || '확인 전';
+    field.dataset.state = item?.state || 'unknown';
+    field.title = item?.detail || '';
+  }
+  $('#voice-readiness-issues').textContent = !voiceReadiness
+    ? '파일 상태를 확인할 수 없습니다. 앱을 다시 열거나 환경 진단을 확인해 주세요.'
+    : Object.entries(rows).filter(([, item]) => item?.state && !['ready', 'unused'].includes(item.state))
+      .map(([key, item]) => `${names[key]}: ${item.detail || READINESS_LABELS[item.state] || '확인 필요'}`).join(' · ');
 }
 
 function updateProfileGuard() {
@@ -925,7 +993,10 @@ function restoreProductionProfile() {
 }
 
 async function openModelSettings() {
-  renderSettings(await api.getSettings());
+  const [settings, status] = await Promise.all([api.getSettings(), api.getStatus().catch(() => null)]);
+  voiceReadiness = status?.readiness || null;
+  runtimeReadiness = status?.runtime || null;
+  renderSettings(settings);
   $("#finetune-name").value = `jaeho-ko-r16-${dateStamp()}`.toLowerCase();
   $("#finetune-panel").classList.add("hidden");
   $("#finetune-error").classList.add("hidden");
@@ -1039,6 +1110,13 @@ async function persistSettings({ includeVoice = false, label = "" } = {}) {
       paths: pathSettings(),
     });
     renderSettings(saved);
+    // 저장한 경로나 모델이 바뀌었으므로 이전 파일 상태를 그대로 표시하지 않는다.
+    try {
+      const status = await api.getStatus();
+      voiceReadiness = status.readiness || null;
+      runtimeReadiness = status.runtime || null;
+    } catch { voiceReadiness = null; runtimeReadiness = null; }
+    paintVoiceReadiness();
     // 화면을 저장값으로 다시 그렸으니, 아직 적용하지 않은 편집은 되돌려 세운다.
     if (!includeVoice) applyVoiceDraft(draft);
     settingsStatus(`${label || "설정"} 저장됨`, "saved");
@@ -1356,6 +1434,8 @@ async function initialize() {
   api.onJobEvent(handleJobEvent);
   refreshResumable();
   const [status, settings] = await Promise.all([api.getStatus(), api.getSettings()]);
+  voiceReadiness = status.readiness || null;
+  runtimeReadiness = status.runtime || null;
   renderSettings(settings);
   catalogPages = status.catalog?.pages || [];
   catalogLessons = status.catalog?.lessons || [];
@@ -1585,6 +1665,10 @@ $("#apply-voice-candidate").addEventListener("click", async () => {
   try {
     if (candidatePurpose === "text") {
       await api.selectTextVoice(selectedCandidateToken);
+      return;
+    }
+    if (candidatePurpose === "text-history") {
+      await api.selectTextVoiceFromHistory(textVoiceHistoryTarget, Number(selectedCandidateToken));
       return;
     }
     if (!review.pendingCandidateContext || review.reviewBusy) return;

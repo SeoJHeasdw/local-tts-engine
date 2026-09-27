@@ -354,6 +354,20 @@ test('실제 L04 항목은 누락 구절·미해결 횟수를 보이고 해당 �
   assert.match($('#polish-diff-note').textContent,/구절 누락 의심 · 4회 생성 후 미해결/);
 });
 
+test('완성 음성 재판독과 선택 후보의 받아쓰기를 함께 보여 준다', () => {
+  const {context,$,page2}=fixture();
+  const finding={slideNumber:2,startMs:33750,endMs:50000,severity:'warning',
+    reasons:['완성 음성 재판독 · 받아쓰기 불일치'],expectedText:'원래 문장',
+    recognizedText:'후보 판독',finalTrackEvidence:{recognizedText:'완성본 판독',startMs:33750,endMs:50000}};
+  context.testReview.setReviewVideo({token:'final-track',name:'final.mp4',videoUrl:'file:///final.mp4',
+    pages:[page2],voiceFindings:[finding]});
+  const row=context.testReview.renderFindingGroup({number:2,findings:[finding]});
+  const details=row.children[0];
+  details.open=true;
+  details.listeners.toggle();
+  assert.equal($('#polish-recognized').textContent,'완성 음성: 완성본 판독\n선택 후보: 후보 판독');
+});
+
 test('확인 항목의 재생성은 그 페이지로 후보 생성을 바로 건다', async () => {
   const {context,$,calls,modes,findings}=fixture();
   const row=context.testReview.renderFindingGroup({number:2,findings:[findings[1]]});
@@ -525,6 +539,37 @@ test('페이지 이동은 번호로도, 앞뒤 버튼으로도 같은 자리를 
 
   $('#review-page-prev').listeners.click();
   assert.equal(context.testReview.selection().number,1);
+});
+
+test('검수 대본과 정렬된 읽는 말을 분리하고, 단어는 실제 시각으로 이동한다', () => {
+  const {context,$}=fixture();
+  const page={number:1,slideId:'a',startMs:1000,endMs:5000,text:'RICE를 설명합니다.',words:[
+    {text:'라이스를',startMs:1300,endMs:1900},
+    {text:'설명합니다',startMs:2100,endMs:3200},
+    {text:'가짜',startMs:9000,endMs:9300},
+    {text:'시각 없음',startMs:null,endMs:4000},
+  ]};
+  context.testReview.setReviewVideo({token:'spoken',name:'spoken.mp4',videoUrl:'file:///spoken.mp4',pages:[page]});
+  $('#review-player').currentTime=1.5;
+  context.testReview.updateReviewPosition();
+  assert.equal($('#review-script').textContent,'RICE를 설명합니다.');
+  const words=$('#review-spoken-words').children;
+  assert.deepEqual(words.map(word=>word.textContent),['라이스를','설명합니다']);
+  assert.equal(words[0].classList.contains('current'),true);
+  words[1].listeners.click();
+  assert.equal($('#review-player').currentTime,2.1);
+  assert.match($('#review-spoken-note').textContent,/발음문/);
+});
+
+test('제작 근거가 있는 영상에만 목소리 기록을 보여 준다', () => {
+  const {context,$}=fixture();
+  const recipe={model:'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16',modelRevision:'a6eb4f68e4b056f1',
+    adapter:'jaeho-ko-r16-v1',adapterScale:.6,qualityModel:'mlx-community/whisper-large-v3-turbo-asr-fp16',maxAttempts:4};
+  context.testReview.setReviewVideo({token:'recipe',name:'recipe.mp4',videoUrl:'',pages:[],recipe});
+  assert.equal($('#review-recipe').classList.contains('hidden'),false);
+  assert.match($('#review-recipe-facts').children.map(item=>item.textContent).join(' '),/jaeho-ko-r16-v1 · 강도 0.60/);
+  context.testReview.setReviewVideo({token:'plain',name:'plain.mp4',videoUrl:'',pages:[]});
+  assert.equal($('#review-recipe').classList.contains('hidden'),true);
 });
 
 test('담아 둔 교체를 취소하면 그 페이지의 확인 항목이 도로 올라온다', async () => {

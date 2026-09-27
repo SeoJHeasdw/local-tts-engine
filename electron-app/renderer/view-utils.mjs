@@ -324,11 +324,31 @@ export function outputUnitLabel(item = {}) {
  * still flagged is work regardless of whether it was listened to.
  */
 export function outputState(item = {}, findings = []) {
+  if (item.awaitingSelection && item.candidateSetStatus === "partial") {
+    return { key: "attention", label: "일부 후보 실패", tone: "attention" };
+  }
+  if (item.awaitingSelection && item.candidateSetStatus === "cancelled") {
+    return { key: "attention", label: "제작 중지됨", tone: "attention" };
+  }
+  if (item.awaitingSelection && item.candidateSetStatus === "registration-failed") {
+    return { key: "failed", label: "후보 파일 확인 실패", tone: "failed" };
+  }
+  if (item.awaitingSelection) return { key: "attention", label: "후보 선택 필요", tone: "attention" };
+  if (item.staleVoiceSource) return { key: "attention", label: "음성 판본 확인 필요", tone: "attention" };
   if (item.ok === false) return { key: "failed", label: "검증 실패", tone: "failed" };
   if (findings.length) {
     return { key: "attention", label: `확인 ${findings.length}곳`, tone: "attention" };
   }
   if (item.review?.status === "approved") return { key: "approved", label: "청취 승인", tone: "approved" };
+  if (item.root === "voice") {
+    const status = item.qualityReview?.status;
+    if (status === "failed" || status === "warning") {
+      return { key: "attention", label: "음성 확인 필요", tone: "attention" };
+    }
+    if (!item.qualityReview?.enabled || status === "not-checked") {
+      return { key: "attention", label: "청취 확인 필요", tone: "attention" };
+    }
+  }
   // 완료했지만 일부 프레임이 빠진 녹화 같은 결과. 성공으로 뭉개지 않고 확인할 곳으로 둔다.
   if (item.warnings?.length) return { key: "attention", label: `경고 ${item.warnings.length}건`, tone: "attention" };
   return { key: "ready", label: "확인할 곳 없음", tone: "ready" };

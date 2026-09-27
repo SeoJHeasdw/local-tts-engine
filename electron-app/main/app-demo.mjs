@@ -3,6 +3,8 @@ import nativeFs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ROOT, dateFolder, runtimePaths } from "./paths.mjs";
+import { assertVoiceAssetsReady } from "./voice-readiness.mjs";
+import { demoCandidatePath, demoCandidateUsable, inspectDemoCandidate } from "./demo-voice-integrity.mjs";
 import { normalizeEditName } from "../shared/index.mjs";
 import { normalizeScenario } from "../shared/demo-scenario.mjs";
 import { cameraSetting } from "../shared/demo-camera.mjs";
@@ -21,6 +23,7 @@ export function createAppDemoService({
   emit,
   fs = nativeFs,
   jobSnapshot,
+  assertVoiceReady = assertVoiceAssetsReady,
   readAppSettings,
   requireRuntimeTool,
   runProcess,
@@ -135,11 +138,13 @@ export function createAppDemoService({
     if (!scenes) throw new Error("촬영 기록(demo/scenes.json)이 없습니다.");
     const texts = new Map((script?.scenes || []).map(scene => [scene.id, scene]));
     const metas = new Map();
+    const integrity = new Map();
     for (const scene of script?.scenes || []) {
       for (const relative of scene.voice?.candidates || []) {
-        try {
-          metas.set(relative, JSON.parse(await fs.readFile(path.join(demoDir, relative.replace(/\.wav$/, ".json")), "utf8")));
-        } catch { metas.set(relative, null); }
+        const evidence = await inspectDemoCandidate(demoCandidatePath(demoDir, relative),
+          { fs, expectedText: scene.text });
+        metas.set(relative, evidence.metadata);
+        integrity.set(relative, evidence.status);
       }
     }
     // 후보가 어느 대본을 읽었는지. 대본을 고친 뒤 후보를 다시 만들지 않았으면 화면이 알린다.
@@ -183,16 +188,25 @@ export function createAppDemoService({
           text: text?.text || "",
           status: text?.status || "draft",
           selected: text?.voice?.selected || null,
+          selectedIntegrity: text?.voice?.selected
+            ? integrity.get(text.voice.selected) || "missing" : null,
           voicedText: voicedTexts.get(scene.id) ?? null,
           candidates: (text?.voice?.candidates || []).map(relative => ({
             file: relative,
             name: path.basename(relative, ".wav"),
-            url: pathToFileURL(path.join(demoDir, relative)).href,
+            url: pathToFileURL(demoCandidatePath(demoDir, relative)).href,
+            integrity: integrity.get(relative) || "missing",
+            selectable: demoCandidateUsable({ status: integrity.get(relative) }),
             // 후보를 고를 때 길이를 함께 본다. 장면보다 길면 편집이 덜 되돌린다.
-            durationMs: metas.get(relative)?.durationMs ?? null,
+            durationMs: demoCandidateUsable({ status: integrity.get(relative) })
+              ? metas.get(relative)?.durationMs ?? null : null,
             // 영어를 따로 읽은 후보인지 보인다. 기록이 없는 예전 후보(undefined)와
             // 영어 구간이 없던 후보(null)는 다른 이야기다.
-            voiceRouting: metas.get(relative) ? metas.get(relative).voiceRouting ?? null : undefined,
+            voiceRouting: demoCandidateUsable({ status: integrity.get(relative) }) && metas.get(relative)
+              ? metas.get(relative).voiceRouting ?? null : undefined,
+            // A review of old or changed audio cannot certify the bytes now on disk.
+            qualityReview: integrity.get(relative) === "verified"
+              ? metas.get(relative)?.qualityReview ?? null : null,
           })),
         };
       }),
@@ -223,6 +237,13 @@ export function createAppDemoService({
         const candidates = scene.voice?.candidates || [];
         if (edit.selected && !candidates.includes(edit.selected)) {
           throw new Error(`장면 ${scene.id}: 그 후보가 없습니다.`);
+        }
+        if (edit.selected && edit.selected !== scene.voice?.selected) {
+          const evidence = await inspectDemoCandidate(demoCandidatePath(path.join(outDir, "demo"), edit.selected),
+            { fs, expectedText: scene.text });
+          if (!demoCandidateUsable(evidence)) {
+            throw new Error(`장면 ${scene.id}: 후보 음성 파일이 생성 당시 기록과 다르거나 없습니다. 다시 만들어 주세요.`);
+          }
         }
         scene.voice = { ...scene.voice, candidates, selected: edit.selected };
       }
@@ -304,6 +325,13 @@ export function createAppDemoService({
     assertIdle();
     const outDir = String(raw.outDir || "").trim();
     if (!outDir) throw new Error("촬영 결과 폴더가 필요합니다.");
+    const settings = await readAppSettings();
+    await assertVoiceReady({
+      ...settings,
+      modelId: settings.modelId || "qwen3-tts",
+      adapterId: settings.adapterId || "none",
+      adapters: settings.adapters || [],
+    }, runtimePaths(settings.paths), { quality: true, aligner: false }, { fs });
     const count = Math.min(8, Math.max(1, Math.round(Number(raw.candidates ?? 3))));
     const args = ["voice", outDir, "--candidates", String(count)];
     // 장면 하나(scene) 또는 여럿(scenes). 비우면 확정한 장면 모두다.

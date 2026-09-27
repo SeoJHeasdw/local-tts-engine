@@ -16,6 +16,7 @@
 | `electron-app/main/capture/` | 화면 촬영: 규격·인코딩·프레임 전송·사이트 서버, 디스플레이 목록·녹화, 앱 조작 |
 | `electron-app/main/workers/` | 별도 프로세스로 도는 입력 고정·자막·촬영·녹화·앱 데모 진입점 |
 | `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보와 학습 작업 |
+| `electron-app/main/voice-readiness.mjs` | 설치된 모델·참조·어댑터 파일의 읽기 전용 점검과 제작 시작 전 확인 |
 | `electron-app/main/editing/` | 합치기·페이지 교체·구간 편집·미리듣기 |
 | `electron-app/main/`의 나머지 서비스 | 경로·설정·목록·파일·미디어·결과·IPC·창 관리 |
 | `electron-app/renderer/app.js` | 초기화·화면 전환·제작 진행, 새로 만들기 갈래 탭과 실행 중 갈래 표시 |
@@ -25,6 +26,7 @@
 | `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산·촬영 규격·자막 cue·데모 시나리오와 편집 계획 |
 | `src/local_tts_engine/course_pilot.py` | 강의 생성 CLI 조립 |
 | `src/local_tts_engine/course/` | 대본 입력·청킹·오디오·정렬·직렬화 |
+| `src/local_tts_engine/text_candidate.py` | 자유 텍스트·앱 데모의 청크 합성·후보 검수·최종 WAV 기록 |
 | `src/local_tts_engine/course_catalog.py` | 생성 모델을 로드하지 않는 목록 CLI |
 | `src/local_tts_engine/`의 나머지 모듈 | 발음·독립 검수·텍스트 후보·내보내기·학습 |
 | `scripts/`, `tests/` | 수동 운영 도구와 회귀 검사 |
@@ -85,6 +87,8 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 | --- | --- |
 | `.production-input/production-input.json` | 고정 입력·선택 범위의 판본 |
 | 음성 `manifest.json` | 발음문·실제 음성 길이·정렬·검수 근거 |
+| 음성 `run-state.json` | 같은 폴더를 직접 재실행할 때 최신 시도와 manifest의 판본·완료 여부 |
+| 음성 `quality.finalTrack` | 조립·정규화 WAV의 무결성과 최종 재판독. 청크 판정·청취 승인과 별개 |
 | 레슨 `validation-report.json` | 파일 검사·음성 확인 항목·결과 위치 |
 | 챕터 `chapter-report.json` | 완료·실패 레슨과 원인 |
 | `artifacts/active-job.json` | 명시적 이어하기의 옵션·완료·실패 기록 |
@@ -92,6 +96,24 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 실패 시 입력을 보존하고 성공·중지·이어하기 기록 삭제 때 정리한다. 이어하기는 완료
 레슨의 실제 파일·화질·판본·해시를 검사한다. 실패 레슨의 음성·정렬·촬영은 새로 실행한다.
 새 작업은 과거 완성본을 자동으로 건너뛰지 않으며 앱의 생성 캐시는 항상 꺼져 있다.
+직접 실행 CLI의 클립 캐시는 WAV·부속 파일의 발행을 완결한 뒤에만 적중으로 보며,
+불완전한 오디오·체크섬 불일치는 새로 만든다.
+같은 출력 폴더의 새 합성이 실패하면 `run-state.json`이 이전 성공 manifest를 현재
+결과로 사용하는 일을 막는다. 이전 파일은 남지만 내보내기·앱 검증은 최신 시도가
+완료되고 `runId`가 일치할 때만 진행한다. 같은 폴더의 동시 제작은 파일 잠금으로
+막는다. 오래된 manifest에는 이 상태 기록이 없다.
+
+자유 텍스트와 앱 데모는 같은 `text_candidate` CLI를 부른다. 일반 후보에는
+`--quality-review`를 주어 청크별 독립 판독·후보 시도·최종 WAV 무결성을 기록하고,
+사람이 직접 적은 페이지 읽을 말에는 주지 않는다. 후보 JSON의 `qualityReview`는
+`passed`·`warning`·`failed`·`not-checked` 중 하나이며 `finalTrack`은 조립 이후의
+파일 근거다. 앱의 파일 검증, 자동 내용 검사, 청취 승인은 별도 상태로 표시한다.
+텍스트 목소리의 `index.json`은 모든 후보와 입력을 보존한다. 최근 결과에서 다시
+열어 다른 후보를 고르면 기존 `selected.wav`를 덮지 않고 별도 결과를 만든다.
+후보 일부가 실패하면 index에 실패와 완성된 후보를 구분해 남기며 작업 자체는 실패로
+표시한다. 완성된 후보만 나중에 다시 열어 선택할 수 있다.
+새 제작도 같은 이름의 이전 결과가 있으면 새 폴더를 예약한다.
+`validation-report.json`의 `sourceCandidates`가 그 새 결과의 후보 출처를 가리킨다.
 
 ## 새로 만들기 화면
 

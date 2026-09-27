@@ -245,6 +245,48 @@ test("통과한 청크는 확인 목록에 올리지 않는다", () => {
   assert.deepEqual(findings, []);
 });
 
+test("완성 트랙에서 새로 들린 문제만 청크 검수와 구분해 보여 준다", () => {
+  const manifest = {
+    chunks: [{ key: "chunk-a", startMs: 1_000, endMs: 4_000 }],
+    quality: {
+      chunks: [{ chunkKey: "chunk-a", severity: "ok", selected: {
+        passed: true, expectedText: "오늘의 내용을 설명합니다", recognizedText: "오늘의 내용을 설명합니다",
+      } }],
+      finalTrack: { transcript: { chunks: [{
+        chunkKey: "chunk-a", chapter: "ch01", slideId: "intro", slideNumber: 3,
+        startMs: 1_000, endMs: 4_000, recognizedText: "오늘 내용을 설명합니다",
+        newConcerns: ["받아쓰기 불일치"],
+      }] } },
+    },
+  };
+  const [finding] = voiceQualityFindings(manifest);
+  assert.equal(finding.kind, "final-track-review");
+  assert.equal(finding.severity, "warning");
+  assert.deepEqual(finding.reasons, ["완성 음성 재판독 · 받아쓰기 불일치"]);
+  assert.equal(finding.startMs, 1_000);
+  assert.equal(finding.finalTrackEvidence.recognizedText, "오늘 내용을 설명합니다");
+  manifest.quality.finalTrack.transcript.chunks[0].newConcerns = [];
+  assert.deepEqual(voiceQualityFindings(manifest), []);
+});
+
+test("후보 경고와 완성 음성 재판독은 각각의 받아쓰기 근거를 보존한다", () => {
+  const manifest = {
+    chunks: [{ key: "chunk-a", startMs: 1_000, endMs: 4_000 }],
+    quality: {
+      chunks: [{ chunkKey: "chunk-a", chapter: "ch01", slideId: "intro", slideNumber: 3,
+        severity: "warning", selected: { warnings: ["발음 확인 필요"], failures: [],
+          expectedText: "오늘의 내용을 설명합니다", recognizedText: "오늘 내용을 설명합니다" } }],
+      finalTrack: { transcript: { chunks: [{ chunkKey: "chunk-a", chapter: "ch01",
+        slideId: "intro", slideNumber: 3, startMs: 1_100, endMs: 3_900,
+        recognizedText: "오늘은 내용을 설명합니다", newConcerns: ["받아쓰기 불일치"] }] } },
+    },
+  };
+  const [finding] = voiceQualityFindings(manifest);
+  assert.equal(finding.recognizedText, "오늘 내용을 설명합니다");
+  assert.equal(finding.finalTrackEvidence.recognizedText, "오늘은 내용을 설명합니다");
+  assert.deepEqual(finding.reasons, ["발음 확인 필요", "완성 음성 재판독 · 받아쓰기 불일치"]);
+});
+
 test("재생성 권장과 확인 권장을 구분해 기록한다", () => {
   const findings = voiceQualityFindings(REVIEW_MANIFEST);
   assert.deepEqual(findings.map((finding) => finding.severity), ["failed", "warning"]);

@@ -84,7 +84,7 @@ export function voiceQualityFindings(manifest = {}) {
       continue;
     }
     const quality = (manifest.quality?.chunks || []).find(chunk => chunk.chunkKey === key);
-    findings.push({
+    const finding = {
       chapter: entries[0].chapter, slideId: entries[0].slide_id,
       slideNumber: Number(entries[0].slide_number),
       startMs: Number(timing.startMs), endMs: Number(timing.endMs),
@@ -92,6 +92,38 @@ export function voiceQualityFindings(manifest = {}) {
       terms: terms.map(term => ({ term, status: 'unresolved' })),
       expectedText: quality?.selected?.expectedText || entries.map(entry => entry.tts_text || entry.source_text).join(' '),
       recognizedText: quality?.selected?.recognizedText || '',
+    };
+    findings.push(finding);
+    byChunk.set(key, finding);
+  }
+  // The delivered normalized track has its own ASR pass. Show only concerns
+  // that were not already attached to the selected source clip; the original
+  // candidate verdict and a person's listening decision remain separate.
+  for (const item of manifest.quality?.finalTrack?.transcript?.chunks || []) {
+    const concerns = Array.isArray(item.newConcerns) ? item.newConcerns.map(String).filter(Boolean) : [];
+    if (!concerns.length) continue;
+    const key = String(item.chunkKey || "");
+    const reasons = concerns.map((reason) => `완성 음성 재판독 · ${reason}`);
+    const finalTrackEvidence = {
+      recognizedText: String(item.recognizedText || ""),
+      startMs: Number(item.startMs ?? 0), endMs: Number(item.endMs ?? item.startMs ?? 0),
+    };
+    const existing = byChunk.get(key);
+    if (existing) {
+      existing.reasons = [...new Set([...existing.reasons, ...reasons])];
+      existing.finalTrackEvidence = finalTrackEvidence;
+      continue;
+    }
+    const timing = timings.get(key) || {};
+    findings.push({
+      chapter: String(item.chapter || ""), slideId: String(item.slideId || ""),
+      slideNumber: Number(item.slideNumber || 0),
+      startMs: Number(item.startMs ?? timing.startMs ?? 0),
+      endMs: Number(item.endMs ?? timing.endMs ?? item.startMs ?? 0),
+      severity: "warning", kind: "final-track-review", reasons, terms: [],
+      expectedText: String((manifest.quality?.chunks || []).find((chunk) => chunk.chunkKey === key)?.selected?.expectedText || ""),
+      recognizedText: String(item.recognizedText || ""),
+      finalTrackEvidence,
     });
   }
   return findings.sort((left, right) => left.startMs - right.startMs || left.slideNumber - right.slideNumber);

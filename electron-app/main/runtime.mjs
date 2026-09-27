@@ -3,10 +3,12 @@ import path from "node:path";
 import { ADAPTER, ROOT, runtimePaths } from "./paths.mjs";
 import { runJobProcess } from "./job-process.mjs";
 import { spawn } from "node:child_process";
+import { assertVoiceAssetsReady, localVoiceEnvironment } from "./voice-readiness.mjs";
 
 export function createRuntimeService({
   fs = nativeFs,
   state,
+  assertVoiceReady = assertVoiceAssetsReady,
   // 모든 작업 사건이 지나는 길목이다. 잠 막기·완료 알림이 여기에 붙는다.
   onEvent = () => {},
 }) {
@@ -53,8 +55,6 @@ export function createRuntimeService({
         ["강의 도구 Python", state.runtimeTools.basePython],
         ["강의 설정", studio.configPath],
         ["강의 대본", path.join(studio.deckRoot, "script/course")],
-        ["Whisper 자동 음성 검수 모델", path.join(ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16/config.json")],
-        ["Whisper 자동 음성 검수 가중치", path.join(ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16/model.safetensors")],
       );
     }
     if (requirements.node) required.push(["Node.js", state.runtimeTools.node]);
@@ -80,6 +80,15 @@ export function createRuntimeService({
         throw new Error(`${label}을(를) 찾지 못했습니다: ${file}`);
       }
     }
+    const adapterPath = options.voiceMode === "finetuned" ? options.adapterPath || ADAPTER : null;
+    await assertVoiceReady({
+      modelId: options.modelId || "qwen3-tts",
+      adapterId: adapterPath ? "selected" : "none",
+      adapters: adapterPath ? [{ id: "selected", path: adapterPath }] : [],
+    }, studio, {
+      quality: !options.overrideText,
+      aligner: requirements.course !== false && !options.overrideText,
+    }, { fs });
   }
 
   // course_pilot prints "[자동 음성 검수 3/38] ..." as it works through a lesson.
@@ -108,7 +117,8 @@ export function createRuntimeService({
     const job = state.activeJob;
     return runJobProcess(job, stage, executable, args, {
       cwd, capture,
-      env: { ...process.env, PYTHONPATH: path.join(ROOT, "src"), PYTHONUNBUFFERED: "1" },
+      env: { ...(stage === "voice" ? localVoiceEnvironment() : process.env),
+        PYTHONPATH: path.join(ROOT, "src"), PYTHONUNBUFFERED: "1" },
       emit: payload => {
         if (state.activeJob !== job) return;
         emit(payload);

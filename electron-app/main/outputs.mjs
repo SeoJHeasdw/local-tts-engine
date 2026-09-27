@@ -3,6 +3,7 @@ import path from "node:path";
 import { LEGACY_OUTPUT_PATHS, runtimePaths } from "./paths.mjs";
 import { clearedFindingKeys, isInside, withClearedFindings, withOutputReview } from "../shared/index.mjs";
 import { existingFile, findVideo, listDirectories, renameMediaFile, repointReport, safeStat, writeReport } from "./files.mjs";
+import { isCurrentCourseReport } from "./course-run-state.mjs";
 
 export function createOutputsService({
   dialog,
@@ -73,6 +74,7 @@ export function createOutputsService({
         const dir = path.join(dayRoot, entry.name);
         const report = await fs.readFile(path.join(dir, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
         if (!report || report.renderDir) continue;
+        const staleVoiceSource = !await isCurrentCourseReport({ ...report, sourceDir: dir }, fs);
         const stat = await safeStat(dir);
         result.push({
           key: `${storeId}:pilot:${dayEntry.name}:${entry.name}`,
@@ -90,6 +92,7 @@ export function createOutputsService({
           listenSuggested: report.listenSuggested || [],
           voiceFindings: report.voiceFindings || [],
           review: report.review || null,
+          staleVoiceSource,
           path: report.audioPath || dir,
           fileName: report.audioPath ? path.basename(report.audioPath) : null,
         });
@@ -101,7 +104,17 @@ export function createOutputsService({
       for (const entry of await listDirectories(dayRoot)) {
         const dir = path.join(dayRoot, entry.name);
         const report = await fs.readFile(path.join(dir, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
-        if (!report?.audioPath) continue;
+        const index = await fs.readFile(path.join(dir, "index.json"), "utf8").then(JSON.parse).catch(() => null);
+        if (!report?.audioPath && !index?.candidates?.length) continue;
+        let sourceCandidatesAvailable = false;
+        if (report?.sourceCandidates?.root === "voice") {
+          try {
+            const sourceDir = resolveOutputTarget(report.sourceCandidates, studio);
+            const sourceIndex = await fs.readFile(path.join(sourceDir, "index.json"), "utf8")
+              .then(JSON.parse).catch(() => null);
+            sourceCandidatesAvailable = Boolean(sourceIndex?.candidates?.length);
+          } catch { /* A deleted or invalid source cannot be reopened. */ }
+        }
         const stat = await safeStat(dir);
         result.push({
           key: `${storeId}:voice:${dayEntry.name}:${entry.name}`,
@@ -111,14 +124,22 @@ export function createOutputsService({
           name: entry.name,
           operation: "text-voice",
           updatedAt: stat?.mtime.toISOString(),
-          durationMs: report.durationMs || null,
+          durationMs: report?.durationMs || null,
           video: false,
-          ok: report.summary?.ok ?? null,
-          passed: report.summary?.passed ?? null,
-          total: report.summary?.total ?? null,
-          review: report.review || null,
-          path: report.audioPath,
-          fileName: path.basename(report.audioPath),
+          ok: report?.summary?.ok ?? null,
+          passed: report?.summary?.passed ?? null,
+          total: report?.summary?.total ?? null,
+          review: report?.review || null,
+          qualityReview: report?.qualityReview || null,
+          finalTrack: report?.finalTrack || null,
+          awaitingSelection: !report?.audioPath,
+          candidateSetStatus: index?.status || null,
+          candidateCount: Number(index?.candidateCount) || null,
+          availableCandidateCount: Array.isArray(index?.candidates) ? index.candidates.length : 0,
+          candidateFailures: Array.isArray(index?.failedCandidates) ? index.failedCandidates : [],
+          hasCandidates: Boolean(index?.candidates?.length || sourceCandidatesAvailable),
+          path: report?.audioPath || dir,
+          fileName: report?.audioPath ? path.basename(report.audioPath) : null,
         });
       }
     }
@@ -200,6 +221,9 @@ export function createOutputsService({
     const reportPath = path.join(directory, "validation-report.json");
     const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
     if (!report) throw new Error("자동 검증 기록이 있는 결과만 청취 승인할 수 있습니다.");
+    if (target.root === "pilot" && !await isCurrentCourseReport({ ...report, sourceDir: directory }, fs)) {
+      throw new Error("최신 음성 제작이 완료되지 않아 이전 검수 기록을 승인할 수 없습니다.");
+    }
     const reviewed = await writeReport(reportPath, withOutputReview(report, status), "review");
     return reviewed.review;
   }

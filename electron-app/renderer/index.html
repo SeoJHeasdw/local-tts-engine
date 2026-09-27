@@ -421,7 +421,10 @@
                 <div class="diff-row"><span>받아쓰기</span><p id="polish-recognized"></p></div>
                 <p class="diff-note" id="polish-diff-note"></p>
               </section>
-              <section class="review-transcript"><h3>현재 페이지 대본</h3><p id="review-script">페이지 타임라인이 있는 영상에서 대본을 볼 수 있습니다.</p></section>
+              <section class="review-transcript"><h3>현재 페이지 대본</h3><p id="review-script">페이지 타임라인이 있는 영상에서 대본을 볼 수 있습니다.</p>
+                <div class="review-spoken" id="review-spoken"><h4>읽는 말 · 단어를 눌러 듣기</h4><div id="review-spoken-words" class="review-spoken-words"></div><p id="review-spoken-note">단어별 시각을 확인하고 있습니다.</p></div>
+              </section>
+              <details class="review-recipe hidden" id="review-recipe"><summary>이 목소리를 만든 기록</summary><dl id="review-recipe-facts"></dl></details>
             </section>
             <aside class="review-sidebar">
               <form class="card" id="review-form">
@@ -733,8 +736,8 @@
                 <div class="setting-control"><div class="segmented theme-choice" id="theme-choice" role="group" aria-label="화면 테마"><button type="button" data-theme-mode="system" aria-pressed="true">시스템</button><button type="button" data-theme-mode="dark" aria-pressed="false">다크</button><button type="button" data-theme-mode="light" aria-pressed="false">라이트</button></div></div>
               </div>
               <div class="setting-row">
-                <div class="setting-copy"><strong>동시에 만들 후보</strong><small>많을수록 빠르지만 메모리를 더 씁니다.</small></div>
-                <div class="setting-control"><select id="global-parallelism" aria-label="동시에 만들 후보 수"><option value="2">2개 · 이 Mac 권장</option><option value="1">1개 · 메모리 절약</option></select></div>
+                <div class="setting-copy"><strong>동시에 만들 후보</strong><small>후보마다 합성·독립 검수를 함께 실행합니다. 1개씩 만드는 것이 기본입니다.</small></div>
+                <div class="setting-control"><select id="global-parallelism" aria-label="동시에 만들 후보 수"><option value="1">1개 · 검수 안정 (기본)</option><option value="2">2개 · 메모리 여유가 있을 때</option></select></div>
               </div>
 
               <div class="setting-row">
@@ -775,10 +778,25 @@
               <div><strong id="profile-guard-title">제작 목소리</strong><p id="profile-guard-copy">프로필을 불러오는 중입니다.</p></div>
               <button type="button" id="restore-production-profile">제작값 복원</button>
             </div>
+            <section class="voice-readiness" aria-labelledby="voice-readiness-title">
+              <h4 id="voice-readiness-title">로컬 제작 준비</h4>
+              <p>모델을 실행하거나 내려받지 않고 파일만 확인합니다. 실제 음질은 합성 후 따로 검수하세요.</p>
+              <dl>
+                <div><dt>제작 Python</dt><dd id="voice-ready-trainPython">확인 중</dd></div>
+                <div><dt>길이 검사 도구</dt><dd id="voice-ready-ffprobe">확인 중</dd></div>
+                <div><dt>적용된 모델</dt><dd id="voice-ready-model">확인 중</dd></div>
+                <div><dt>참조 음성</dt><dd id="voice-ready-referenceAudio">확인 중</dd></div>
+                <div><dt>참조 전사문</dt><dd id="voice-ready-referenceText">확인 중</dd></div>
+                <div><dt>목소리 어댑터</dt><dd id="voice-ready-adapter">확인 중</dd></div>
+                <div><dt>자동 검수 모델</dt><dd id="voice-ready-quality">확인 중</dd></div>
+                <div><dt>단어 정렬 모델</dt><dd id="voice-ready-aligner">확인 중</dd></div>
+              </dl>
+              <p id="voice-readiness-issues" role="status"></p>
+            </section>
             <div class="setting-rows">
               <div class="setting-row">
                 <div class="setting-copy"><strong>기본 모델</strong><small>한국어 제작은 Qwen3-TTS로 승인돼 있습니다.</small></div>
-                <div class="setting-control"><select id="global-model" aria-label="기본 모델"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 설치됨</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 설치됨</option></select></div>
+                <div class="setting-control"><select id="global-model" aria-label="기본 모델"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 확인 중</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 확인 중</option></select></div>
               </div>
               <div class="setting-row">
                 <div class="setting-copy"><strong>목소리 어댑터</strong><small>내 목소리로 학습한 LoRA를 고릅니다.</small></div>

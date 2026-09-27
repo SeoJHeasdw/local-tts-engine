@@ -448,7 +448,7 @@ def pronunciation_preflight(
     """Return synthesis text and unresolved risky tokens for manifests and UI."""
     merged = merge_pronunciation_dictionaries(dictionary)
     matched: list[dict[str, str]] = []
-    inspection_text, _ = _protect_literal_spans(source_text, merged, matched=matched)
+    inspection_text, literal_spans = _protect_literal_spans(source_text, merged, matched=matched)
     dictionary_text = inspection_text
     for item in merged:
         if item.get("literal"):
@@ -511,10 +511,18 @@ def pronunciation_preflight(
             required.append(apply_pronunciation(match.group(0), dictionary))
     for match in BARE_NUMBER_PATTERN.finditer(_apply_dictionary(source_text, dictionary)[0]):
         required.append(korean_sino_integer(match.group(1)))
-    # A deliberately English span is an answered question, not a term nobody
-    # decided how to read, so the unresolved lists are measured with those
-    # spans still standing in as placeholders.
-    unresolved_text, _ = _protect_literal_spans(tts_text, merged)
+    # Keep the source's approved literal spans hidden while looking for terms
+    # without a reading. Re-matching the synthesized text loses provenance when
+    # an approved spelling changes case (RICE -> Rice): the case-sensitive source
+    # rule no longer matches, yet an original "Rice" must remain unresolved.
+    unresolved_text, protected = _apply_dictionary(source_text, dictionary)
+    unresolved_text = read_remaining_numbers(unresolved_text)
+    for index in range(len(literal_spans), len(protected)):
+        # _apply_dictionary also hides unknown compound identifiers to prevent
+        # partial number conversion. They are still unresolved review items.
+        unresolved_text = unresolved_text.replace(
+            chr(PROTECTED_PLACEHOLDER_START + index), protected[index]
+        )
     return {
         "sourceText": source_text,
         "ttsText": tts_text,

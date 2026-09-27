@@ -14,6 +14,7 @@
 | 2026-08-26 | 앱의 새 제작은 TTS·정렬·촬영 캐시 우회. 독립 CLI 캐시는 유지 |
 | 2026-09-08 | 추가 강도 비교 후에도 제작값 0.60 유지 |
 | 2026-09-09 | 영어 인용문은 비교 5번 `english-speaker-only-v1` 채택: LoRA 미적용, 본인 목소리 특징만 참조, English, 참조 전사 없음 |
+| 2026-09-27 | VoiceStudio의 긴 글 분할·후보 결함 감지·완성 트랙 재검 개념만 독립 구현에 참고. 앱 코드나 모델 가중치는 가져오지 않았고, 승인된 Qwen3-TTS·개인 LoRA 0.60을 유지 |
 
 LoRA 학습은 승인한 92클립·12.252분 중 train 82개로 수행했다. rank 16, learning
 rate 2e-5, batch 1, gradient accumulation 4, 60 optimizer step이었다. 평균 손실
@@ -123,7 +124,7 @@ Anthropic의 `안쓰로픽`과 `엔트로픽`은 모두 거리 0.100으로 문�
 
 | 확인일 | 대상·당시 판단 | 출처 |
 | --- | --- | --- |
-| 2026-08-23, 09-03, 09-09, 09-24 | Qwen3-TTS 1.7B Base: Apache-2.0, 제작 채택 유지. 상업 이용 가능한 원본 라이선스 재확인 | [모델 카드](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base), [공식 저장소](https://github.com/QwenLM/Qwen3-TTS) |
+| 2026-08-23, 09-03, 09-09, 09-24, 09-27 | Qwen3-TTS 1.7B Base: Apache-2.0, 제작 채택 유지. 상업 이용 가능한 원본 라이선스 재확인 | [모델 카드](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base), [공식 저장소](https://github.com/QwenLM/Qwen3-TTS) |
 | 2026-08-23, 09-03, 09-24 | MLX-Audio 0.5.0: MIT, Apple Silicon 추론. 원본 라이선스 재확인 | [라이선스](https://github.com/Blaizzy/mlx-audio/blob/main/LICENSE), [Qwen 문서](https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/qwen3-tts.md) |
 | 2026-08-23 | Chatterbox Multilingual V3: MIT. 비교 후 제작에서 제외 | [원본](https://huggingface.co/ResembleAI/chatterbox), [MLX 모델](https://huggingface.co/mlx-community/chatterbox-multilingual-v3), [MLX 문서](https://github.com/Blaizzy/mlx-audio/blob/main/docs/models/tts/chatterbox.md) |
 | 2026-08-24, 09-24 | Qwen3-ForcedAligner 0.6B: Apache-2.0, 단어 정렬 채택. 원본 라이선스 재확인 | [원본](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B), [MLX 8-bit](https://huggingface.co/mlx-community/Qwen3-ForcedAligner-0.6B-8bit) |
@@ -131,6 +132,7 @@ Anthropic의 `안쓰로픽`과 `엔트로픽`은 모두 거리 0.100으로 문�
 | 2026-09-03, 09-24 | Whisper 원본 코드·가중치: MIT, 원본 라이선스 재확인. 독립 검수에 기존 MLX FP16 변환 모델 사용 | [Whisper 라이선스](https://github.com/openai/whisper/blob/main/LICENSE), [변환 모델](https://huggingface.co/mlx-community/whisper-large-v3-turbo-asr-fp16) |
 | 2026-08-23 | Fish S2 Pro: 상업 이용에 별도 서면 라이선스 필요, 후보 제외. S2.1 Pro 클라우드 경로도 로컬·비공개 목표와 맞지 않아 제외 | [S2 Pro 라이선스](https://huggingface.co/fishaudio/s2-pro/blob/main/LICENSE.md), [S2.1 당시 안내](https://fish.audio/blog/s2-1-pro-free-api/) |
 | 2026-09-18 | Playwright 1.62.0: Apache-2.0, 화면 촬영용 브라우저 구동에 채택. 내려받는 Chromium은 BSD 계열이며 이 저장소에 커밋하지 않는다 | [라이선스](https://github.com/microsoft/playwright/blob/main/LICENSE), [Chromium 라이선스](https://chromium.googlesource.com/chromium/src/+/main/LICENSE) |
+| 2026-09-27 | VoiceStudio 앱 코드 AGPL-3.0-only. 코드 이식 없이 설계 아이디어만 독립 구현. 기본 OmniVoice 사전학습 가중치는 CC-BY-NC이며 토크나이저에 별도 조건이 있어 상업 강의 음성으로 채택하지 않음 | [VoiceStudio 안내](https://github.com/debpalash/VoiceStudio/blob/main/LICENSE-NOTICE.md), [OmniVoice 모델 카드](https://huggingface.co/k2-fsa/OmniVoice), [토크나이저 조건](https://huggingface.co/k2-fsa/OmniVoice/blob/main/audio_tokenizer/LICENSE) |
 
 MLX-Tune LoRA는 Qwen의 공식 CUDA 전체 SFT와 다른 경로다.
 [공식 학습 문서](https://github.com/QwenLM/Qwen3-TTS/blob/main/finetuning/README.md)는

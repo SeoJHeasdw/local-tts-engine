@@ -10,17 +10,19 @@
 //
 // 결과는 `<편집 결과 루트>/<날짜>/<이름>/`에 남는다. 최근 결과·다듬기·합치기가
 // 그대로 받는 모양이다(operation: "app-demo").
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { ADAPTER, APP_SETTINGS_PATH, ROOT, dateFolder, runtimePaths } from "../paths.mjs";
+import { ROOT, dateFolder, runtimePaths } from "../paths.mjs";
+import { createSettingsService } from "../settings.mjs";
+import { assertVoiceAssetsReady, localVoiceEnvironment } from "../voice-readiness.mjs";
 import { resolveRuntimeTools } from "../runtime-config.mjs";
 import { settingsAdapterScale } from "../../shared/index.mjs";
 import { parseFlags } from "../capture/cli.mjs";
 import { recordAppDemo } from "../capture/record-app.mjs";
 import { renderAppDemo } from "../editing/demo-render.mjs";
+import { regenerateDemoVoices } from "./demo-voice-state.mjs";
 
 // 중지는 작업 묶음 전체에 SIGTERM으로 온다. 기본 동작대로 곧장 죽으면 렌더의 임시 파일(.part)과
 // 촬영의 작업 폴더·반쯤 쓴 원본·앱 서버를 치우는 finally가 돌지 못한다. 촬영에는 AbortSignal을
@@ -62,7 +64,8 @@ if (!["record", "voice", "render"].includes(command)) {
 if (!target || target.startsWith("--")) throw new Error(`demo ${command}에는 대상 경로가 필요합니다.`);
 const flags = parseFlags(rest);
 const tools = await resolveRuntimeTools(ROOT);
-const settings = fs.existsSync(APP_SETTINGS_PATH) ? JSON.parse(fs.readFileSync(APP_SETTINGS_PATH, "utf8")) : {};
+const { readAppSettings } = createSettingsService({ state: {} });
+const settings = await readAppSettings();
 const studio = runtimePaths(settings.paths);
 
 const log = text => console.log(`[demo] ${text}`);
@@ -99,7 +102,7 @@ function run(executable, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd: ROOT,
-      env: { ...process.env, PYTHONPATH: path.join(ROOT, "src"), PYTHONUNBUFFERED: "1" },
+      env: { ...localVoiceEnvironment(), PYTHONPATH: path.join(ROOT, "src"), PYTHONUNBUFFERED: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
@@ -142,13 +145,20 @@ if (command === "record") {
   log(`다음: 대본을 쓰고 status를 approved로 바꾼 뒤 demo voice ${outDir}`);
 } else if (command === "voice") {
   const outDir = requireDir(target);
+  // The worker is also a standalone CLI; do not let a direct invocation fall
+  // through to Python's model downloader when local speech weights are absent.
+  await assertVoiceAssetsReady(settings, studio, { quality: true, aligner: false });
   const scriptFile = path.join(outDir, "demo", "script.json");
-  const script = JSON.parse(fs.readFileSync(scriptFile, "utf8"));
+  const scriptSource = fs.readFileSync(scriptFile, "utf8");
+  const script = JSON.parse(scriptSource);
   const count = Number(flags.candidates ?? 3);
   // 명령줄 값은 적은 그대로 쓰고, 앱 설정은 앱과 같은 규칙(0.01 단위)으로 읽는다.
   const adapterScale = flags["adapter-scale"] !== undefined
     ? Number(flags["adapter-scale"])
     : settingsAdapterScale(settings.adapterScale);
+  const adapter = settings.modelId === "qwen3-tts"
+    ? settings.adapters.find((item) => item.id === settings.adapterId) || null
+    : null;
   if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error("--candidates는 1~8이어야 합니다.");
   if (!tools.trainPython) throw new Error("음성 생성 Python(.venv-train)을 찾지 못했습니다.");
   // 한 문장만 고쳐 쓰는 일이 잦다. 그때 나머지 장면까지 다시 합성하지 않는다.
@@ -166,19 +176,11 @@ if (command === "record") {
       : "확정(approved)된 대본이 없습니다. 대본을 쓰고 status를 approved로 바꿔 주세요.");
   }
 
-  for (const scene of ready) {
-    const sceneDir = path.join(outDir, "demo", "narration", scene.id);
-    fs.mkdirSync(sceneDir, { recursive: true });
-    const textFile = path.join(sceneDir, "input.txt");
-    fs.writeFileSync(textFile, `${scene.text}\n`, "utf8");
-    const base = crypto.createHash("sha256").update(`${scene.id}\n${scene.text}`).digest().readUInt32BE(0);
-    const candidates = [];
-    for (let index = 0; index < count; index++) {
-      const number = String(index + 1).padStart(2, "0");
-      const audioPath = path.join(sceneDir, `candidate-${number}.wav`);
-      const metadataPath = path.join(sceneDir, `candidate-${number}.json`);
-      const seed = (base ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
-      log(`장면 ${scene.id} 후보 ${index + 1}/${count}`);
+  await regenerateDemoVoices({
+    script, scriptSource, scriptFile, demoDir: path.join(outDir, "demo"),
+    sceneIds: ready.map(scene => scene.id), count,
+    generate: async ({ scene, index, count: total, textFile, audioPath, metadataPath, seed }) => {
+      log(`장면 ${scene.id} 후보 ${index + 1}/${total}`);
       await run(tools.trainPython, [
         "-m", "local_tts_engine.text_candidate",
         "--model", settings.modelId || "qwen3-tts",
@@ -188,18 +190,11 @@ if (command === "record") {
         "--output", audioPath,
         "--metadata", metadataPath,
         "--seed", String(seed),
-        "--adapter", ADAPTER,
-        "--adapter-scale", String(adapterScale),
+        "--quality-review",
+        ...(adapter ? ["--adapter", adapter.path, "--adapter-scale", String(adapterScale)] : []),
       ]);
-      candidates.push(path.relative(path.join(outDir, "demo"), audioPath));
-    }
-    // 말이 바뀌면 예전에 고른 후보는 다른 말을 읽고 있다. 고르기를 비운다. 후보 파일
-    // 이름(candidate-01…)은 다시 만들어도 같아서 이름으로는 가를 수 없다 — 후보를 만든
-    // 대본(voice.text)과 견준다. 예전 기록에는 그 대본이 없으니 바뀐 것으로 본다.
-    const changed = scene.voice?.text !== scene.text;
-    scene.voice = { ...scene.voice, text: scene.text, candidates, selected: changed ? null : scene.voice?.selected ?? null };
-  }
-  fs.writeFileSync(scriptFile, `${JSON.stringify(script, null, 2)}\n`, "utf8");
+    },
+  });
   // 고르는 것은 사람이다. 자동 검사는 청취 승인을 대신하지 않는다.
   log("후보를 들어 보고 script.json의 voice.selected에 고른 파일을 적어 주세요.");
 } else {

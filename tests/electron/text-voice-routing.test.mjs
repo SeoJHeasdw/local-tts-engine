@@ -12,10 +12,11 @@ function service(metadataByPath) {
     requireRuntimeTool: () => '/python', runProcess: async () => {},
     registerSelected: async files => files.map((file, index) => ({ token: `candidate-${index}` })),
     inspectMedia: async () => ({}),
-    state: { activeJob: { kind: 'text-voice' } },
+    state: { activeJob: { kind: 'text-voice', options: { name: 'routing' } } },
     fs: {
       mkdir: async () => {}, unlink: async () => {},
       writeFile: async (file, text) => written.set(file, text),
+      rename: async (from, to) => { written.set(to, written.get(from)); written.delete(from); },
       readFile: async file => JSON.stringify(metadataByPath(file)),
     },
   });

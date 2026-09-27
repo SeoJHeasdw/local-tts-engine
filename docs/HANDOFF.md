@@ -1,12 +1,38 @@
 # 현재 상태와 인수인계
 
-갱신: 2026-09-25. 작업 절차는 [AGENTS](../AGENTS.md), 실행은 [README](../README.md),
+갱신: 2026-09-27. 작업 절차는 [AGENTS](../AGENTS.md), 실행은 [README](../README.md),
 구조는 [ARCHITECTURE](ARCHITECTURE.md), 음성 규칙은 [QUALITY](QUALITY.md), 영상 규격·측정은
 [VIDEO-QUALITY](VIDEO-QUALITY.md), 승인·결정 근거는 [DECISIONS](DECISIONS.md)를 따른다.
 이 문서는 지금 상태와 결과 위치만 둔다. 지난 작업의 경위는 git 기록에 있다.
 
 ## 남은 일
 
+- **VoiceStudio 참고 음성 품질 보강의 실제 제작 확인:** 모델·LoRA·참조 음성 기본값은
+  유지했다. 강의에 후보 생성 결함 재시도, 조립 후 WAV 무결성·독립 재판독, 직접 실행
+  CLI 캐시 검증을 더했다. 텍스트 목소리·앱 데모에는 짧은 청크·후보별 자동 검사·최종
+  WAV 검사를 연결했고, 데모 후보 재생성 때 기존 선택 음성을 보존한다. 과거 후보
+  재열기와 제작 준비 상태·검수 이동 화면도 보강했다.
+  재검에서 숫자 발음의 청크 경계, 후보 일부 실패의 보존, 데모 WAV·대본의 판본,
+  최종 WAV의 부분 유실·갭 오염, 재실행 실패 후 옛 manifest 사용을 고쳤다.
+  실제 저장된 CH01 L07·CH03 L09·CH02 L14의 3편·23청크는 강화된 WAV 검사에서
+  모두 통과했다(최저 구간 파형 유사도 0.9792).
+  Python 482개, 화면 촬영을 제외한 앱 468개와 데모 렌더 19개, 구조 검사가 통과했다.
+  전체 `npm run check`는 화면 기록 권한 검사에서 중단된다. Codex 실행 환경의
+  Metal 접근은 막혔지만, 사용자의 일반 Mac 터미널에서 Qwen·LoRA 0.60 텍스트
+  표본 250자·2청크·32.649초를 실제로 생성했다. 두 청크 모두 첫 후보의 독립
+  받아쓰기에서 통과했고 최종 WAV 무결성·파일 해시도 일치했다. 사용자는 이 표본을
+  듣고 어색함이 없다고 답했다([표본 청취 기록](../output/reviews/2026-09-27/voice-quality-recheck/run-exn6AjKM/listening-review.json)).
+  문장 경계 쉼에 관한 미확정 운율 단서 3건은 확정 경고가 아니다.
+  이 판단은 해당 표본에만 적용한다. 새 강의 한 편의 전체 연결부와 앱 데모 음성은
+  아직 제작·청취 승인을 받지 않았다. 자세한 판정 범위는 [QUALITY](QUALITY.md)에 둔다.
+  영어 표본은 [세 WAV와 청취 기록](../output/reviews/2026-09-27/english-quality-recheck/run-BQBrHdUL/listening-review.json)에 있다.
+  사용자는 영어 인용문(02)과 영어 단독 문장(03)을 좋다고 들었고, 한국어 문장 안
+  용어(01)는 더 긴 문맥에서 재확인을 요청했다. 후속 [301자·2청크 음성·청취 기록](../output/reviews/2026-09-27/english-quality-recheck/terms-long-3jYF6nL0/listening-review.json)은
+  Observation·Anthropic·RICE를 각각 세 번 포함한다. 두 청크 모두 첫 후보에서
+  자동 통과하고 최종 36.015초 WAV의 해시·조립 검사가 일치했으며, 사용자는 이 긴
+  표본도 좋다고 들었다. 운율의 미확정 쉼 단서 2건은 확정 경고가 아니다. 영문 ASR
+  일치만으로 세부 음차·강세를 보증하지 않으며,
+  청취 판단은 이 표본에만 적용한다.
 - **CH00 3D 음성·자막본:** 사용자가 확인한 47상태 고정본(`output/reviews/2026-09-25/3d-capture-live/frozen-input`)
   기준으로 `scripts/build_ch00_3d_narrated.mjs`를 준비했다. 승인 Qwen3-TTS·LoRA 0.60을
   새로 합성해 실제 길이로 자막을 만들고 1440p 자막 합성 영상을 다시 찍는다. 준비 검사와

@@ -19,6 +19,7 @@ import { RAW_FILE, SCENES_FILE } from "../capture/record-app.mjs";
 import { writeReviewPage } from "./demo-review.mjs";
 import { renderCaptionFrames } from "./demo-captions.mjs";
 import { fileSha256 } from "../files.mjs";
+import { demoCandidatePath, demoCandidateUsable, inspectDemoCandidate } from "../demo-voice-integrity.mjs";
 
 const AUDIO_ARGS = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "1"];
 const AUDIO_TOLERANCE_MS = 100;
@@ -198,19 +199,35 @@ export function demoCaptionCues(plan, script) {
 async function resolveNarration(scenes, script, demoDir, ffprobe) {
   const chosen = new Map((script?.scenes || [])
     .filter(scene => scene.status === "approved" && scene.voice?.selected)
-    .map(scene => [scene.id, scene.voice.selected]));
+    .map(scene => [scene.id, scene]));
   const narration = {};
+  const unverified = [];
   for (const scene of scenes.scenes) {
-    const selected = chosen.get(scene.id);
-    if (!selected) continue;
-    const file = path.isAbsolute(selected) ? selected : path.join(demoDir, selected);
+    const scriptScene = chosen.get(scene.id);
+    if (!scriptScene) continue;
+    const selected = scriptScene.voice.selected;
+    const oldInput = path.join(demoDir, "narration", scene.id, "input.txt");
+    const voicedText = typeof scriptScene.voice.text === "string"
+      ? scriptScene.voice.text : fs.existsSync(oldInput) ? fs.readFileSync(oldInput, "utf8").trim() : null;
+    if (voicedText !== null && voicedText.trim() !== String(scriptScene.text || "").trim()) {
+      throw new Error(`장면 ${scene.id}의 대본이 목소리 생성 뒤 바뀌었습니다. 새 후보를 만들어 주세요.`);
+    }
+    const file = demoCandidatePath(demoDir, selected);
     if (!fs.existsSync(file)) throw new Error(`장면 ${scene.id}의 고른 음성을 찾지 못했습니다: ${file}`);
+    const evidence = await inspectDemoCandidate(file, { expectedText: scriptScene.text });
+    if (evidence.status === "text-changed") {
+      throw new Error(`장면 ${scene.id}의 고른 음성이 현재 대본을 읽지 않습니다. 새 후보를 만들어 주세요.`);
+    }
+    if (!demoCandidateUsable(evidence)) {
+      throw new Error(`장면 ${scene.id}의 고른 음성이 생성 당시 파일·검수 기록과 다릅니다. 다시 만들어 주세요.`);
+    }
+    if (evidence.status === "unverified") unverified.push(scene.id);
     const probe = JSON.parse(await run(ffprobe, ["-v", "error", "-show_format", "-show_streams", "-of", "json", file]));
     const seconds = Number(probe.format?.duration ?? probe.streams?.[0]?.duration);
     if (!(seconds > 0)) throw new Error(`장면 ${scene.id}의 음성 길이를 읽지 못했습니다: ${file}`);
     narration[scene.id] = { file, durationMs: Math.round(seconds * 1000) };
   }
-  return narration;
+  return { narration, unverified };
 }
 
 /**
@@ -225,11 +242,11 @@ export async function loadDemoRenderInput({ outDir, options = {}, ffprobe = "ffp
   const rawFile = path.join(demoDir, RAW_FILE);
   if (!fs.existsSync(rawFile)) throw new Error(`무손실 원본이 없습니다: ${rawFile}`);
 
-  const narration = await resolveNarration(scenes, script, demoDir, ffprobe);
+  const { narration, unverified } = await resolveNarration(scenes, script, demoDir, ffprobe);
   const cameras = Object.fromEntries((script?.scenes || []).filter(scene => scene.camera != null)
     .map(scene => [scene.id, scene.camera]));
   const plan = buildEditPlan(scenes, { narration, cameras, options: { ...options, fps: scenes.fps ?? 25 } });
-  return { demoDir, scenes, script, rawFile, narration, cameras, plan };
+  return { demoDir, scenes, script, rawFile, narration, unverified, cameras, plan };
 }
 
 // 원본을 다시 촬영하지 않고 한 번 인코딩한다. 검증 실패 결과도 보고서에 남긴다.
@@ -238,13 +255,14 @@ export async function renderAppDemo({
   ffmpeg = "ffmpeg", ffprobe = "ffprobe", onEvent = () => {},
 }) {
   const profile = videoQuality(quality);
-  const { demoDir, scenes, script, rawFile, plan } = await loadDemoRenderInput({ outDir, options, ffprobe });
+  const { demoDir, scenes, script, rawFile, plan, unverified } = await loadDemoRenderInput({ outDir, options, ffprobe });
   writeCaptureReport(path.join(demoDir, "edit-plan.json"), plan);
   const placed = plan.scenes.filter(scene => scene.narration)
     .map(scene => ({ id: scene.id, ...scene.narration }));
   onEvent({ phase: "rendering", durationMs: plan.durationMs, scenes: plan.scenes.length, narration: placed.length });
   const cues = demoCaptionCues(plan, script);
   const warnings = plan.scenes.filter(scene => !scene.narration).map(scene => `장면 ${scene.id}에 내레이션이 없습니다.`);
+  warnings.push(...unverified.map(id => `장면 ${id}의 음성은 파일 일치 검사 기록이 없어 직접 청취가 필요합니다.`));
   if (burnCaptions && !cues.length) warnings.push("구울 자막이 없습니다. 목소리를 고른 장면이 없어 자막 없이 구웠습니다.");
 
   // 화질마다 다른 이름이다. 같은 이름이면 1440p를 내고 4K를 내는 순간 앞의 것이

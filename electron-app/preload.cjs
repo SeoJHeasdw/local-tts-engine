@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("ttsStudio", {
   pickLocation: (key) => ipcRenderer.invoke("studio:pick-location", key),
   startTextVoices: (options) => ipcRenderer.invoke("studio:start-text-voices", options),
   selectTextVoice: (token) => ipcRenderer.invoke("studio:select-text-voice", token),
+  listTextVoiceCandidates: (target) => ipcRenderer.invoke("studio:list-text-voice-candidates", target),
+  selectTextVoiceFromHistory: (target, candidateIndex) => ipcRenderer.invoke("studio:select-text-voice-from-history", target, candidateIndex),
   startFinetune: (options) => ipcRenderer.invoke("studio:start-finetune", options),
   listOutputs: () => ipcRenderer.invoke("studio:list-outputs"),
   setOutputReview: (target, status) => ipcRenderer.invoke("studio:set-output-review", target, status),

@@ -5,6 +5,25 @@ import { clearedFindingKeys, mapWithConcurrency, pageRangeFromTimeline, reviewPa
 import { pathToFileURL } from "node:url";
 import { reportDescribesVideo, safeStat } from "./files.mjs";
 import { runtimePaths } from "./paths.mjs";
+import { assertCurrentCourseManifest } from "./course-run-state.mjs";
+
+export function recipeFromManifest(manifest, report) {
+  if (!manifest?.model || !manifest?.audioPath || !report?.audioPath
+      || path.resolve(manifest.audioPath) !== path.resolve(report.audioPath)) return null;
+  const adapterPath = String(manifest.adapter?.path || "");
+  return {
+    model: String(manifest.model),
+    modelRevision: String(manifest.modelRevision || ""),
+    adapter: adapterPath ? path.basename(path.dirname(adapterPath)) : null,
+    adapterScale: manifest.adapter?.scale != null && Number.isFinite(Number(manifest.adapter.scale))
+      ? Number(manifest.adapter.scale) : null,
+    qualityModel: manifest.quality?.enabled ? String(manifest.quality.model || "") : null,
+    maxAttempts: manifest.quality?.enabled && Number(manifest.quality.maxAttempts) > 0
+      && Number.isInteger(Number(manifest.quality.maxAttempts))
+      ? Number(manifest.quality.maxAttempts) : null,
+    aligner: String(manifest.aligner?.model || ""),
+  };
+}
 
 export function createMediaService({
   fs = nativeFs,
@@ -101,6 +120,12 @@ export function createMediaService({
             // 청취 승인도 결과에 적혀 있다. 검수 화면에서 바로 표시하려면 함께 온다.
             value.review = report.review || null;
             value.reportPath = reportPath;
+            if (report.sourceDir) {
+              const manifest = await fs.readFile(path.join(report.sourceDir, "manifest.json"), "utf8")
+                .then(JSON.parse).catch(() => null);
+              value.recipe = manifest && await assertCurrentCourseManifest(report.sourceDir, manifest, fs)
+                .then(() => recipeFromManifest(manifest, report), () => null);
+            }
             break;
           }
         }
@@ -117,6 +142,7 @@ export function createMediaService({
       pages: value.pages || [], voiceFindings: value.voiceFindings || [],
       clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null,
       review: value.review || null,
+      recipe: value.recipe || null,
     }));
   }
 

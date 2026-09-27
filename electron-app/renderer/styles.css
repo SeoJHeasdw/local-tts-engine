@@ -892,6 +892,19 @@ button:disabled { cursor: not-allowed; }
 .review-transcript { border-top: 1px solid var(--line); padding-top: var(--s3); }
 .review-transcript h3 { font-size: var(--fs-sm); color: var(--text-2); margin: 0 0 var(--s2); font-weight: var(--fw-semi); }
 .review-transcript p { font-size: var(--fs-md); line-height: 1.9; max-height: 180px; overflow: auto; margin: 0; }
+.review-spoken { margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
+.review-spoken h4 { margin: 0 0 var(--s2); color: var(--text-3); font-size: var(--fs-xs); font-weight: var(--fw-semi); }
+.review-spoken-words { display: flex; flex-wrap: wrap; gap: var(--s1); max-height: 150px; overflow: auto; }
+.review-spoken-words button { padding: 3px var(--s2); border: 1px solid transparent; border-radius: var(--r-sm); background: var(--well); color: var(--text-2); cursor: pointer; font-size: var(--fs-sm); }
+.review-spoken-words button:hover { border-color: var(--lime-edge); color: var(--text); }
+.review-spoken-words button.current { border-color: var(--lime-edge); background: var(--lime-soft); color: var(--lime); }
+.review-spoken-words button:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+#review-spoken-note { color: var(--text-4); font-size: var(--fs-xs); }
+.review-recipe { margin-top: var(--s3); padding: var(--s3) var(--s4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+.review-recipe summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-sm); }
+.review-recipe dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--s2) var(--s4); margin-bottom: 0; font-size: var(--fs-xs); }
+.review-recipe dt { color: var(--text-4); }
+.review-recipe dd { margin: 0; overflow-wrap: anywhere; }
 
 .review-sidebar { display: grid; gap: var(--s4); position: sticky; top: var(--s5); }
 .review-sidebar .card { padding: var(--s5); }
@@ -1162,6 +1175,18 @@ button:disabled { cursor: not-allowed; }
 .settings-pane { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--s5); }
 .settings-panel { display: grid; gap: var(--s4); align-content: start; }
 .settings-panel h3 { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-semi); letter-spacing: -.02em; }
+.voice-readiness { padding: var(--s3) var(--s4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well); }
+.voice-readiness h4 { margin: 0 0 var(--s1); font-size: var(--fs-sm); }
+.voice-readiness > p { margin: 0 0 var(--s3); color: var(--text-4); font-size: var(--fs-xs); }
+.voice-readiness dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2) var(--s4); margin: 0; }
+.voice-readiness dl > div { display: flex; justify-content: space-between; gap: var(--s2); min-width: 0; font-size: var(--fs-xs); }
+.voice-readiness dt { color: var(--text-3); }
+.voice-readiness dd { margin: 0; text-align: right; font-weight: var(--fw-semi); }
+.voice-readiness dd[data-state="ready"] { color: var(--lime); }
+.voice-readiness dd[data-state="missing"], .voice-readiness dd[data-state="incomplete"] { color: var(--warn); }
+.voice-readiness dd[data-state="unknown"] { color: var(--danger); }
+.voice-readiness #voice-readiness-issues { margin: var(--s3) 0 0; color: var(--warn); font-size: var(--fs-xs); line-height: var(--lh-body); }
+.voice-readiness #voice-readiness-issues:empty { display: none; }
 .setting-group-head {
   display: grid; gap: var(--s1); margin: var(--s3) 0 0;
   font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--text-2);
@@ -1381,6 +1406,7 @@ button:disabled { cursor: not-allowed; }
 }
 
 @media (max-width: 760px) {
+  .voice-readiness dl { grid-template-columns: 1fr; }
   .settings-modal { width: calc(100vw - 24px); height: calc(100dvh - 24px); }
   /* 좁으면 구역 레일을 가로 탭으로 눕힌다. */
   .settings-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
@@ -1414,6 +1440,7 @@ button:disabled { cursor: not-allowed; }
 .polish-diff .diff-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: var(--s3); align-items: baseline; }
 .polish-diff .diff-row span { color: var(--text-3); font: var(--fs-xs) var(--mono); }
 .polish-diff .diff-row p { margin: 0; font-size: var(--fs-md); line-height: var(--lh-body); }
+#polish-recognized { white-space: pre-line; }
 .polish-diff .diff-note { margin: 0; color: var(--warn); font-size: var(--fs-xs); line-height: var(--lh-snug); }
 
 /* 저장은 이 화면의 마지막 한 걸음이다. 맨 아래에 두면 담을 때마다 끝까지

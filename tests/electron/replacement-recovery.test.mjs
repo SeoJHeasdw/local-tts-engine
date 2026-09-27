@@ -12,7 +12,10 @@ test('실제 페이지 후보 경로는 기존 누락 기록을 Python으로 보
     requireRuntimeTool:()=>'/python',runProcess:async(stage,python,args)=>calls.push(args),
     registerSelected:async files=>files.map((file,index)=>({token:`candidate-${index}`})),
     fs:{mkdir:async()=>{},writeFile:async(file,text)=>written.push({file,text}),
-      readFile:async()=>JSON.stringify({audioPath:'/generated.wav',chunks:[{startMs:1300,endMs:31300}]})},
+      readFile:async(file)=>{
+        if(file.endsWith('/run-state.json')) throw Object.assign(new Error('not found'),{code:'ENOENT'});
+        return JSON.stringify({audioPath:'/generated.wav',chunks:[{startMs:1300,endMs:31300}]});
+      }},
   });
   await voices.runVoiceCandidates({videoToken:'original',name:'repair',startPage:196,endPage:196,candidateCount:2,
     adapterScale:.6,recoveryFindings:[{expectedText:'caller supplied wrong hint'}]},'/output');

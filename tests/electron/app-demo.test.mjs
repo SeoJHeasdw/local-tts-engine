@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { createAppDemoService } from '../../electron-app/main/app-demo.mjs';
@@ -18,7 +19,7 @@ const SCENARIO = {
 };
 
 async function studio(t, { scenes = null, script = null, cancelRun = false, onRun = null,
-  requireTool = () => '/usr/bin/node' } = {}) {
+  requireTool = () => '/usr/bin/node', assertVoiceReady = async () => {} } = {}) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'app-demo-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   // 촬영은 오늘 날짜 폴더에 결과를 만든다. 같은 자리를 써야 같은 이름 검사가 뜻이 있다.
@@ -45,6 +46,7 @@ async function studio(t, { scenes = null, script = null, cancelRun = false, onRu
     // 결과 폴더 뿌리는 outputRoot에서 나온다(editOutputRoot = outputRoot/edits). 임시 폴더에 가둔다 —
     // 가두지 않으면 촬영 검사가 실제 output/edits에 폴더를 만든다.
     readAppSettings: async () => ({ paths: { outputRoot: base } }),
+    assertVoiceReady,
     requireRuntimeTool: requireTool,
     // cancelRun: 중지를 누른 것처럼 작업을 중지 표시하고 작업자가 실패로 끝난다.
     runProcess: async (stage, tool, args) => {
@@ -56,6 +58,15 @@ async function studio(t, { scenes = null, script = null, cancelRun = false, onRu
   });
   return { service, runs, events, base, outDir, demoDir, scenarioFile, state };
 }
+
+test('앱 데모 목소리는 모델 파일 확인 실패 시 작업을 시작하지 않는다', async t => {
+  const { service, outDir, state, runs } = await studio(t, {
+    assertVoiceReady: async () => { throw new Error('음성 모델: 로컬 파일이 없습니다. 설치 예상 용량은 약 4 GB입니다.'); },
+  });
+  await assert.rejects(service.startDemoVoice({ outDir }), /설치 예상 용량은 약 4 GB/);
+  assert.equal(state.activeJob, null);
+  assert.equal(runs.length, 0);
+});
 
 async function settled(state) {
   for (let i = 0; i < 100 && state.activeJob?.state === 'running'; i++) {
@@ -140,7 +151,7 @@ test('찍어 둔 결과 폴더를 화면에서 이어 받는다', async t => {
 
 test('결과 폴더에서 대본·후보·완성본을 한 벌로 모은다', async t => {
   const { service, outDir, demoDir } = await studio(t, { scenes: scenesFile, script: scriptFile });
-  await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-01.wav'), '');
+  await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-01.wav'), Buffer.alloc(80));
   await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-01.json'), JSON.stringify({ durationMs: 6520 }));
   await fs.writeFile(path.join(outDir, 'rice-first-run-high.mp4'), '');
   const project = await service.readDemoProject(outDir);
@@ -162,6 +173,7 @@ test('결과 폴더에서 대본·후보·완성본을 한 벌로 모은다', as
 test('다듬기가 그릴 편집 계획·자막·검증과 후보가 읽은 대본을 함께 준다', async t => {
   const { service, outDir, demoDir } = await studio(t, { scenes: scenesFile, script: scriptFile });
   await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'input.txt'), '예전 대본\n');
+  await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-01.wav'), Buffer.alloc(80));
   await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-01.json'),
     JSON.stringify({ durationMs: 6520, voiceRouting: { segments: [{ language: 'English' }] } }));
   const plan = { fps: 25, maxSpeed: 4, durationMs: 9000, segments: [], zoom: [],
@@ -185,6 +197,7 @@ test('다듬기가 그릴 편집 계획·자막·검증과 후보가 읽은 대�
 
 test('화면이 고친 대본과 고른 후보만 돌려 쓴다', async t => {
   const { service, outDir, demoDir } = await studio(t, { scenes: scenesFile, script: scriptFile });
+  await fs.writeFile(path.join(demoDir, 'narration', 'awakening', 'candidate-02.wav'), Buffer.alloc(80, 1));
   const saved = await service.saveDemoScript(outDir, [
     { id: 'awakening', text: '  고친 대본  ', status: 'approved', selected: 'narration/awakening/candidate-02.wav' },
     { id: 'chat', text: '이제 일을 맡기면 됩니다.', status: 'approved', selected: null },
@@ -199,6 +212,46 @@ test('화면이 고친 대본과 고른 후보만 돌려 쓴다', async t => {
   await assert.rejects(
     () => service.saveDemoScript(outDir, [{ id: 'awakening', selected: 'narration/awakening/candidate-09.wav' }]),
     /그 후보가 없습니다/);
+});
+
+test('앱 데모 후보의 검사 결과는 현재 WAV 해시와 일치할 때만 표시하고 선택한다', async t => {
+  const { service, outDir, demoDir } = await studio(t, { scenes: scenesFile, script: scriptFile });
+  const first = path.join(demoDir, 'narration', 'awakening', 'candidate-01.wav');
+  const second = path.join(demoDir, 'narration', 'awakening', 'candidate-02.wav');
+  const audio = Buffer.alloc(80, 3);
+  await fs.writeFile(first, audio);
+  await fs.writeFile(`${first.slice(0, -4)}.json`, JSON.stringify({
+    durationMs: 1000, finalTrack: { status: 'ok' },
+    qualityReview: { enabled: true, status: 'passed' },
+    audioSha256: crypto.createHash('sha256').update(audio).digest('hex'),
+  }));
+  await fs.writeFile(second, Buffer.alloc(80, 5));
+  await fs.writeFile(`${second.slice(0, -4)}.json`, JSON.stringify({
+    durationMs: 1000, qualityReview: { enabled: true, status: 'passed' },
+  }));
+
+  const before = await service.readDemoProject(outDir);
+  assert.equal(before.scenes[0].candidates[0].integrity, 'verified');
+  assert.equal(before.scenes[0].candidates[0].qualityReview.status, 'passed');
+  assert.equal(before.scenes[0].candidates[1].integrity, 'unverified');
+  assert.equal(before.scenes[0].candidates[1].qualityReview, null,
+    '옛 후보의 자동 검사를 현재 파일 검증처럼 표시하지 않는다');
+
+  await fs.appendFile(first, 'modified');
+  const after = await service.readDemoProject(outDir);
+  assert.equal(after.scenes[0].candidates[0].integrity, 'changed');
+  assert.equal(after.scenes[0].candidates[0].selectable, false);
+  assert.equal(after.scenes[0].candidates[0].qualityReview, null);
+  await assert.rejects(service.saveDemoScript(outDir, [{
+    id: 'awakening', selected: 'narration/awakening/candidate-01.wav',
+  }]), /생성 당시 기록과 다르거나 없습니다/);
+  const legacy = await service.saveDemoScript(outDir, [{
+    id: 'awakening', selected: 'narration/awakening/candidate-02.wav',
+  }]);
+  assert.equal(legacy.scenes[0].selectedIntegrity, 'unverified');
+  assert.equal(nextStep(legacy), 'render');
+  assert.equal(nextStep({ ...legacy, scenes: [{ ...legacy.scenes[0],
+    selected: 'narration/awakening/candidate-01.wav', selectedIntegrity: 'changed' }] }), 'select');
 });
 
 test('장면 구도는 저장·다시 열기에 유지되며 잘못된 값은 파일에 쓰지 않는다', async t => {

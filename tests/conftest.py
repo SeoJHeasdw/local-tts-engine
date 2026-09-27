@@ -15,6 +15,7 @@ supposed to have said, and the pipeline has to agree.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import types
 from dataclasses import dataclass
@@ -115,9 +116,10 @@ class FakeAsrModel:
         self.calls: list[tuple[str, float]] = []
         self.spoken: dict[str, str] = {}
         self._takes: dict[str, list[str]] = {}
+        self.final_sources: dict[str, str] = {}
 
     def generate(self, audio_path: str, **kwargs: Any) -> FakeTranscript:
-        path = str(audio_path)
+        path = self.final_sources.get(str(audio_path), str(audio_path))
         temperature = float(kwargs.get("temperature", 0.0))
         self.calls.append((path, temperature))
         text = self.spoken.get(path, "")
@@ -292,8 +294,24 @@ def studio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
         def writing(path, data, rate, *args, **kwargs):
             result = real_write(path, data, rate, *args, **kwargs)
+            output = Path(path).resolve()
             if getattr(tracked_generate, "last_text", None) is not None:
-                asr.spoken.setdefault(str(Path(path).resolve()), tracked_generate.last_text)
+                asr.spoken.setdefault(str(output), tracked_generate.last_text)
+            # Cache files are staged before publication. Keep the fake reader's
+            # source text attached to the published path as well.
+            staged = re.fullmatch(r"\.(.+--take-\d+--[0-9a-f]{12})-[^.]+\.wav", output.name)
+            if staged:
+                asr.spoken[str(output.with_name(staged.group(1) + ".wav"))] = tracked_generate.last_text
+            # A final-track reread is the same spoken take, after assembly and
+            # normalization. The fake has no ears, so alias only its source
+            # text/take index; the real pipeline still reads the delivered WAV.
+            final = re.fullmatch(r"final--\d+--(.+)--take-(\d+)\.wav", output.name)
+            if final:
+                prefix = f"{final.group(1)}--take-{final.group(2)}--"
+                source = next((candidate for candidate in asr.spoken if Path(candidate).name.startswith(prefix)), None)
+                if source:
+                    asr.spoken[str(output)] = asr.spoken[source]
+                    asr.final_sources[str(output)] = source
             return result
 
         tts.generate = tracked_generate

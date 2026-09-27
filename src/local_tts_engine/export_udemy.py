@@ -38,6 +38,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .course.run_state import require_current_course_manifest
+
 
 # narration.config.json 에 정의된 preset/provider 기본값
 DEFAULT_PRESET = "qwen3-first-5m"
@@ -181,6 +183,7 @@ def export(
     """
     source_manifest_path = source_dir / "manifest.json"
     source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    require_current_course_manifest(source_dir, source_manifest)
 
     preset_name = preset["name"]
     timeline = timeline_from_course_manifest(source_manifest, preset, provider)
@@ -204,6 +207,7 @@ def export(
         {
             "schemaVersion": 1,
             "sourceManifest": str(source_manifest_path.resolve()),
+            "sourceRunId": source_manifest.get("runId"),
             "sourceAudio": source_manifest["audioPath"],
             "sourcePreview": source_manifest["previewPath"],
             "model": source_manifest["model"],

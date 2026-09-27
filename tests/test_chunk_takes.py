@@ -8,6 +8,7 @@ everything reads correctly must not cost more than one take per chunk.
 import pytest
 
 from local_tts_engine.course_pilot import CourseChunk, CourseEntry, resolve_chunk_take
+from local_tts_engine.course.candidates import CandidateAudioError, CandidateAttemptsExhausted
 
 
 def entry(text: str = "래그를 설명합니다", **overrides) -> CourseEntry:
@@ -122,8 +123,8 @@ def test_turning_the_reader_off_generates_one_take_and_claims_nothing() -> None:
     result = resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=None)
 
     assert synthesize.made == [1]
-    assert result["severity"] == "ok"
-    assert result["record"]["selected"] == {"passed": True, "attempt": 1, "disabled": True}
+    assert result["severity"] == "not-checked"
+    assert result["record"]["selected"] == {"passed": None, "attempt": 1, "disabled": True}
     assert result["record"]["candidates"] == []
 
 
@@ -171,3 +172,46 @@ def test_unresolved_restart_uses_existing_budget_and_stays_a_listening_warning()
     result = resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=review)
     assert synthesize.made == [1, 2, 3, 4]
     assert result['severity'] == 'warning'
+
+
+def test_broken_waveform_uses_the_next_seed_and_keeps_failure_evidence() -> None:
+    attempts = []
+
+    def synthesize(_chunk, attempt):
+        attempts.append(attempt)
+        if attempt == 1:
+            raise CandidateAudioError("empty-audio", "첫 후보가 비었습니다.")
+        return take(attempt)
+
+    result = resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=reader([{}]))
+    assert attempts == [1, 2]
+    assert result["selected"]["attempt"] == 2
+    assert result["record"]["generationFailures"] == [
+        {"attempt": 1, "code": "empty-audio", "reason": "첫 후보가 비었습니다."}
+    ]
+    assert len(result["record"]["candidates"]) == 1
+
+
+def test_all_broken_takes_exhaust_the_same_budget_without_false_success() -> None:
+    attempts = []
+
+    def synthesize(_chunk, attempt):
+        attempts.append(attempt)
+        raise CandidateAudioError("no-signal", "무음")
+
+    with pytest.raises(CandidateAttemptsExhausted) as error:
+        resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=reader([]))
+    assert attempts == [1, 2, 3, 4]
+    assert [record["attempt"] for record in error.value.failures] == attempts
+
+
+def test_shared_input_errors_are_not_retried() -> None:
+    attempts = []
+
+    def synthesize(_chunk, attempt):
+        attempts.append(attempt)
+        raise ValueError("참조 음성 입력 오류")
+
+    with pytest.raises(ValueError, match="참조 음성 입력 오류"):
+        resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=reader([]))
+    assert attempts == [1]

@@ -849,14 +849,18 @@ def quality_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
 
     failed = [item for item in items if severity_of(item) == "failed"]
     warned = [item for item in items if severity_of(item) == "warning"]
-    clean = len(items) - len(failed) - len(warned)
+    unchecked = [item for item in items if severity_of(item) == "not-checked"]
+    clean = len(items) - len(failed) - len(warned) - len(unchecked)
     return {
-        "ok": not failed,
-        "clean": not failed and not warned,
+        "ok": not failed and not unchecked,
+        "clean": not failed and not warned and not unchecked,
         "passedChunks": clean,
         "warnedChunks": len(warned),
+        "notCheckedChunks": len(unchecked),
         "totalChunks": len(items),
-        "retriedChunks": sum(len(item.get("candidates", [])) > 1 for item in items),
+        "retriedChunks": sum(max(1, len(item.get("candidates", []))) + len(item.get("generationFailures", [])) > 1
+                             for item in items),
         "needsReview": slides(failed),
         "listenSuggested": slides(warned),
+        "notChecked": slides(unchecked),
     }

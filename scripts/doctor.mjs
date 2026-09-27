@@ -7,10 +7,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  defaultStudioPaths,
   ffmpegBuildProfile,
   resolveRuntimeTools,
 } from "../electron-app/main/runtime-config.mjs";
+import { createSettingsService } from "../electron-app/main/settings.mjs";
+import { inspectVoiceReadiness } from "../electron-app/main/voice-readiness.mjs";
 import { listCaptureDevices, probeDisplay, screenDevices } from "../electron-app/main/capture/displays.mjs";
 
 
@@ -39,7 +40,6 @@ async function canRecordScreen(ffmpeg) {
     return false;
   }
 }
-const SETTINGS_PATH = path.join(PROJECT_ROOT, "artifacts/app-settings.json");
 const flags = new Set(process.argv.slice(2));
 
 
@@ -63,11 +63,7 @@ function firstLine(value) {
 
 
 async function readSettings() {
-  const stored = await fs.readFile(SETTINGS_PATH, "utf8").then(JSON.parse).catch(() => ({}));
-  return {
-    ...stored,
-    paths: { ...defaultStudioPaths(PROJECT_ROOT), ...(stored.paths || {}) },
-  };
+  return createSettingsService({ state: {} }).readAppSettings();
 }
 
 
@@ -78,18 +74,15 @@ async function buildReport() {
   ]);
   const studio = settings.paths;
   const deckRoot = path.join(studio.sourceProjectRoot, "deck");
-  const adapterPath = settings.adapterId && settings.adapterId !== "none"
-    ? path.join(PROJECT_ROOT, "artifacts/finetune-runs", settings.adapterId, "adapters")
-    : null;
-  const localQualityModel = path.join(PROJECT_ROOT, "artifacts/models/whisper-large-v3-turbo-asr-fp16");
-  const sharedQualityModel = path.join(
-    os.homedir(),
-    ".cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo-asr-fp16",
-  );
-  const qualityModelPath = await exists(path.join(localQualityModel, "config.json"))
-    && await exists(path.join(localQualityModel, "model.safetensors"))
-    ? localQualityModel
-    : await exists(sharedQualityModel) ? sharedQualityModel : null;
+  const adapterPath = settings.adapters.find((item) => item.id === settings.adapterId)?.path || null;
+  const readiness = await inspectVoiceReadiness({
+    ...settings,
+    modelId: settings.modelId === "chatterbox-v3" ? "chatterbox-v3" : "qwen3-tts",
+    adapterId: settings.adapterId,
+    adapters: settings.adapters,
+  }, studio);
+  const ready = (item) => item?.state === "ready";
+  const selectedModel = settings.modelId === "chatterbox-v3" ? "chatterbox-v3" : "qwen3-tts";
   const checks = {
     appleSilicon: process.platform === "darwin" && process.arch === "arm64",
     basePython: Boolean(tools.basePython),
@@ -97,10 +90,12 @@ async function buildReport() {
     node: Boolean(tools.node),
     ffmpeg: Boolean(tools.ffmpeg),
     ffprobe: Boolean(tools.ffprobe),
-    referenceAudio: await exists(studio.referenceAudioPath),
-    referenceText: await exists(studio.referenceTextPath),
-    adapter: !adapterPath || await exists(path.join(adapterPath, "adapters.safetensors")),
-    qualityModel: Boolean(qualityModelPath),
+    referenceAudio: ready(readiness.referenceAudio),
+    referenceText: ready(readiness.referenceText),
+    adapter: settings.adapterId === "none" || ready(readiness.adapter),
+    voiceModel: ready(readiness.models[selectedModel]),
+    qualityModel: ready(readiness.quality),
+    aligner: ready(readiness.aligner),
     courseConfig: await exists(path.join(deckRoot, "narration.config.json")),
     courseScripts: await exists(path.join(deckRoot, "script/course")),
     // 자막과 촬영은 이 저장소가 소유한다. 촬영에는 실제 브라우저가 필요하다.
@@ -115,13 +110,13 @@ async function buildReport() {
   };
   const capabilities = {
     textVoice: checks.appleSilicon && checks.trainPython && checks.ffprobe
-      && checks.referenceAudio && checks.referenceText && checks.adapter,
+      && checks.referenceAudio && checks.referenceText && checks.adapter && checks.voiceModel && checks.qualityModel,
     editing: checks.ffmpeg && checks.ffprobe,
     screenRecording: checks.node && checks.ffmpeg && checks.ffprobe && checks.recordRunner && checks.screenCapture,
     courseVideo: checks.appleSilicon && checks.basePython && checks.trainPython
       && checks.node && checks.ffmpeg && checks.ffprobe && checks.referenceAudio
-      && checks.referenceText && checks.adapter && checks.courseConfig
-      && checks.qualityModel && checks.courseScripts && checks.captionRunner && checks.captureRunner
+      && checks.referenceText && checks.adapter && checks.voiceModel && checks.courseConfig
+      && checks.qualityModel && checks.aligner && checks.courseScripts && checks.captionRunner && checks.captureRunner
       && checks.productionRunner && checks.sourceCompiler,
   };
   const basePythonOutput = executableOutput(tools.basePython);
@@ -135,7 +130,10 @@ async function buildReport() {
     trainPython: firstLine(trainPythonOutput),
     ffmpeg: firstLine(ffmpegOutput),
   };
-  const paths = flags.has("--verbose") ? { ...tools, ...studio, adapterPath, qualityModelPath } : undefined;
+  const paths = flags.has("--verbose") ? { ...tools, ...studio, adapterPath,
+    voiceModelPath: readiness.models[selectedModel].path || null,
+    qualityModelPath: readiness.quality.path || null,
+    alignerPath: readiness.aligner.path || null } : undefined;
   return {
     generatedAt: new Date().toISOString(),
     machine: `${os.platform()} ${os.arch()}`,
@@ -165,7 +163,9 @@ function printReport(report) {
     referenceAudio: "참조 음성",
     referenceText: "참조 전사문",
     adapter: "선택한 음성 어댑터",
+    voiceModel: "선택한 음성 모델 로컬 파일",
     qualityModel: "Whisper 자동 음성 검수 모델",
+    aligner: "단어 시각 정렬 모델",
     courseConfig: "강의 설정",
     courseScripts: "강의 대본",
     captionRunner: "자막 자동화 도구",

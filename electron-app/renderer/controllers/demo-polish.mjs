@@ -12,6 +12,7 @@ import { createDemoCameraEditor } from "./demo-camera.mjs";
 // 대본·확정·고른 후보(demo/script.json)이고, 굽는 것은 CLI와 같은 작업자다.
 
 export const DEMO_POLISH_STEPS = ["demo-voice", "demo-render"];
+const INVALID_VOICE_FILE = new Set(["changed", "invalid", "missing", "text-changed"]);
 
 /** 후보가 지금 대본이 아니라 예전 대본을 읽고 있는가. 모르면(기록 없음) 아니라고 본다. */
 export function isStale(scene) {
@@ -34,7 +35,7 @@ export function nextStep(project) {
   if (!scenes.some(scene => scene.status === "approved" && scene.text?.trim())) return "script";
   if (scenesNeedingVoice(project).length) return "voice";
   const approved = scenes.filter(scene => scene.status === "approved");
-  if (approved.some(scene => !scene.selected)) return "select";
+  if (approved.some(scene => !scene.selected || INVALID_VOICE_FILE.has(scene.selectedIntegrity))) return "select";
   return "render";
 }
 
@@ -58,6 +59,18 @@ export function sceneSeconds(scene) {
 export function candidateLabel(candidate) {
   const number = /candidate-(\d+)/.exec(candidate?.name || "")?.[1];
   return number ? `후보 ${Number(number)}` : candidate?.name || "후보";
+}
+
+function candidateQualityLabel(candidate) {
+  if (candidate.integrity === "changed") return "음성 파일이 생성 당시와 다릅니다 · 다시 생성 필요";
+  if (candidate.integrity === "text-changed") return "이 후보가 읽은 대본이 현재 대본과 다릅니다 · 다시 생성 필요";
+  if (candidate.integrity === "invalid") return "후보 검사 기록이 불완전합니다 · 다시 생성 필요";
+  if (candidate.integrity === "missing") return "음성 파일이 없습니다 · 다시 생성 필요";
+  if (candidate.integrity === "unverified") return "파일 일치 검사 기록 없음 · 직접 청취 필요";
+  const review = candidate.qualityReview;
+  if (!review?.enabled) return "내용 자동 검사 기록 없음";
+  if (review.status === "passed") return "자동 내용 검사 통과 · 직접 청취 필요";
+  return "자동 검사에서 확인 필요";
 }
 
 /** 영어를 따로 읽은 구간 수. 기록이 없는 예전 후보(undefined)는 말하지 않는다. */
@@ -186,7 +199,8 @@ export function createDemoPolishController({
     $("#demo-versions").classList.toggle("hidden", !videos.length);
     $("#demo-captions").classList.toggle("hidden", !project?.captions?.length || !video);
     $("#demo-captions").setAttribute("aria-pressed", String(captionsOn));
-    $("#demo-preview-render").disabled = busy() || Boolean(blocked);
+    $("#demo-preview-render").disabled = busy() || Boolean(blocked)
+      || scenes().some(scene => scene.selected && (INVALID_VOICE_FILE.has(scene.selectedIntegrity) || isStale(scene)));
     $("#demo-preview-render").inert = Boolean(blocked);
   }
 
@@ -285,15 +299,16 @@ export function createDemoPolishController({
       </label>
       <label class="check-row full"><input type="checkbox" id="demo-scene-approved"${scene.status === "approved" ? " checked" : ""}><span><strong>대본 확정</strong><small>확정한 장면만 목소리를 만듭니다.</small></span></label>
       ${stale ? '<p class="demo-stale" role="status">대본을 고친 뒤라 후보가 예전 대본을 읽습니다. 후보를 다시 만드세요.</p>' : ""}
+      ${INVALID_VOICE_FILE.has(scene.selectedIntegrity) ? `<p class="demo-stale" role="status">${scene.selectedIntegrity === "text-changed" ? "고른 음성이 현재 대본을 읽지 않습니다." : "고른 음성 파일이 생성 당시 기록과 다릅니다."} 다른 후보를 고르거나 다시 만들어 주세요.</p>` : ""}
       ${scene.screenText ? `<details class="advanced-options full"><summary><span>찍힌 화면의 글</span><small>대본의 근거</small></summary><div><pre class="demo-screen-text">${escapeHtml(scene.screenText)}</pre></div></details>` : ""}
       ${scene.candidates.length ? `<div class="candidate-gallery">
         <p>후보 ${scene.candidates.length}벌 — ${canTogether ? "영상에 맞춰 듣고" : "듣고"} 하나를 고릅니다. 고르면 바로 저장됩니다.</p>
         <div>${scene.candidates.map(candidate => `
           <label class="candidate-card${scene.selected === candidate.file ? " selected" : ""}">
-            <input type="radio" name="demo-voice" value="${escapeHtml(candidate.file)}"${scene.selected === candidate.file ? " checked" : ""} data-demo-select>
+            <input type="radio" name="demo-voice" value="${escapeHtml(candidate.file)}"${scene.selected === candidate.file ? " checked" : ""}${candidate.selectable === false ? " disabled" : ""} data-demo-select>
             <div>
               <strong>${escapeHtml(candidateLabel(candidate))}${scene.selected === candidate.file ? " · 쓰는 중" : ""}</strong>
-              <small>${[candidate.durationMs ? seconds(candidate.durationMs) : "길이 모름", englishParts(candidate)].filter(Boolean).join(" · ")}</small>
+              <small>${[candidate.durationMs ? seconds(candidate.durationMs) : "길이 모름", englishParts(candidate), candidateQualityLabel(candidate)].filter(Boolean).join(" · ")}</small>
               <div class="demo-candidate-listen">
                 ${canTogether ? `<button type="button" class="secondary-small" data-demo-together="${escapeHtml(candidate.file)}"
                   aria-pressed="${together?.file === candidate.file}">${together?.file === candidate.file ? "멈춤" : "영상에 맞춰 듣기"}</button>` : ""}
@@ -314,6 +329,8 @@ export function createDemoPolishController({
     const needs = scenesNeedingVoice(project);
     const step = nextStep(project);
     const unchosen = list.filter(scene => scene.status === "approved" && !scene.selected).length;
+    const invalidSelected = list.filter(scene => scene.selected && INVALID_VOICE_FILE.has(scene.selectedIntegrity));
+    const staleSelected = list.filter(scene => scene.selected && isStale(scene));
     $("#demo-command").classList.toggle("hidden", !project);
     $("#demo-polish-hint").innerHTML = project ? `<b>다음</b> · ${escapeHtml(stepLabel(step))}` : "";
     const approved = list.filter(scene => scene.status === "approved").length;
@@ -321,6 +338,8 @@ export function createDemoPolishController({
     const notes = [`대본 확정 ${approved}/${list.length} · 목소리 고름 ${chosen}/${list.length}`];
     if (needs.length) notes.push(`후보를 새로 만들 장면 ${needs.join(", ")}`);
     else if (unchosen) notes.push(`목소리를 고르지 않은 확정 장면 ${unchosen}개는 내레이션 없이 들어갑니다`);
+    if (invalidSelected.length) notes.push(`파일 확인이 필요한 장면 ${invalidSelected.map(scene => scene.id).join(", ")}`);
+    if (staleSelected.length) notes.push(`목소리보다 대본이 바뀐 장면 ${staleSelected.map(scene => scene.id).join(", ")}`);
     $("#demo-command-note").textContent = project ? notes.join(" · ") : "";
     $("#demo-voice-all").textContent = needs.length ? `후보 만들기 · ${needs.length}장면` : "후보 만들기";
     const voiceFirst = step === "voice";
@@ -331,7 +350,7 @@ export function createDemoPolishController({
     $("#demo-render-start").classList.toggle("secondary-small", !renderFirst);
     const off = !project || busy() || Boolean(blocked);
     $("#demo-voice-all").disabled = off || !needs.length;
-    $("#demo-render-start").disabled = off;
+    $("#demo-render-start").disabled = off || invalidSelected.length > 0 || staleSelected.length > 0;
     for (const id of ["#demo-voice-all", "#demo-render-start", "#demo-candidates", "#demo-quality", "#demo-burn"]) $(id).inert = Boolean(blocked);
     $("#demo-polish-pick").disabled = busy();
     // 도는 동안은 단추 자리에 진행이 선다. 끝나면 결과가 이 화면에 바로 들어온다.

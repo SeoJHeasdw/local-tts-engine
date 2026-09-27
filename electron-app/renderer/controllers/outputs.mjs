@@ -1,7 +1,8 @@
 import { animateLayout } from "../motion.mjs";
 import { filterOutputItems, visibleVoiceFindings, outputIcon, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs, outputGroupKey, outputVersionLinks } from "../view-utils.mjs";
 
-export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, demoPolish, document = globalThis.document }) {
+export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, demoPolish,
+  reopenVoiceCandidates = null, document = globalThis.document }) {
   let outputItems = [];
 
   let outputFilter = "all";
@@ -103,6 +104,7 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
               <summary aria-label="결과 작업 더 보기">•••</summary>
               <div>
                 <button class="review-button${approved ? " approved" : ""}" type="button">${approved ? "청취 승인 취소" : "청취 승인으로 표시"}</button>
+                ${kind === "voice" && item.hasCandidates ? '<button class="candidates-button" type="button">지난 후보 다시 듣기</button>' : ""}
                 <button class="rename-button" type="button">이름 바꾸기</button>
                 <button class="reveal-button" type="button">Finder에서 보기</button>
                 <button class="delete-button" type="button">휴지통으로 보내기</button>
@@ -125,6 +127,16 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
           formatDuration(item.durationMs),
           compact ? "" : formatDate(item.updatedAt),
           findings.length ? voiceFindingSummaryLine(findings) : "",
+          item.awaitingSelection && item.candidateSetStatus === "partial"
+            ? `요청 ${item.candidateCount || "?"}개 중 완성 ${item.availableCandidateCount || "?"}개 · 성공 후보를 고를 수 있습니다`
+            : item.awaitingSelection && item.candidateSetStatus === "cancelled"
+              ? "중지 전에 완성된 후보를 고를 수 있습니다"
+              : item.awaitingSelection && item.candidateSetStatus === "registration-failed"
+                ? "후보 파일 검사 실패 · 다시 열어 확인하세요"
+              : item.awaitingSelection ? "후보를 골라 저장하세요" : "",
+          kind === "voice" && item.qualityReview?.findings?.length
+            ? `자동 검사 확인 ${item.qualityReview.findings.length}곳` : "",
+          item.staleVoiceSource ? "이전 음성 기록 · 최신 제작 미완료" : "",
           newer.length ? `이후 수정본 ${newer.length}개` : "",
         ].filter(Boolean).join(" · ");
         if (newer.length) {
@@ -135,7 +147,23 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
         const pill = row.querySelector(".state-pill");
         pill.textContent = state.label;
         pill.tabIndex = 0;
-        const detail = state.key === "failed"
+        const detail = item.awaitingSelection && item.candidateSetStatus === "partial"
+          ? "후보 생성이 일부 실패했습니다. 완성된 후보는 보존됐으며 직접 듣고 선택할 수 있습니다."
+          : item.awaitingSelection && item.candidateSetStatus === "cancelled"
+            ? "제작을 중지했습니다. 중지 전에 완성된 후보만 보존했습니다."
+          : item.awaitingSelection && item.candidateSetStatus === "registration-failed"
+            ? "후보는 만들어졌지만 파일 확인에 실패했습니다. 재생 상태를 확인하고 필요하면 다시 만드세요."
+          : item.awaitingSelection
+          ? "만들어 둔 후보를 듣고 하나를 선택해 주세요."
+          : item.staleVoiceSource
+            ? "같은 폴더의 최신 음성 제작이 완료되지 않았습니다. 이전 검수 기록을 현재 음성의 근거로 사용하지 마세요."
+          : kind === "voice" && item.qualityReview?.status === "passed"
+            ? "발음·내용 자동 검사를 통과했습니다. 실제 청취 승인은 별도입니다."
+            : kind === "voice" && ["failed", "warning"].includes(item.qualityReview?.status)
+              ? "자동 음성 검사에서 확인할 부분이 남았습니다. 후보를 직접 들어 주세요."
+            : kind === "voice" && !item.qualityReview?.enabled
+              ? "파일 길이만 확인했거나 과거 검수 기록이 없습니다. 음성 내용은 직접 들어 확인해 주세요."
+          : state.key === "failed"
           ? "자동 검증에 실패했거나 기록이 없습니다."
           : state.key === "attention"
             ? `${voiceFindingSummaryLine(findings)} · 다듬기에서 처리하세요`
@@ -161,12 +189,21 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
             showToast(approved ? "청취 승인을 취소했습니다." : "직접 들은 결과로 표시했습니다.");
           } catch (error) { showToast(error.message, "error"); }
         });
+        row.querySelector(".review-button").disabled = item.awaitingSelection || item.staleVoiceSource;
+        row.querySelector(".candidates-button")?.addEventListener("click", () => {
+          resultMenu.removeAttribute("open");
+          reopenVoiceCandidates?.(target).catch((error) => showToast(error.message, "error"));
+        });
         if (kind === "demo") {
           // 앱 데모도 다듬기에서 본다. 다만 강의처럼 mp4를 고치지 않고 장면·대본·후보를 고쳐
           // 다시 굽는 작업면이 따로 열린다.
           const open = row.querySelector(".open-button");
           open.textContent = "다듬기";
           open.addEventListener("click", () => demoPolish.openTarget(target)
+            .catch((error) => showToast(error.message, "error")));
+        } else if (item.awaitingSelection) {
+          row.querySelector(".open-button").textContent = "후보 선택";
+          row.querySelector(".open-button").addEventListener("click", () => reopenVoiceCandidates?.(target)
             .catch((error) => showToast(error.message, "error")));
         } else if (item.video) {
           row.querySelector(".open-button").textContent = findings.length ? "다듬기" : "열기";

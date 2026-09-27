@@ -63,11 +63,17 @@ export function createStudio({
     dialog, emit, jobSnapshot, readAppSettings, requireRuntimeTool, runProcess, state,
   });
   const {
+    resolveOutputFile, listOutputs, setOutputReview, setClearedFindings,
+    renameOutput, deleteOutput, resolveOutputTarget,
+  } = createOutputsService({
+    dialog, readAppSettings, shell, state,
+  });
+  const {
     generateReplacementVoice, runVoiceCandidates, runTextVoiceCandidates, selectTextVoice,
-    runFineTune,
+    listTextVoiceCandidates, selectTextVoiceFromHistory, runFineTune,
   } = createVoicesService({
     chosenRecord, emit, inspectMedia, readAppSettings,
-    registerSelected, requireRuntimeTool, runProcess, saveAppSettings,
+    registerSelected, requireRuntimeTool, resolveOutputTarget, runProcess, saveAppSettings,
     state,
   });
   const { validateEditVideo, runComposeEdit } = createEditingComposeService({
@@ -83,12 +89,6 @@ export function createStudio({
     emit, runComposeEdit, runMuteEdit, runPageVoicePatchBatch,
     runRegionReplaceEdit, runVoiceBatchEdit, runVoiceCandidates, state,
   });
-  const {
-    resolveOutputFile, listOutputs, setOutputReview, setClearedFindings,
-    renameOutput, deleteOutput,
-  } = createOutputsService({
-    dialog, readAppSettings, shell, state,
-  });
   const { registerIpc, cleanupReviewPreviews } = createIpcService({
     applyVoiceSettings, assertRuntime, chosenRecord, clearActiveJob,
     deleteOutput, dialog, emit, findVideoTimeline, finishRecording,
@@ -97,7 +97,8 @@ export function createStudio({
     readActiveJob, readAppSettings, readDemoProject, readDemoScenario, readDemoCameraPreview,
     registerSelected, renameOutput, requireRuntimeTool, resolveOutputFile,
     runFineTune, runTextVoiceCandidates, runVideoEdit, saveAppSettings, saveDemoScript,
-    selectTextVoice, setClearedFindings, setOutputReview, shell,
+    listTextVoiceCandidates, selectTextVoice, selectTextVoiceFromHistory,
+    setClearedFindings, setOutputReview, shell,
     startDemoRecord, startDemoRender, startDemoVoice, startRecording, state, writeActiveJob,
   });
   const { createWindow } = createWindowService({

@@ -63,8 +63,59 @@ def test_a_lecture_that_reads_correctly_costs_one_take_per_chunk(studio) -> None
     assert manifest["quality"]["summary"]["clean"] is True
     assert manifest["quality"]["summary"]["needsReview"] == []
     assert all(chunk["selectedAttempt"] == 1 for chunk in manifest["chunks"])
-    # Every chunk was still read back — checking is not what costs money.
-    assert len(lecture.asr.calls) == 3
+    # Each selected clip and the delivered normalized track are read separately.
+    assert len(lecture.asr.calls) == 6
+    assert manifest["quality"]["finalTrack"]["integrity"]["status"] == "ok"
+    assert manifest["quality"]["finalTrack"]["transcript"]["status"] == "ok"
+    assert manifest["quality"]["finalTrack"]["humanApproved"] is False
+
+
+def test_final_normalized_track_gets_its_own_content_warning(studio, monkeypatch) -> None:
+    lecture = studio(**ONE_SLIDE)
+    original_read = lecture.asr.generate
+
+    def changed_final_read(path, **kwargs):
+        if "final--" in str(path) and not kwargs.get("return_timestamps"):
+            from types import SimpleNamespace
+            return SimpleNamespace(text="오늘은 전혀 다른 말입니다")
+        return original_read(path, **kwargs)
+
+    monkeypatch.setattr(lecture.asr, "generate", changed_final_read)
+    manifest = lecture.run(start_page=1, end_page=1)
+
+    assert manifest["quality"]["summary"]["clean"] is True
+    final = manifest["quality"]["finalTrack"]
+    assert final["integrity"]["status"] == "ok"
+    assert final["transcript"]["status"] == "needs-review"
+    assert final["transcript"]["needsReview"] == [
+        {"chapter": "ch00", "slideId": "intro", "slideNumber": 1}
+    ]
+    assert "받아쓰기 불일치" in final["transcript"]["chunks"][0]["newConcerns"]
+    assert final["humanApproved"] is False
+
+
+def test_final_track_keeps_different_transcript_when_warning_label_is_unchanged(studio, monkeypatch) -> None:
+    lecture = studio(**ONE_SLIDE)
+    original_read = lecture.asr.generate
+
+    def changed_read(path, **kwargs):
+        if not kwargs.get("return_timestamps"):
+            from types import SimpleNamespace
+            return SimpleNamespace(text=(
+                "오늘은 기록을 봅니다" if "final--" in str(path)
+                else "오늘은 검색을 봅니다"
+            ))
+        return original_read(path, **kwargs)
+
+    monkeypatch.setattr(lecture.asr, "generate", changed_read)
+    manifest = lecture.run(start_page=1, end_page=1, quality_attempts=1)
+
+    selected = manifest["quality"]["chunks"][0]["selected"]
+    final = manifest["quality"]["finalTrack"]["transcript"]["chunks"][0]
+    assert selected["failures"] == final["failures"] == ["받아쓰기 불일치"]
+    assert selected["warnings"] == final["warnings"] == ["단어 발음 확인 필요"]
+    assert selected["recognizedText"] != final["recognizedText"]
+    assert final["newConcerns"] == ["선택 후보와 완성 음성의 받아쓰기 차이"]
 
 
 def test_an_exact_english_reading_does_not_retry_a_korean_term_inside_it(studio, monkeypatch) -> None:
@@ -79,7 +130,7 @@ def test_an_exact_english_reading_does_not_retry_a_korean_term_inside_it(studio,
         readings={text: text.replace("Bots", "bots")},
     )
     from types import SimpleNamespace
-    readings = iter(["영어 표현도 함께 보겠습니다.", literal.lower(), "실행 환경입니다."])
+    readings = iter(["영어 표현도 함께 보겠습니다.", literal.lower(), "실행 환경입니다."] * 2)
     languages = []
     def read_segment(path, **kwargs):
         if kwargs.get("return_timestamps"):
@@ -92,7 +143,7 @@ def test_an_exact_english_reading_does_not_retry_a_korean_term_inside_it(studio,
     assert [call["lang_code"] for call in lecture.tts.calls] == ["Korean", "English", "Korean"]
     assert "ref_text" not in lecture.tts.calls[1]
     assert lecture.tts.calls[0]["ref_text"] == lecture.tts.calls[2]["ref_text"]
-    assert languages == ["ko", "en", "ko"]
+    assert languages == ["ko", "en", "ko"] * 2
     assert manifest["chunks"][0]["voiceRouting"]["englishReferenceMode"] == "speaker-only"
     assert manifest["quality"]["summary"]["clean"]
     assert manifest["quality"]["chunks"][0]["selected"]["requiredPronunciations"] == [literal]
@@ -252,7 +303,7 @@ def test_a_reading_the_asr_only_doubted_once_is_settled_by_the_second_opinion(st
     manifest = lecture.run(start_page=1, end_page=1)
 
     assert len(lecture.tts.calls) == 1
-    assert [temperature for _, temperature in lecture.asr.calls] == [0.0, 0.2]
+    assert [temperature for _, temperature in lecture.asr.calls] == [0.0, 0.2, 0.0, 0.2]
     assert manifest["quality"]["summary"]["clean"] is True
     evidence = manifest["quality"]["chunks"][0]["selected"]["transcriptReview"]
     assert evidence["selectedReading"] == 2
@@ -288,6 +339,11 @@ def test_turning_the_reviewer_off_generates_once_and_claims_nothing(studio) -> N
     assert manifest["quality"]["enabled"] is False
     assert manifest["quality"]["model"] is None
     assert manifest["quality"]["summary"]["needsReview"] == []
+    assert manifest["quality"]["summary"]["clean"] is False
+    assert manifest["quality"]["summary"]["passedChunks"] == 0
+    assert manifest["quality"]["summary"]["notCheckedChunks"] == 3
+    assert all(item["qualityPassed"] is None and item["qualitySeverity"] == "not-checked"
+               for item in manifest["chunks"])
 
 
 # ─── the manifest a lecture is assembled from ────────────────────────────────
@@ -309,21 +365,16 @@ def test_the_timeline_is_continuous_and_matches_the_rendered_audio(studio) -> No
 
 
 def test_every_clip_record_carries_the_full_trim_contract(studio) -> None:
-    # A clip too quiet to trim used to return a partial record, raising KeyError
-    # here and writing that same partial record into the clip cache.
-    lecture = studio(**THREE_SLIDES, silent_for={"정리하겠습니다."})
+    lecture = studio(**THREE_SLIDES)
     manifest = lecture.run(start_page=1, end_page=3, quality_attempts=1)
 
     for chunk in manifest["chunks"]:
         for key in ("trimmedHeadMs", "trimmedTailMs", "shortenedSilenceCount", "shortenedSilenceMs"):
             assert isinstance(chunk[key], int), chunk["key"]
-    silent = next(c for c in manifest["quality"]["chunks"] if c["slideId"] == "outro")
-    assert "음성 신호 부족" in silent["selected"]["failures"]
-    assert silent["severity"] == "failed"
 
 
-def test_a_silent_clip_does_not_poison_the_cache_for_the_next_run(studio, tmp_path) -> None:
-    lecture = studio(**THREE_SLIDES, silent_for={"정리하겠습니다."})
+def test_a_damaged_cached_clip_is_regenerated_without_reusing_it(studio, tmp_path) -> None:
+    lecture = studio(**THREE_SLIDES)
     output = tmp_path / "cached"
     lecture.run(start_page=1, end_page=3, output_dir=output, use_cache=True, quality_attempts=1)
 
@@ -334,19 +385,72 @@ def test_a_silent_clip_does_not_poison_the_cache_for_the_next_run(studio, tmp_pa
             "trimmedHeadMs", "trimmedTailMs", "shortenedSilenceCount", "shortenedSilenceMs",
         }
 
-    # Reading those sidecars back must not raise.
+    damaged = sorted((output / "clips/native").glob("*.wav"))[1]
+    info = sf.info(damaged)
+    sf.write(damaged, np.zeros(info.frames, dtype=np.float32), info.samplerate)
     before = len(lecture.tts.calls)
     manifest = lecture.run(start_page=1, end_page=3, output_dir=output, use_cache=True, quality_attempts=1)
-    assert len(lecture.tts.calls) == before, "캐시가 있으면 다시 생성하지 않는다"
-    assert manifest["stats"]["cacheHits"] == 3
+    assert len(lecture.tts.calls) == before + 1
+    assert manifest["stats"]["cacheHits"] == 2
+    assert manifest["stats"]["invalidCacheEntries"] == 1
 
 
 def test_a_lecture_that_came_out_entirely_silent_says_so(studio) -> None:
-    """Normalizing a track with no signal made ffmpeg fail on `measured_I=-inf`,
-    which told the user nothing about what actually went wrong."""
+    """No all-silent selection reaches normalization or becomes a cache hit."""
     lecture = studio(**ONE_SLIDE, silent_for={"오늘은 래그를 봅니다."})
-    with pytest.raises(RuntimeError, match="정규화할 음성 신호가 없습니다"):
+    with pytest.raises(RuntimeError, match="음성 후보 1회가 모두 생성에 실패"):
         lecture.run(start_page=1, end_page=1, quality_attempts=1)
+    failure = json.loads((lecture.root / "out/quality-failure.json").read_text(encoding="utf-8"))
+    assert failure["status"] == "failed"
+    assert failure["generationFailures"][0]["code"] == "no-signal"
+    assert isinstance(failure["generationFailures"][0]["seed"], int)
+    assert len(failure["generationFailures"][0]["hash"]) == 64
+
+
+def test_failed_retry_cannot_pass_an_older_success_manifest_to_export(studio) -> None:
+    from local_tts_engine.course.run_state import require_current_course_manifest
+
+    lecture = studio(**ONE_SLIDE)
+    output = lecture.root / "same-output"
+    first = lecture.run(start_page=1, end_page=1, output_dir=output, quality_attempts=1)
+    require_current_course_manifest(output, first)
+    lecture.tts.silent_for.add("오늘은 래그를 봅니다.")
+
+    with pytest.raises(RuntimeError, match="모두 생성에 실패"):
+        lecture.run(start_page=1, end_page=1, output_dir=output, quality_attempts=1)
+
+    old_manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert old_manifest["runId"] == first["runId"]
+    assert json.loads((output / "run-state.json").read_text(encoding="utf-8"))["status"] == "failed"
+    with pytest.raises(RuntimeError, match="완료되지 않았거나"):
+        require_current_course_manifest(output, old_manifest)
+
+
+def test_without_content_review_records_actual_audio_retry_budget(studio, monkeypatch) -> None:
+    from local_tts_engine import course_pilot
+    from local_tts_engine.course.candidates import CandidateAudioError
+
+    lecture = studio(**ONE_SLIDE)
+    real_generate = course_pilot.generate_candidate_audio
+    attempts = 0
+
+    def first_take_empty(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise CandidateAudioError("empty-audio", "첫 후보가 비었습니다.")
+        return real_generate(*args, **kwargs)
+
+    monkeypatch.setattr(course_pilot, "generate_candidate_audio", first_take_empty)
+    manifest = lecture.run(start_page=1, end_page=1, automatic_quality=False, quality_attempts=4)
+
+    assert attempts == 2
+    assert manifest["chunks"][0]["selectedAttempt"] == 2
+    assert manifest["quality"]["enabled"] is False
+    assert manifest["quality"]["maxAttempts"] == 4
+    assert manifest["quality"]["chunks"][0]["generationFailures"][0]["attempt"] == 1
+    assert manifest["quality"]["summary"]["retriedChunks"] == 1
+    assert lecture.asr.calls == []
 
 
 def test_the_manifest_records_which_reader_judged_the_run(studio) -> None:

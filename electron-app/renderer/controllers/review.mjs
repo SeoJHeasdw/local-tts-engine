@@ -16,6 +16,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   const reviewPlayer = $('#review-player');
   let reviewRangeEdited=false, reviewWaveWindow={start:0,end:10}, reviewWaveRequest=0;
   let regionPreviewRequest=0, regionPreviewBusy=false;
+  let alignedWordButtons = [], activeWordButton = null;
 
   // 다시 읽히기만으로 풀리지 않는 자리를 위해 사람이 적어 주는 발음문이다.
   // 자막·대본은 그대로 두고 읽는 말만 바꾼다.
@@ -172,7 +173,11 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   function showFindingDiff(finding) {
     const panel = $('#polish-diff');
     const expected = String(finding?.expectedText || '');
-    const recognized = String(finding?.recognizedText || '');
+    const candidateReading = String(finding?.recognizedText || '');
+    const finalReading = String(finding?.finalTrackEvidence?.recognizedText || '');
+    const recognized = finalReading
+      ? `완성 음성: ${finalReading}${candidateReading && candidateReading !== finalReading ? `\n선택 후보: ${candidateReading}` : ''}`
+      : candidateReading;
     if (!expected && !recognized) { panel.classList.add('hidden'); return; }
     panel.classList.remove('hidden');
     $('#polish-expected').textContent = expected || '(원문 없음)';
@@ -731,6 +736,23 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     element.title = mediaState.voiceVideo ? `${name} · 더블클릭해서 이름 바꾸기` : '';
   }
 
+  function renderRecipe(recipe) {
+    const host = $('#review-recipe');
+    host.classList.toggle('hidden', !recipe);
+    const facts = [];
+    if (recipe?.model) facts.push(['모델', recipe.model]);
+    if (recipe?.modelRevision) facts.push(['판본', recipe.modelRevision.slice(0, 12)]);
+    if (recipe?.adapter) facts.push(['어댑터', `${recipe.adapter}${Number.isFinite(recipe.adapterScale) ? ` · 강도 ${recipe.adapterScale.toFixed(2)}` : ''}`]);
+    if (recipe?.qualityModel) facts.push(['자동 검수', `${recipe.qualityModel}${recipe.maxAttempts > 0 ? ` · 최대 ${recipe.maxAttempts}후보` : ''}`]);
+    if (recipe?.aligner) facts.push(['단어 정렬', recipe.aligner]);
+    host.classList.toggle('hidden', facts.length === 0);
+    $('#review-recipe-facts').replaceChildren(...facts.flatMap(([label, value]) => {
+      const term = document.createElement('dt'), description = document.createElement('dd');
+      term.textContent = label; description.textContent = value;
+      return [term, description];
+    }));
+  }
+
   function setReviewVideo(video, target = null) {
     if (!video || reviewBusy) return;
     $$('audio,video').forEach(media => media.pause());
@@ -757,6 +779,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     pendingFixes.clear();
     renderPendingFixes();
     $('#polish-diff').classList.add('hidden');
+    renderRecipe(video.recipe);
     paintReviewFileName(video.name);
     reviewPlayer.src = video.videoUrl;
     reviewFindings = video.voiceFindings || [];
@@ -784,6 +807,36 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   const railCells = new Map();
   let railCurrent = null;
   let positionPage = null;
+
+  function renderAlignedWords(page) {
+    activeWordButton = null;
+    alignedWordButtons = [];
+    const words = (page?.words || []).filter((word) => String(word.text || '').trim()
+      && word.startMs != null && word.endMs != null
+      && Number.isFinite(Number(word.startMs)) && Number.isFinite(Number(word.endMs))
+      && Number(word.startMs) >= page.startMs && Number(word.startMs) < page.endMs
+      && Number(word.endMs) > Number(word.startMs));
+    for (const word of words) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = word.text;
+      button.title = `${formatDuration(word.startMs)}부터 듣기`;
+      button.setAttribute('aria-label', `${word.text} · ${formatDuration(word.startMs)}부터 듣기`);
+      button.addEventListener('click', () => seekReview(Number(word.startMs) / 1000));
+      alignedWordButtons.push({ button, startMs: Number(word.startMs), endMs: Number(word.endMs) });
+    }
+    $('#review-spoken-words').replaceChildren(...alignedWordButtons.map(({ button }) => button));
+    $('#review-spoken-note').textContent = !page ? '페이지 타임라인이 없습니다.'
+      : alignedWordButtons.length ? '표시된 말은 정렬된 발음문입니다. 위 대본 원문과 다를 수 있습니다.'
+        : '이 페이지에는 확인된 단어별 시각이 없습니다.';
+  }
+
+  function markAlignedWord(ms) {
+    const next = alignedWordButtons.find(({ startMs, endMs }) => ms >= startMs && ms < endMs)?.button || null;
+    if (next === activeWordButton) return;
+    activeWordButton?.classList.remove('current');
+    next?.classList.add('current');
+    activeWordButton = next;
+  }
 
   function renderPageRail(video) {
     const pages = video?.pages || [];
@@ -879,10 +932,12 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     if (page?.number !== positionPage) {
       positionPage = page?.number;
       $('#review-script').textContent = page?.text || '페이지 타임라인이 없는 영상입니다.';
+      renderAlignedWords(page);
       markRailCurrent(page);
       // 입력 중인 숫자를 빼앗지 않는다.
       if (page && document.activeElement !== $('#review-page-jump')) $('#review-page-jump').value = String(page.number);
     }
+    markAlignedWord(reviewPlayer.currentTime * 1000);
     if(reviewMode!=='regenerate')drawReviewWaveSelection();
   }
   function selectReviewPage(page, reason = '') {

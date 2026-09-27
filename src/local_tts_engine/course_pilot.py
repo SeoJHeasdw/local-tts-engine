@@ -51,6 +51,14 @@ from .course.audio import (
     milliseconds_to_samples,
     trim_and_fade_audio,
 )
+from .course.candidates import (
+    CandidateAudioError,
+    CandidateAttemptsExhausted,
+    validate_candidate_audio,
+)
+from .course.clip_cache import read_cached_clip, write_cached_clip
+from .course.final_track import inspect_final_track, review_final_track
+from .course.run_state import begin_course_run, course_run_lock, fail_course_run, finish_course_run
 from .course.script import (
     chapter_lesson_files,
     chapter_slide_order,
@@ -272,12 +280,13 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
         results = list(voice_router.generate(generate, call_arguments, language) if routing else generate(**call_arguments))
         generation_ms += round((time.perf_counter() - started) * 1000)
         if not results:
-            raise RuntimeError("음성 후보에서 오디오가 생성되지 않았습니다.")
+            raise CandidateAudioError("empty-result", "음성 후보에서 오디오가 생성되지 않았습니다.")
         rate = rate or int(results[0].sample_rate)
         if any(int(result.sample_rate) != rate for result in results):
-            raise RuntimeError("음성 후보 조각의 샘플레이트가 일치하지 않습니다.")
-        raw = np.concatenate([np.asarray(result.audio) for result in results])
+            raise CandidateAudioError("sample-rate-mismatch", "음성 후보 조각의 샘플레이트가 일치하지 않습니다.")
+        raw = validate_candidate_audio(np.concatenate([np.asarray(result.audio) for result in results]), rate)
         audio, cleanup = trim_and_fade_audio(raw, rate)
+        audio = validate_candidate_audio(audio, rate)
         if pieces:
             gap_ms = LANGUAGE_GAP_MS if routing and previous_language != language else STEP_GAP_MS
             gap = np.zeros(round(gap_ms * rate / 1000), dtype=audio.dtype)
@@ -304,6 +313,7 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
     if routing:
         match_english_level(combined, rate, part_records)
         cleanup["voiceRouting"] = {**routing, "sampleRate": rate, "segments": part_records}
+    validate_candidate_audio(combined, rate)
     return {"audio": combined, "sampleRate": rate, "cleanup": cleanup,
             "generationMs": generation_ms, "peakMemoryGb": peak}
 
@@ -324,13 +334,14 @@ def resolve_chunk_take(
     actually wrong, which is what makes it affordable to check the whole lecture
     rather than only the lines with risky words in them.
 
-    ``review`` of ``None`` disables reading back entirely, leaving exactly one
-    take per chunk.
+    ``review`` of ``None`` disables content reading. A broken waveform can
+    still consume another seed from the same attempt budget.
     """
     if attempt_limit < 1:
         raise ValueError("최소 한 번은 생성해야 합니다.")
     candidates: list[dict[str, Any]] = []
     evaluations: list[dict[str, Any]] = []
+    generation_failures: list[dict[str, Any]] = []
     recovery_parts = omission_recovery_parts(chunk.tts_text, initial_omissions or []) if synthesize_recovery else []
     for attempt in range(1, attempt_limit + 1):
         next_parts = omission_recovery_parts(chunk.tts_text, repeated_omissions(evaluations)) if synthesize_recovery else []
@@ -338,7 +349,15 @@ def resolve_chunk_take(
         # because a recovered take has a different pronunciation warning.
         parts = next_parts or recovery_parts
         recovery_parts = parts
-        candidate = synthesize_recovery(chunk, attempt, parts) if parts else synthesize(chunk, attempt)
+        try:
+            candidate = synthesize_recovery(chunk, attempt, parts) if parts else synthesize(chunk, attempt)
+        except CandidateAudioError as error:
+            generation_failures.append({
+                "attempt": attempt, "code": error.code, "reason": str(error),
+                **({"seed": error.seed} if error.seed is not None else {}),
+                **({"hash": error.cache_hash} if error.cache_hash is not None else {}),
+            })
+            continue
         candidates.append(candidate)
         if review is None:
             break
@@ -348,10 +367,13 @@ def resolve_chunk_take(
         if evaluations[-1]["passed"]:
             break
 
+    if not candidates:
+        raise CandidateAttemptsExhausted(chunk.key, generation_failures)
+
     if review is None:
-        best: dict[str, Any] = {"passed": True, "attempt": 1, "disabled": True}
         selected = candidates[0]
-        severity = "ok"
+        best: dict[str, Any] = {"passed": None, "attempt": selected["attempt"], "disabled": True}
+        severity = "not-checked"
     else:
         best = choose_best_candidate(evaluations)
         selected = next(
@@ -381,13 +403,14 @@ def resolve_chunk_take(
                 )
             ),
             "candidates": evaluations,
+            "generationFailures": generation_failures,
             "selected": best,
             "severity": severity,
         },
     }
 
 
-def synthesize_excerpt(
+def _synthesize_excerpt(
     source_project: Path,
     output_dir: Path,
     reference_path: Path,
@@ -405,6 +428,7 @@ def synthesize_excerpt(
     automatic_quality: bool = True,
     quality_attempts: int = MAX_AUTOMATIC_ATTEMPTS,
     recovery_findings_path: Path | None = None,
+    run_id: str | None = None,
 ) -> None:
     """강의 대본 일부를 TTS로 합성하고 정렬된 manifest.json을 생성한다.
 
@@ -547,11 +571,12 @@ def synthesize_excerpt(
     selected_chunks: list[dict[str, Any]] = []
     generation_ms = 0
     cache_hits = 0
+    invalid_cache_entries = 0
     peak_memory_gb = 0.0
 
     def synthesize_candidate(chunk: CourseChunk, attempt: int, parts: list[str] | None = None) -> dict[str, Any]:
         """Generate or load one deterministic candidate for a course chunk."""
-        nonlocal generation_ms, cache_hits, peak_memory_gb
+        nonlocal generation_ms, cache_hits, invalid_cache_entries, peak_memory_gb
         seed_basis = stable_digest(
             {
                 "chunkKey": chunk.key,
@@ -586,21 +611,13 @@ def synthesize_excerpt(
             }
         )
         clip_path = clips_dir / f"{chunk.key}--take-{attempt}--{cache_hash[:12]}.wav"
-        clip_meta_path = clip_path.with_suffix(".json")
-        if use_cache and clip_path.is_file():
-            info = sf.info(clip_path)
-            rate = int(info.samplerate)
-            frames = int(info.frames)
-            trim_info = {
-                **UNTRIMMED_AUDIO_STATS,
-                **(
-                    json.loads(clip_meta_path.read_text(encoding="utf-8"))
-                    if clip_meta_path.is_file()
-                    else {}
-                ),
-            }
+        cached = read_cached_clip(clip_path) if use_cache else None
+        if cached is not None:
+            rate, frames, trim_info = cached
             cache_hits += 1
         else:
+            if use_cache and clip_path.is_file():
+                invalid_cache_entries += 1
             mx.random.seed(candidate_seed)
             generation_args = {
                 "text": chunk.tts_text,
@@ -613,11 +630,15 @@ def synthesize_excerpt(
                 generation_args["ref_text"] = reference_text
             if parts:
                 print(f"[구절 누락 복구] {chunk.key}: 후보 {attempt}, 원문 그대로 {len(parts)}조각 합성", flush=True)
-            generated = generate_candidate_audio(model.generate, generation_args, parts, voice_router=voice_router)
+            try:
+                generated = generate_candidate_audio(model.generate, generation_args, parts, voice_router=voice_router)
+            except CandidateAudioError as error:
+                error.seed = candidate_seed
+                error.cache_hash = cache_hash
+                raise
             generation_ms += generated["generationMs"]
             rate, audio, trim_info = generated["sampleRate"], generated["audio"], generated["cleanup"]
-            sf.write(clip_path, audio, rate, subtype="PCM_24")
-            write_json(clip_meta_path, trim_info)
+            write_cached_clip(clip_path, audio, rate, trim_info)
             frames = len(audio)
             peak_memory_gb = max(peak_memory_gb, generated["peakMemoryGb"])
         return {
@@ -712,14 +733,22 @@ def synthesize_excerpt(
         return evaluation
 
     for index, chunk in enumerate(chunks):
-        take = resolve_chunk_take(
-            chunk,
-            attempt_limit=quality_attempts if automatic_quality else 1,
-            synthesize=synthesize_candidate,
-            review=evaluate if automatic_quality else None,
-            synthesize_recovery=synthesize_candidate if automatic_quality else None,
-            initial_omissions=saved_omissions(chunk.tts_text, recovery_findings, pronunciation) if automatic_quality else [],
-        )
+        try:
+            take = resolve_chunk_take(
+                chunk,
+                attempt_limit=quality_attempts,
+                synthesize=synthesize_candidate,
+                review=evaluate if automatic_quality else None,
+                synthesize_recovery=synthesize_candidate if automatic_quality else None,
+                initial_omissions=saved_omissions(chunk.tts_text, recovery_findings, pronunciation) if automatic_quality else [],
+            )
+        except CandidateAttemptsExhausted as error:
+            write_json(output_dir / "quality-failure.json", {
+                "status": "failed", "chunkKey": error.chunk_key,
+                "attemptLimit": quality_attempts, "generationFailures": error.failures,
+                "completedChunks": quality_records,
+            })
+            raise
         candidates = take["candidates"]
         selected = take["selected"]
         severity = take["severity"]
@@ -916,6 +945,38 @@ def synthesize_excerpt(
     preview = output_dir / f"{artifact_name}.m4a"
     create_preview(final_track, preview)
     final_probe = probe_audio(final_track)
+    final_integrity = inspect_final_track(native_track, final_track, selected_chunks)
+    if final_integrity["status"] != "ok":
+        write_json(output_dir / "final-track-audit.json", final_integrity)
+        raise RuntimeError("완성 음성 WAV의 조립·정규화 무결성 검사에 실패했습니다. final-track-audit.json을 확인해 주세요.")
+
+    final_asr_load_ms = 0
+    final_asr_review_ms = 0
+    final_transcript: dict[str, Any] = {"status": "not-run", "reason": "automatic-quality-disabled"}
+    if automatic_quality:
+        from mlx_audio.stt.utils import load_model as load_stt_model
+
+        started = time.perf_counter()
+        assert quality_model_path is not None
+        quality_model = load_stt_model(quality_model_path)
+        final_asr_load_ms = round((time.perf_counter() - started) * 1000)
+        try:
+            started = time.perf_counter()
+            final_transcript = review_final_track(
+                final_track, selected_chunks, native_rate, pronunciation, quality_records, transcribe
+            )
+            final_asr_review_ms = round((time.perf_counter() - started) * 1000)
+        finally:
+            del quality_model
+            quality_model = None
+            gc.collect()
+            mx.clear_cache()
+    final_track_review = {
+        "status": final_transcript["status"] if final_integrity["status"] == "ok" else "failed",
+        "humanApproved": False,
+        "integrity": final_integrity,
+        "transcript": final_transcript,
+    }
 
     # Convert chunk-local word alignment to step-level absolute timing. The
     # screen changes shortly before the next step's first spoken word.
@@ -1000,8 +1061,8 @@ def synthesize_excerpt(
             "shortenedSilenceCount": item["shortenedSilenceCount"],
             "shortenedSilenceMs": item["shortenedSilenceMs"],
             "selectedAttempt": quality_by_chunk[item["key"]]["selected"].get("attempt", 1),
-            "qualityPassed": quality_by_chunk[item["key"]]["selected"].get("passed", True),
-            "qualitySeverity": quality_by_chunk[item["key"]].get("severity", "ok"),
+            "qualityPassed": quality_by_chunk[item["key"]]["selected"].get("passed"),
+            "qualitySeverity": quality_by_chunk[item["key"]].get("severity", "not-checked"),
             **({"voiceRouting": item["voiceRouting"]} if item.get("voiceRouting") else {}),
         }
         for item in selected_chunks
@@ -1070,7 +1131,7 @@ def synthesize_excerpt(
             "model": ASR_REPOSITORY if automatic_quality else None,
             "revision": quality_revision,
             "license": ASR_LICENSE if automatic_quality else None,
-            "maxAttempts": quality_attempts if automatic_quality else 1,
+            "maxAttempts": quality_attempts,
             "secondOpinion": automatic_quality,
             "transcriptEvidence": "all-performed-readings-v1" if automatic_quality else None,
             "repetitionGate": {"enabled": automatic_quality, "policy": REPETITION_POLICY},
@@ -1094,6 +1155,7 @@ def synthesize_excerpt(
             },
             "summary": quality_result,
             "chunks": quality_records,
+            "finalTrack": final_track_review,
         },
         "seed": seed,
         "settings": {"language": spec.language, **settings},
@@ -1142,14 +1204,18 @@ def synthesize_excerpt(
             "steps": len(step_records),
             "clips": len(selected_chunks),
             "generatedCandidates": sum(len(item["candidateOptions"]) for item in selected_chunks),
+            "failedCandidateAttempts": sum(len(record["generationFailures"]) for record in quality_records),
             "characters": sum(len(item["source_text"]) for item in step_records),
             "cacheHits": cache_hits,
+            "invalidCacheEntries": invalid_cache_entries,
         },
         "performance": {
             "modelLoadMs": load_ms,
             "generationMs": generation_ms,
             "qualityLoadMs": quality_load_ms,
             "qualityEvaluationMs": quality_evaluation_ms,
+            "finalAsrLoadMs": final_asr_load_ms,
+            "finalAsrReviewMs": final_asr_review_ms,
             "alignmentLoadMs": alignment_load_ms,
             "alignmentMs": alignment_ms,
             "peakMetalMemoryGb": round(peak_memory_gb, 3),
@@ -1158,6 +1224,7 @@ def synthesize_excerpt(
         },
         "normalization": normalization,
         "audioPath": str(final_track.resolve()),
+        **({"runId": run_id} if run_id else {}),
         "previewPath": str(preview.resolve()),
         **final_probe,
         "chunks": chunk_manifest,
@@ -1172,7 +1239,19 @@ def synthesize_excerpt(
             "mlx": version("mlx"),
         },
     }
-    write_json(output_dir / "manifest.json", metadata)
+    # Publish the new manifest in one rename. If this attempt fails before the
+    # final commit, the older manifest bytes remain intact but its runId no
+    # longer matches run-state.json and consumers reject it.
+    staged_manifest = output_dir / f".manifest-{run_id or 'staged'}.json"
+    try:
+        write_json(staged_manifest, metadata)
+        staged_manifest.replace(output_dir / "manifest.json")
+    finally:
+        staged_manifest.unlink(missing_ok=True)
+    # A later successful CLI retry supersedes a prior failure in the same
+    # output directory. Keep the current manifest as the single run result.
+    (output_dir / "quality-failure.json").unlink(missing_ok=True)
+    (output_dir / "final-track-audit.json").unlink(missing_ok=True)
     if automatic_quality:
         review_pages = ", ".join(
             f"{page['slideNumber']}페이지" for page in quality_result["needsReview"]
@@ -1196,6 +1275,50 @@ def synthesize_excerpt(
             indent=2,
         )
     )
+
+
+def synthesize_excerpt(
+    source_project: Path,
+    output_dir: Path,
+    reference_path: Path,
+    reference_text_path: Path,
+    target_seconds: float,
+    start_chapter: str,
+    start_slide: str | None,
+    seed: int,
+    adapter_path: Path | None = None,
+    adapter_scale: float = 1.0,
+    start_page: int | None = None,
+    end_page: int | None = None,
+    model_key: str = "qwen3-tts",
+    use_cache: bool = True,
+    automatic_quality: bool = True,
+    quality_attempts: int = MAX_AUTOMATIC_ATTEMPTS,
+    recovery_findings_path: Path | None = None,
+) -> None:
+    """Track the current attempt before any reusable output can be changed."""
+    with course_run_lock(output_dir):
+        run_id = begin_course_run(output_dir)
+        try:
+            _synthesize_excerpt(
+                source_project=source_project, output_dir=output_dir,
+                reference_path=reference_path, reference_text_path=reference_text_path,
+                target_seconds=target_seconds, start_chapter=start_chapter,
+                start_slide=start_slide, seed=seed, adapter_path=adapter_path,
+                adapter_scale=adapter_scale, start_page=start_page, end_page=end_page,
+                model_key=model_key, use_cache=use_cache,
+                automatic_quality=automatic_quality, quality_attempts=quality_attempts,
+                recovery_findings_path=recovery_findings_path, run_id=run_id,
+            )
+            finish_course_run(output_dir, run_id)
+        except BaseException as error:
+            try:
+                fail_course_run(output_dir, run_id, error)
+            except OSError:
+                # Preserve the original generation error. The remaining running
+                # marker already prevents an older manifest from being consumed.
+                pass
+            raise
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1229,7 +1352,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-cache", action="store_true",
                         help="기존 TTS 클립과 정렬 결과를 읽지 않고 모두 새로 생성")
     parser.add_argument("--no-auto-quality", action="store_true",
-                        help="독립 Whisper 받아쓰기와 재시도를 끄고 시드 하나로만 생성")
+                        help="독립 Whisper 받아쓰기와 내용 재시도를 끔 (빈 음성·무음 등 후보 결함은 다음 시드로 재시도)")
     parser.add_argument("--quality-attempts", type=int, default=MAX_AUTOMATIC_ATTEMPTS,
                         help=f"검수를 통과하지 못한 청크의 최대 시도 수 (1~5, 기본 {MAX_AUTOMATIC_ATTEMPTS})")
     parser.add_argument("--recovery-findings", type=Path,

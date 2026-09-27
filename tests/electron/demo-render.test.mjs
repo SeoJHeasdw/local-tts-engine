@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { buildEditPlan, zoomAt } from '../../electron-app/shared/demo-plan.mjs';
 import {
-  demoCaptionCues, demoRenderArgs, renderAppDemo, renderChecks, timeWarpExpression, videoFilterChain, zoomFilter,
+  demoCaptionCues, demoRenderArgs, loadDemoRenderInput, renderAppDemo, renderChecks,
+  timeWarpExpression, videoFilterChain, zoomFilter,
 } from '../../electron-app/main/editing/demo-render.mjs';
 import { buildReviewPage, collectReview } from '../../electron-app/main/editing/demo-review.mjs';
 import { captionBand, captionConcatList } from '../../electron-app/main/editing/demo-captions.mjs';
@@ -225,12 +227,89 @@ async function fixtureRecording(t, { scenes, narration }) {
     const wav = path.join(sceneDir, 'candidate-01.wav');
     await exec('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=440:duration=${(voice.durationMs / 1000).toFixed(3)}`,
       '-ar', '48000', '-ac', '1', wav]);
+    await fs.writeFile(wav.replace(/\.wav$/, '.json'), JSON.stringify({
+      durationMs: voice.durationMs, finalTrack: { status: 'ok' },
+      audioSha256: crypto.createHash('sha256').update(await fs.readFile(wav)).digest('hex'),
+    }));
     script.scenes.push({ id: scene.id, text: voice.text, status: 'approved',
       voice: { candidates: [path.relative(demoDir, wav)], selected: path.relative(demoDir, wav) } });
   }
   await fs.writeFile(path.join(demoDir, 'script.json'), JSON.stringify(script, null, 2));
   return { outDir, demoDir };
 }
+
+test('렌더 직전에 선택 후보의 현재 WAV가 검사 기록과 다르면 중단한다', async t => {
+  const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'demo-voice-integrity-'));
+  t.after(() => fs.rm(outDir, { recursive: true, force: true }));
+  const demoDir = path.join(outDir, 'demo');
+  const sceneDir = path.join(demoDir, 'narration', 'ask');
+  await fs.mkdir(sceneDir, { recursive: true });
+  await fs.writeFile(path.join(demoDir, 'raw.mkv'), 'not read when candidate bytes differ');
+  await fs.writeFile(path.join(demoDir, 'scenes.json'), JSON.stringify({
+    schemaVersion: 1, scenario: 'integrity', fps: 25,
+    viewport: { width: 640, height: 360, scale: 1 },
+    scenes: [{ id: 'ask', startMs: 0, endMs: 2000, steps: [] }],
+  }));
+  const relative = 'narration/ask/candidate-01.wav';
+  await fs.writeFile(path.join(demoDir, 'script.json'), JSON.stringify({
+    schemaVersion: 1, scenes: [{ id: 'ask', text: '검사한 말', status: 'approved',
+      voice: { candidates: [relative], selected: relative } }],
+  }));
+  const wav = path.join(demoDir, relative);
+  const checked = Buffer.alloc(80, 7);
+  await fs.writeFile(wav, checked);
+  await fs.writeFile(wav.replace(/\.wav$/, '.json'), JSON.stringify({
+    durationMs: 1000, finalTrack: { status: 'ok' },
+    audioSha256: crypto.createHash('sha256').update(checked).digest('hex'),
+  }));
+  await fs.appendFile(wav, 'changed after review');
+
+  await assert.rejects(loadDemoRenderInput({ outDir }), /생성 당시 파일·검수 기록과 다릅니다/);
+});
+
+test('옛 후보에 파일 해시가 없으면 렌더 입력에 검사 불가를 남긴다', async t => {
+  const { outDir, demoDir } = await fixtureRecording(t, {
+    scenes: [{ id: 'ask', startMs: 0, endMs: 2000, steps: [] }],
+    narration: { ask: { durationMs: 1000, text: '옛 후보' } },
+  });
+  await fs.writeFile(path.join(demoDir, 'narration', 'ask', 'candidate-01.json'),
+    JSON.stringify({ durationMs: 1000 }));
+
+  const input = await loadDemoRenderInput({ outDir });
+
+  assert.deepEqual(input.unverified, ['ask']);
+  assert.ok(input.plan.scenes[0].narration);
+});
+
+test('목소리를 만든 뒤 확정 대본이 바뀌면 렌더 전에 중단한다', async t => {
+  const { outDir, demoDir } = await fixtureRecording(t, {
+    scenes: [{ id: 'ask', startMs: 0, endMs: 2000, steps: [] }],
+    narration: { ask: { durationMs: 1000, text: '옛 대본' } },
+  });
+  const scriptFile = path.join(demoDir, 'script.json');
+  const script = JSON.parse(await fs.readFile(scriptFile, 'utf8'));
+  script.scenes[0].voice.text = script.scenes[0].text;
+  script.scenes[0].text = '새 대본';
+  await fs.writeFile(scriptFile, JSON.stringify(script));
+
+  await assert.rejects(loadDemoRenderInput({ outDir }), /대본이 목소리 생성 뒤 바뀌었습니다/);
+});
+
+test('선택 후보의 검사 기록이 다른 대본을 가리키면 렌더하지 않는다', async t => {
+  const { outDir, demoDir } = await fixtureRecording(t, {
+    scenes: [{ id: 'ask', startMs: 0, endMs: 2000, steps: [] }],
+    narration: { ask: { durationMs: 1000, text: '현재 대본' } },
+  });
+  const scriptFile = path.join(demoDir, 'script.json');
+  const script = JSON.parse(await fs.readFile(scriptFile, 'utf8'));
+  script.scenes[0].voice.text = script.scenes[0].text;
+  await fs.writeFile(scriptFile, JSON.stringify(script));
+  const metadataFile = path.join(demoDir, 'narration/ask/candidate-01.json');
+  const metadata = JSON.parse(await fs.readFile(metadataFile, 'utf8'));
+  await fs.writeFile(metadataFile, JSON.stringify({ ...metadata, schemaVersion: 2, sourceText: '옛 대본' }));
+
+  await assert.rejects(loadDemoRenderInput({ outDir }), /고른 음성이 현재 대본을 읽지 않습니다/);
+});
 
 test('합성 촬영을 렌더해 계획 길이와 음성 자리를 확인한다', { timeout: 180_000 }, async t => {
   const { outDir, demoDir } = await fixtureRecording(t, {

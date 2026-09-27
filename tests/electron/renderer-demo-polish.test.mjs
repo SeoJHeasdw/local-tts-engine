@@ -64,6 +64,39 @@ test('처음에는 빈 작업면이고 결과를 열면 1440p 완성본과 할 �
   assert.equal($('#demo-voice-all').textContent, '후보 만들기 · 1장면');
   assert.equal($('#demo-voice-all').classList.contains('primary-small'), true, '차례인 단추만 밝다');
   assert.equal($('#demo-render-start').classList.contains('primary-small'), false);
+  assert.equal($('#demo-render-start').disabled, true, '예전 대본을 읽는 선택 음성으로 굽지 않는다');
+  assert.equal($('#demo-preview-render').disabled, true);
+});
+
+test('고른 음성의 파일 검사가 어긋나면 자동 통과를 숨기고 굽기를 막는다', () => {
+  const { $, polish } = controller();
+  const damaged = project();
+  damaged.scenes[1].voicedText = damaged.scenes[1].text;
+  damaged.scenes[0].selectedIntegrity = 'changed';
+  damaged.scenes[0].candidates[0].integrity = 'changed';
+  damaged.scenes[0].candidates[0].selectable = false;
+  damaged.scenes[0].candidates[0].qualityReview = null;
+
+  polish.load(damaged);
+
+  assert.equal($('#demo-render-start').disabled, true);
+  assert.equal($('#demo-preview-render').disabled, true);
+  assert.match($('#demo-command-note').textContent, /파일 확인이 필요한 장면 awakening/);
+  assert.match($('#demo-scene-panel').innerHTML, /생성 당시 기록과 다릅니다/);
+  assert.match($('#demo-scene-panel').innerHTML, /candidate-01\.wav" checked disabled/);
+});
+
+test('후보 파일이 다른 대본의 발화면 파일 해시가 맞아도 선택과 굽기를 막는다', () => {
+  const { $, polish } = controller();
+  const mismatch = project();
+  mismatch.scenes[1].voicedText = mismatch.scenes[1].text;
+  mismatch.scenes[0].selectedIntegrity = 'text-changed';
+  mismatch.scenes[0].candidates[0].integrity = 'text-changed';
+  mismatch.scenes[0].candidates[0].selectable = false;
+  polish.load(mismatch);
+  assert.equal($('#demo-render-start').disabled, true);
+  assert.match($('#demo-scene-panel').innerHTML, /고른 음성이 현재 대본을 읽지 않습니다/);
+  assert.match($('#demo-scene-panel').innerHTML, /candidate-01\.wav" checked disabled/);
 });
 
 test('후보 만들기는 할 일이 남은 장면만, 굽기는 고른 화질로 부르고 그 전에 대본을 저장한다', async () => {
@@ -75,6 +108,9 @@ test('후보 만들기는 할 일이 남은 장면만, 굽기는 고른 화질�
   assert.equal(calls[0][0], 'save');
   assert.deepEqual(calls[1], ['voice', { outDir: '/out/rice-first-run', candidates: 4, scenes: ['loop'] }]);
 
+  const ready = project();
+  ready.scenes[1].voicedText = ready.scenes[1].text;
+  polish.load(ready);
   $('#demo-quality').value = 'ultra';
   await $('#demo-render-start').fire('click');
   await new Promise(resolve => setImmediate(resolve));

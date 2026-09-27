@@ -104,6 +104,32 @@ def test_product_name_in_caps_is_read_as_a_word_not_spelled_out():
         assert apply_pronunciation(untouched, dictionary) == untouched
 
 
+def test_unresolved_terms_follow_the_source_of_case_sensitive_literal_replacements():
+    dictionary = production_pronunciation()
+
+    approved = pronunciation_preflight('RICE에게 설명합니다.', dictionary)
+    assert approved['ttsText'] == 'Rice에게 설명합니다.'
+    assert approved['requiredPronunciations'] == ['Rice']
+    assert approved['unresolvedAscii'] == []
+
+    # The same TTS spelling in the original source was not approved by the
+    # case-sensitive RICE rule; neither may a nearby approved span hide it.
+    original = pronunciation_preflight('Rice에게 설명합니다.', dictionary)
+    assert original['unresolvedAscii'] == ['Rice']
+    mixed = pronunciation_preflight('RICE와 Rice를 비교합니다.', dictionary)
+    assert mixed['ttsText'] == 'Rice와 Rice를 비교합니다.'
+    assert mixed['unresolvedAscii'] == ['Rice']
+
+    # The literal masking must not hide unknown identifiers or number findings.
+    unknown = pronunciation_preflight('RICE-1과 B-9999를 확인합니다.', dictionary)
+    assert unknown['unresolvedAscii'] == ['B-9999', 'RICE-1']
+    assert unknown['unresolvedNumbers'] == ['1', '9999']
+    counted = pronunciation_preflight('RICE와 1 개, 12 KB를 확인합니다.', dictionary)
+    assert counted['ttsText'] == 'Rice와 한 개, 십이 킬로바이트를 확인합니다.'
+    assert counted['unresolvedAscii'] == []
+    assert counted['unresolvedNumbers'] == []
+
+
 def test_declared_readings_separate_an_asr_spelling_from_a_misread_vowel(tmp_path):
     """Anthropic이 '안쓰로픽'으로 읽혀도 통과하던 구멍을 막는다.
 

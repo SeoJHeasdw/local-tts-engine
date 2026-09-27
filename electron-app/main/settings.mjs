@@ -40,7 +40,7 @@ export function createSettingsService({
       modelId,
       adapterId: modelId === "qwen3-tts" && stored.adapterId !== "none" ? selected?.id || "none" : "none",
       adapterScale: settingsAdapterScale(stored.adapterScale),
-      voiceParallelism: Math.min(2, Math.max(1, Math.round(Number(stored.voiceParallelism ?? 2)))),
+      voiceParallelism: Math.min(2, Math.max(1, Math.round(Number(stored.voiceParallelism ?? 1)))),
       // 자리를 비운 사이에도 제작이 이어지도록 하는 두 값이다. 기본은 켜 둔다 —
       // 일곱 시간짜리 작업에서 이것이 꺼져 있어 좋을 까닭이 없다.
       preventSleep: stored.preventSleep !== false,
