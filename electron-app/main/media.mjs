@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
-import { clearedFindingKeys, mapWithConcurrency, pageRangeFromTimeline, reviewPages, videoTimelineCandidates } from "../shared/index.mjs";
+import { clearedFindingKeys, clearedOutputReviewWarningKeys, mapWithConcurrency, outputReviewWarnings,
+  pageRangeFromTimeline, reviewPages, videoTimelineCandidates } from "../shared/index.mjs";
 import { pathToFileURL } from "node:url";
 import { reportDescribesVideo, safeStat } from "./files.mjs";
 import { runtimePaths } from "./paths.mjs";
@@ -118,6 +119,8 @@ export function createMediaService({
           const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
           if (report?.videoPath && await reportDescribesVideo(report.videoPath, value.path)) {
             value.voiceFindings = report.voiceFindings || [];
+            value.reviewWarnings = outputReviewWarnings(report);
+            value.clearedReviewWarnings = clearedOutputReviewWarningKeys(report);
             // 확인 완료 표시는 결과에 적혀 있다. 다시 열어도 그대로 남아야 한다.
             value.clearedFindings = clearedFindingKeys(report);
             value.reviewTarget = report.target || null;
@@ -145,6 +148,7 @@ export function createMediaService({
       audioUrl: kind === "audio" ? pathToFileURL(value.path).href : null,
       videoUrl: kind === "video" ? pathToFileURL(value.path).href : null,
       pages: value.pages || [], voiceFindings: value.voiceFindings || [],
+      reviewWarnings: value.reviewWarnings || [], clearedReviewWarnings: value.clearedReviewWarnings || [],
       clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null,
       review: value.review || null,
       recipe: value.recipe || null,

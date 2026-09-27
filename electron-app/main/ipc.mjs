@@ -64,6 +64,7 @@ export function createIpcService({
   selectTextVoice,
   selectTextVoiceFromHistory,
   setClearedFindings,
+  setClearedReviewWarnings,
   setOutputReview,
   shell,
   startDemoRecord,
@@ -200,6 +201,12 @@ export function createIpcService({
       guard(event);
       const settings = await readAppSettings();
       return setClearedFindings(target, Array.isArray(keys) ? keys : [], runtimePaths(settings.paths));
+    });
+
+    ipcMain.handle("studio:set-cleared-review-warnings", async (event, target, keys) => {
+      guard(event);
+      const settings = await readAppSettings();
+      return setClearedReviewWarnings(target, Array.isArray(keys) ? keys : [], runtimePaths(settings.paths));
     });
 
     ipcMain.handle("studio:set-output-review", async (event, target, status) => {
@@ -700,6 +707,15 @@ export function createIpcService({
       return true;
     });
 
+    ipcMain.handle("studio:preview-output-audio", async (event, target) => {
+      guard(event);
+      const { file } = await resolveOutputFile(target);
+      if (!file || !DROPPABLE.audio.extensions.has(path.extname(file).toLowerCase())) {
+        throw new Error("이 결과에는 들을 수 있는 음성 파일이 없습니다.");
+      }
+      return pathToFileURL(file).href;
+    });
+
     // Opening the editor from a flagged segment must not ask the user to find the
     // video they were just looking at, so the result adopts itself as the input.
     ipcMain.handle("studio:adopt-result-video", async (event, target) => {
@@ -710,6 +726,7 @@ export function createIpcService({
       const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
       return { ...registered, voiceFindings: report?.voiceFindings || [] };
     });
+
   }
 
   function cleanupReviewPreviews() {

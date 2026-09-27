@@ -32,6 +32,101 @@ export function alignmentWarnings(quality) {
   return warnings;
 }
 
+// 결과 목록과 다듬기는 같은 경고 목록을 읽는다. 파형 검사에서 약한 말끝을
+// 단어로 확정하지 않은 경우, 단어 누락으로 단정하지 않고 청취 후보로 남긴다.
+export function outputReviewWarnings(report = {}) {
+  report ||= {};
+  const quality = report.alignmentQuality;
+  const findings = quality?.findings || {};
+  const rows = value => Array.isArray(value) ? value : [];
+  const records = value => rows(value).filter(item => item && typeof item === 'object' && !Array.isArray(item));
+  const repairs = records(quality?.repairWarnings);
+  const issues = [];
+  const finite = value => value != null && Number.isFinite(Number(value)) ? Number(value) : null;
+  const add = (key, title, detail, startMs = null, endMs = null, kind = 'alignment') => {
+    const start = finite(startMs), end = finite(endMs);
+    issues.push({ key, title, detail, kind, startMs: start, endMs: end != null && end > start ? end : start });
+  };
+  const endFindings = records(findings.alignmentEnd);
+  const matchedEnds = new Set();
+  for (const [index, warning] of repairs.entries()) {
+    const step = quality?.stepMeasurements?.[Number(warning.entry)] || {};
+    const start = finite(warning.startMs) ?? finite(warning.atMs) ?? finite(step.startMs);
+    const end = finite(warning.endMs) ?? finite(step.endMs) ?? start;
+    if (warning.type === 'unassigned-weak-tail') {
+      const matchIndex = endFindings.findIndex((finding, candidate) => !matchedEnds.has(candidate)
+        && Math.abs(Number(finding.waveformEndMs) - Number(end)) <= 300);
+      const match = matchIndex >= 0 ? endFindings[matchIndex] : null;
+      if (match) matchedEnds.add(matchIndex);
+      const length = start != null && end != null ? Math.round(end - start) : null;
+      const delta = finite(match?.endDeltaMs);
+      const detail = `마지막 ${length ?? '?'}ms 소리는 약해 단어로 확정하지 않았습니다.`
+        + (delta != null ? ` 단어 정렬 끝과 파형 끝은 약 ${Math.round(Math.abs(delta))}ms 차이입니다.` : '')
+        + ' 실제 발화인지, 자막이 먼저 끝나는지 직접 듣고 확인하세요.';
+      add(`alignment:weak-tail:${warning.entry}:${Math.round(start ?? 0)}`, '말끝의 약한 소리 확인', detail, start, end);
+      continue;
+    }
+    const titles = {
+      'missing-transition-words': '화면 전환의 단어 시각 없음',
+      'no-nearby-transition-silence': '화면 전환 근처 쉼 없음',
+      'missing-words': '정렬된 단어 없음',
+      'missing-speech': '말소리 구간 확인 필요',
+      'ambiguous-speech-islands': '말소리 구간 배치 확인 필요',
+    };
+    const title = titles[warning.type] || '정렬 교정 확인 필요';
+    add(`alignment:repair:${warning.type}:${warning.entry}:${index}`, title,
+      `${Number.isInteger(Number(warning.entry)) ? `${Number(warning.entry) + 1}번째 스텝 · ` : ''}교정 과정에서 자동으로 확정하지 못했습니다. 해당 화면과 음성을 확인하세요.`, start, end);
+  }
+  for (const [index, finding] of endFindings.entries()) {
+    if (matchedEnds.has(index)) continue;
+    const aligned = finite(finding.alignmentEndMs), waveform = finite(finding.waveformEndMs);
+    const at = aligned != null && waveform != null ? Math.min(aligned, waveform) : finite(finding.startMs);
+    add(`alignment:end:${finding.step}:${Math.round(at ?? 0)}`, '말끝 정렬 차이',
+      `단어 정렬 끝과 파형 끝이 약 ${Math.round(Math.abs(Number(finding.endDeltaMs) || 0))}ms 차이입니다. 실제 말끝과 자막 끝을 확인하세요.`,
+      at, Math.max(aligned ?? at ?? 0, waveform ?? at ?? 0));
+  }
+  for (const [index, finding] of records(findings.transitions).entries()) {
+    add(`alignment:transition:${index}:${Math.round(Number(finding.transitionMs) || 0)}`,
+      '목소리 위 화면 전환', '말하는 도중 화면이 넘어갔을 수 있습니다. 전환 앞뒤를 확인하세요.',
+      finding.transitionMs, finding.transitionMs);
+  }
+  for (const [index, finding] of (records(findings.captionCoverage).length ? records(findings.captionCoverage) : records(findings.captions)).entries()) {
+    add(`alignment:caption:${finding.step}:${index}:${Math.round(Number(finding.cueEndMs) || 0)}`,
+      '자막이 말보다 먼저 사라짐', '말이 끝나기 전에 자막이 사라졌을 수 있습니다. 이 부분을 확인하세요.',
+      finding.cueEndMs, finding.cueEndMs);
+  }
+  for (const [kind, title] of [['collapsedWords', '지나치게 짧은 단어 시각'],
+    ['implausibleWords', '음절 수에 비해 짧은 단어 시각'], ['missingCaptions', '자막이 없는 스텝']]) {
+    for (const [index, finding] of records(findings[kind]).entries()) {
+      add(`alignment:${kind}:${finding.step}:${index}:${Math.round(Number(finding.startMs) || 0)}`,
+        title, finding.text ? `“${finding.text}”의 자막·말 시각을 확인하세요.` : '이 구간의 자막과 화면을 확인하세요.',
+        finding.startMs, finding.endMs);
+    }
+  }
+  const generated = alignmentWarnings(quality);
+  if (!issues.length) for (const [index, warning] of generated.entries()) {
+    add(`alignment:summary:${index}:${warning}`, warning,
+      '정렬 검사에 정확한 구간 기록이 없습니다. 영상과 자막을 직접 확인하세요.');
+  }
+  for (const [index, warning] of rows(report.warnings).entries()) {
+    if (typeof warning !== 'string' || !warning.trim() || generated.includes(warning)) continue;
+    add(`result:${index}:${warning}`, warning, '결과 기록에 남은 경고입니다. 해당 영상을 확인하세요.', null, null, 'result');
+  }
+  return issues.sort((left, right) => (left.startMs ?? Infinity) - (right.startMs ?? Infinity));
+}
+
+export function clearedOutputReviewWarningKeys(report = {}) {
+  report ||= {};
+  return (report.review?.clearedReviewWarnings || []).map(String);
+}
+
+export function withClearedOutputReviewWarnings(report, keys = [], now = new Date()) {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) throw new Error('확인 표시를 저장할 결과가 없습니다.');
+  const allowed = new Set(outputReviewWarnings(report).map(issue => issue.key));
+  const cleared = [...new Set(keys.map(String).filter(key => allowed.has(key)))];
+  return { ...report, review: { ...(report.review || {}), clearedReviewWarnings: cleared, updatedAt: now.toISOString() } };
+}
+
 export function voiceFindingSeverity(chunk = {}) {
   const recorded = String(chunk.severity || "");
   if (recorded) return recorded;
@@ -193,6 +288,7 @@ export function withOutputReview(report, status, now = new Date()) {
   return {
     ...report,
     review: {
+      ...(report.review || {}),
       status,
       updatedAt: now.toISOString(),
     },

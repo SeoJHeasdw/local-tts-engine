@@ -1,7 +1,8 @@
 import nativeFs from "node:fs/promises";
 import path from "node:path";
 import { LEGACY_OUTPUT_PATHS, runtimePaths } from "./paths.mjs";
-import { clearedFindingKeys, isInside, withClearedFindings, withOutputReview } from "../shared/index.mjs";
+import { clearedFindingKeys, clearedOutputReviewWarningKeys, isInside, outputReviewWarnings,
+  withClearedFindings, withClearedOutputReviewWarnings, withOutputReview } from "../shared/index.mjs";
 import { existingFile, findVideo, listDirectories, renameMediaFile, repointReport, safeStat, writeReport } from "./files.mjs";
 import { isCurrentCourseReport } from "./course-run-state.mjs";
 
@@ -56,6 +57,7 @@ export function createOutputsService({
         updatedAt: stat?.mtime.toISOString(),
         durationMs: report?.durationMs || null,
         video: Boolean(videoPath),
+        operation: report?.operation || null,
         ok: report?.summary?.ok ?? null,
         passed: report?.summary?.passed ?? null,
         total: report?.summary?.total ?? null,
@@ -63,6 +65,8 @@ export function createOutputsService({
         listenSuggested: report?.listenSuggested || [],
         voiceFindings: report?.voiceFindings || [],
         review: report?.review || null,
+        reviewWarnings: outputReviewWarnings(report),
+        clearedReviewWarnings: clearedOutputReviewWarningKeys(report),
         path: videoPath || dir,
         fileName: videoPath ? path.basename(videoPath) : null,
       });
@@ -92,6 +96,8 @@ export function createOutputsService({
           listenSuggested: report.listenSuggested || [],
           voiceFindings: report.voiceFindings || [],
           review: report.review || null,
+          reviewWarnings: outputReviewWarnings(report),
+          clearedReviewWarnings: clearedOutputReviewWarningKeys(report),
           staleVoiceSource,
           path: report.audioPath || dir,
           fileName: report.audioPath ? path.basename(report.audioPath) : null,
@@ -130,6 +136,8 @@ export function createOutputsService({
           passed: report?.summary?.passed ?? null,
           total: report?.summary?.total ?? null,
           review: report?.review || null,
+          reviewWarnings: outputReviewWarnings(report),
+          clearedReviewWarnings: clearedOutputReviewWarningKeys(report),
           qualityReview: report?.qualityReview || null,
           finalTrack: report?.finalTrack || null,
           awaitingSelection: !report?.audioPath,
@@ -169,6 +177,8 @@ export function createOutputsService({
           passed: report.summary?.passed ?? null,
           total: report.summary?.total ?? null,
           review: report.review || null,
+          reviewWarnings: outputReviewWarnings(report),
+          clearedReviewWarnings: clearedOutputReviewWarningKeys(report),
           path: videoPath || dir,
           fileName: videoPath ? path.basename(videoPath) : null,
           // 어느 영상에서 나온 수정본인지는 결과가 스스로 적어 둔다.
@@ -236,6 +246,15 @@ export function createOutputsService({
     return clearedFindingKeys(await writeReport(reportPath, withClearedFindings(report, keys), "cleared"));
   }
 
+  async function setClearedReviewWarnings(target, keys, studio) {
+    const directory = resolveOutputTarget(target, studio);
+    const reportPath = path.join(directory, "validation-report.json");
+    const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
+    if (!report) throw new Error("경고 기록이 있는 결과만 확인 표시를 남길 수 있습니다.");
+    const saved = await writeReport(reportPath, withClearedOutputReviewWarnings(report, keys), "review-warnings");
+    return clearedOutputReviewWarningKeys(saved);
+  }
+
   async function renameOutput(target, rawName, studio) {
     resolveOutputTarget(target, studio);
     const { directory, file } = await resolveOutputFile(target);
@@ -271,5 +290,6 @@ export function createOutputsService({
     return true;
   }
 
-  return { resolveOutputFile, listOutputs, outputStoreForTarget, resolveOutputTarget, setOutputReview, setClearedFindings, renameOutput, deleteOutput };
+  return { resolveOutputFile, listOutputs, outputStoreForTarget, resolveOutputTarget, setOutputReview,
+    setClearedFindings, setClearedReviewWarnings, renameOutput, deleteOutput };
 }

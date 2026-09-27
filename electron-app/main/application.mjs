@@ -64,7 +64,7 @@ export function createStudio({
     dialog, emit, jobSnapshot, readAppSettings, requireRuntimeTool, runProcess, state,
   });
   const {
-    resolveOutputFile, listOutputs, setOutputReview, setClearedFindings,
+    resolveOutputFile, listOutputs, setOutputReview, setClearedFindings, setClearedReviewWarnings,
     renameOutput, deleteOutput, resolveOutputTarget,
   } = createOutputsService({
     dialog, readAppSettings, shell, state,
@@ -102,7 +102,7 @@ export function createStudio({
     registerSelected, renameOutput, requireRuntimeTool, resolveOutputFile,
     runFineTune, runTextVoiceCandidates, runVideoEdit, saveAppSettings, saveDemoScript,
     listTextVoiceCandidates, selectTextVoice, selectTextVoiceFromHistory,
-    setClearedFindings, setOutputReview, shell,
+    setClearedFindings, setClearedReviewWarnings, setOutputReview, shell,
     startDemoRecord, startDemoRender, startDemoVoice, startRecording, state, writeActiveJob,
   });
   const { createWindow } = createWindowService({

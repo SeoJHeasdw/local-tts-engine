@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("ttsStudio", {
   listOutputs: () => ipcRenderer.invoke("studio:list-outputs"),
   setOutputReview: (target, status) => ipcRenderer.invoke("studio:set-output-review", target, status),
   setClearedFindings: (target, keys) => ipcRenderer.invoke("studio:set-cleared-findings", target, keys),
+  setClearedReviewWarnings: (target, keys) => ipcRenderer.invoke("studio:set-cleared-review-warnings", target, keys),
   renameOutput: (target, name) => ipcRenderer.invoke("studio:rename-output", target, name),
   deleteOutput: (target) => ipcRenderer.invoke("studio:delete-output", target),
   renameVideo: (token, name) => ipcRenderer.invoke("studio:rename-video", token, name),
@@ -35,6 +36,7 @@ contextBridge.exposeInMainWorld("ttsStudio", {
     return ipcRenderer.invoke("studio:register-dropped-files", paths, kind);
   },
   adoptResultVideo: (target) => ipcRenderer.invoke("studio:adopt-result-video", target),
+  previewOutputAudio: (target) => ipcRenderer.invoke("studio:preview-output-audio", target),
   startEdit: (options) => ipcRenderer.invoke("studio:start-edit", options),
   start: (options) => ipcRenderer.invoke("studio:start", options),
   listDisplays: () => ipcRenderer.invoke("studio:list-displays"),

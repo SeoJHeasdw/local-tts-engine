@@ -313,6 +313,11 @@ export function visibleVoiceFindings(findings = [], clearedKeys = []) {
   return (findings || []).filter((finding) => !cleared.has(findingKeyOf(finding)));
 }
 
+export function visibleOutputReviewWarnings(item = {}) {
+  const cleared = new Set((item.review?.clearedReviewWarnings || item.clearedReviewWarnings || []).map(String));
+  return (item.reviewWarnings || []).filter(issue => !cleared.has(String(issue.key)));
+}
+
 // 한 챕터를 레슨으로 나눠 만들면 결과가 열여섯 줄로 평평하게 늘어선다. 그중
 // 어디에 아직 할 일이 남았는지는 열여섯 줄을 눈으로 세어야 알 수 있었다.
 // 이름이 이미 소속을 담고 있으므로(<작업>-ch02-l03) 그것으로 묶는다.
@@ -355,7 +360,15 @@ export function outputState(item = {}, findings = []) {
   if (findings.length) {
     return { key: "attention", label: `확인 ${findings.length}곳`, tone: "attention" };
   }
+  if (Array.isArray(item.reviewWarnings)) {
+    const remaining = visibleOutputReviewWarnings(item);
+    if (remaining.length) return { key: "attention",
+      label: `${remaining.every(issue => issue.kind === "alignment") ? "정렬 확인" : "영상 경고"} ${remaining.length}곳`, tone: "attention" };
+  } else if (item.warnings?.length) {
+    return { key: "attention", label: `경고 ${item.warnings.length}건`, tone: "attention" };
+  }
   if (item.review?.status === "approved") return { key: "approved", label: "청취 승인", tone: "approved" };
+  if (item.reviewWarnings?.length) return { key: "ready", label: "경고 확인함", tone: "ready" };
   if (item.root === "voice") {
     const status = item.qualityReview?.status;
     if (status === "failed" || status === "warning") {
@@ -365,8 +378,6 @@ export function outputState(item = {}, findings = []) {
       return { key: "attention", label: "청취 확인 필요", tone: "attention" };
     }
   }
-  // 완료했지만 일부 프레임이 빠진 녹화 같은 결과. 성공으로 뭉개지 않고 확인할 곳으로 둔다.
-  if (item.warnings?.length) return { key: "attention", label: `경고 ${item.warnings.length}건`, tone: "attention" };
   return { key: "ready", label: "확인할 곳 없음", tone: "ready" };
 }
 
@@ -398,13 +409,15 @@ export function groupOutputs(items = [], findingsOf = () => []) {
     const key = outputGroupKey(item);
     if (!key) { rows.push({ type: "single", item }); continue; }
     if (!groups.has(key)) {
-      const group = { type: "group", key, items: [], updatedAt: item.updatedAt };
+      const group = { type: "group", key, items: [], updatedAt: item.versionAt || item.updatedAt };
       groups.set(key, group);
       rows.push(group);
     }
     const group = groups.get(key);
     group.items.push(item);
-    if (String(item.updatedAt || "") > String(group.updatedAt || "")) group.updatedAt = item.updatedAt;
+    if (String(item.versionAt || item.updatedAt || "") > String(group.updatedAt || "")) {
+      group.updatedAt = item.versionAt || item.updatedAt;
+    }
   }
   // 한 편만 남은 묶음은 묶음이 아니다. 머리글과 상태 배지를 두 줄 더 쓰면서
   // 말하는 것이 그 한 줄과 같다.
@@ -412,10 +425,12 @@ export function groupOutputs(items = [], findingsOf = () => []) {
     if (row.type === "group" && row.items.length === 1) rows[index] = { type: "single", item: row.items[0] };
   }
   for (const group of groups.values()) {
-    group.items.sort((left, right) => String(left.name).localeCompare(String(right.name)));
+    group.items.sort((left, right) => String(outputUnitLabel(left) || left.name)
+      .localeCompare(String(outputUnitLabel(right) || right.name)));
     group.attention = group.items.filter((item) => outputState(item, findingsOf(item)).key !== "ready"
       && outputState(item, findingsOf(item)).key !== "approved").length;
-    group.findings = group.items.reduce((total, item) => total + findingsOf(item).length, 0);
+    group.findings = group.items.reduce((total, item) => total + findingsOf(item).length
+      + visibleOutputReviewWarnings(item).length, 0);
   }
   return rows;
 }

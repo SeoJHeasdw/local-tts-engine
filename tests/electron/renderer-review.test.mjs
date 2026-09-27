@@ -99,6 +99,47 @@ test('교정 타임라인 선택은 token으로 재촬영에 연결되고 영상
   assert.equal(calls[2].correctedTimelineToken, undefined);
 });
 
+test('결과의 정렬 경고를 다듬기에서 찾아 듣고 확인 상태를 저장한다', async () => {
+  const { context, $, page1 } = fixture();
+  const target = { root: 'edit', day: '2026-09-27', name: 'ch06-l05-final' };
+  const issue = { key: 'alignment:weak-tail:3:27107', kind: 'alignment',
+    title: '말끝의 약한 소리 확인', detail: '실제 발화인지 확인하세요.', startMs: 27_107, endMs: 27_192 };
+  const saved = [];
+  context.api.setClearedReviewWarnings = async (selected, keys) => {
+    saved.push({ selected, keys });
+    return keys;
+  };
+  const video = { token: 'ch06-final', name: 'CH06 L05.mp4', videoUrl: 'file:///ch06.mp4',
+    durationMs: 50_000, pages: [page1], reviewWarnings: [issue], clearedReviewWarnings: [] };
+  context.testReview.setReviewVideo(video, target);
+  assert.equal($('#review-warnings').classList.contains('hidden'), false);
+  assert.equal($('#review-warning-jump').classList.contains('hidden'), false);
+  assert.match($('#review-warning-jump').textContent, /1곳/);
+  assert.equal($('#review-warning-count').textContent, '1');
+  assert.match($('#page-rail-legend').textContent, /정렬·영상 확인 1페이지/);
+  assert.equal($('#review-pages').children[0].classList.contains('alignment-warning'), true);
+  assert.match($('#review-warning-list').children[0].children[0].children[1].textContent, /페이지/);
+  const actions = $('#review-warning-list').children[0].children[2];
+  actions.children[0].listeners.click();
+  assert.equal($('#review-player').currentTime, 25.607);
+  assert.equal($('#review-player').paused, false);
+  await actions.children[1].listeners.click();
+  assert.deepEqual(saved, [{ selected: target, keys: [issue.key] }]);
+  assert.equal($('#review-warning-count').textContent, '0');
+  assert.equal($('#review-warning-jump').textContent, '경고 확인함 ↓');
+  assert.equal($('#review-pages').children[0].classList.contains('alignment-warning'), false);
+  assert.deepEqual(video.reviewWarnings, [issue], '자동 검사 기록은 바꾸지 않는다');
+  const undo = $('#review-warning-list').children[0].children[2].children[1];
+  await undo.listeners.click();
+  assert.equal($('#review-warning-count').textContent, '1');
+  context.api.setClearedReviewWarnings = async () => { throw new Error('저장 실패'); };
+  await $('#review-warning-list').children[0].children[2].children[1].listeners.click();
+  assert.equal($('#review-warning-count').textContent, '1', '저장 실패를 확인 완료로 보이지 않는다');
+  context.testReview.setReviewVideo({ token: 'clean', name: 'clean.mp4', pages: [], reviewWarnings: [] });
+  assert.equal($('#review-warnings').classList.contains('hidden'), true);
+  assert.equal($('#review-warning-jump').classList.contains('hidden'), true);
+});
+
 test('교정 타임라인 선택 실패·취소는 이전 선택을 유지하고 지연 응답은 다른 영상에 붙이지 않는다', async () => {
   const { context, $, calls } = fixture();
   context.testReview.setReviewVideo({ token: 'latest', name: 'latest.mp4', pages: [], canRecapture: true });

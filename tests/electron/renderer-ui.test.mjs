@@ -38,7 +38,7 @@ test("새 영상은 레슨·페이지·챕터 전체의 세 가지 제작 범위
 });
 
 
-test("최근 결과는 열기만 기본 행동으로 두고 나머지를 더 보기 메뉴에 둔다", async () => {
+test("최근 결과는 종류에 맞는 기본 행동과 더 보기 메뉴를 둔다", async () => {
   const [script, css] = await Promise.all([
     readRendererSource(),
     fs.readFile(path.join(renderer, "styles.css"), "utf8"),
@@ -82,7 +82,7 @@ test("결과를 편집으로 넘기는 통로가 preload와 main 양쪽에 있�
   assert.match(main, /ipcMain\.handle\("studio:adopt-result-video"/);
 });
 
-test("최근 영상 결과는 전용 검수 화면에서 열린다", async () => {
+test("최근 영상 결과는 경고 유무와 상관없이 다듬기에서 열린다", async () => {
   const script = await readRendererSource();
   // 확인 완료로 내린 항목은 최근 결과에서도 빠져야 한다. 한 화면에서만
   // 처리되면 그 버튼이 무엇을 한 것인지 알 수 없다.
@@ -497,5 +497,6 @@ test("앱 데모는 새로 만들기에서 찍고 다듬기의 따로 된 작업
   }
   assert.doesNotMatch(html, /target="_blank"/, "앱은 새 창을 막으므로 새 창 링크를 두지 않는다");
   assert.doesNotMatch(preload, /openDemoReview/, "앱은 review.html을 브라우저로 열지 않는다");
-  assert.match(outputs, /open\.textContent = "다듬기";\n\s*open\.addEventListener\("click", \(\) => demoPolish\.openTarget\(target\)/);
+  assert.match(outputs, /item\.video \? "다듬기" : "듣기"/);
+  assert.match(outputs, /open\.addEventListener\("click", \(\) => demoPolish\.openTarget\(target\)/);
 });

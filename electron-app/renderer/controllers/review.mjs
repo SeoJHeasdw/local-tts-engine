@@ -12,6 +12,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   let reviewStopAt = null;
   let reviewRequest = 0;
   let reviewBusy = false;
+  let reviewWarningSaving = false;
   let latestCompleteReview = null;
   let pendingCandidateContext = null;
   let reviewResumeMs = 0;
@@ -288,6 +289,99 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     return reviewFindings.filter((finding) => !clearedFindings.has(findingKey(finding)));
   }
 
+  function warningPage(issue) {
+    const pages = mediaState.voiceVideo?.pages || [];
+    if (issue.startMs == null) return null;
+    return pages.find(page => page.startMs <= issue.startMs && issue.startMs <= page.endMs)
+      || pages.reduce((nearest, page) => !nearest
+        || Math.abs(page.startMs - issue.startMs) < Math.abs(nearest.startMs - issue.startMs) ? page : nearest, null);
+  }
+
+  function renderReviewWarnings() {
+    const issues = mediaState.voiceVideo?.reviewWarnings || [];
+    const cleared = new Set((mediaState.voiceVideo?.clearedReviewWarnings || []).map(String));
+    const remaining = issues.filter(issue => !cleared.has(String(issue.key))).length;
+    $('#review-warnings').classList.toggle('hidden', issues.length === 0);
+    $('#review-warning-jump').classList.toggle('hidden', issues.length === 0);
+    $('#review-warning-jump').textContent = remaining ? `정렬·영상 확인 ${remaining}곳 ↓` : '경고 확인함 ↓';
+    $('#review-warning-count').textContent = String(remaining);
+    $('#review-warnings-note').textContent = remaining
+      ? `직접 확인할 곳 ${remaining}곳입니다.${issues.some(issue => issue.title.includes('약한 소리'))
+        ? ' 약한 말끝 후보는 발화가 확정된 결함이 아니며, 목소리 재생성과 별개입니다.' : ''}`
+      : `기록된 경고 ${issues.length}곳을 확인했습니다. 자동 검사 결과는 그대로 보존됩니다.`;
+    const rows = issues.map(issue => {
+      const row = document.createElement('li');
+      row.className = 'review-warning-item';
+      row.dataset.warningKey = issue.key;
+      const confirmed = cleared.has(String(issue.key));
+      row.classList.toggle('confirmed', confirmed);
+      const head = document.createElement('div');
+      head.className = 'review-warning-item-head';
+      const title = document.createElement('strong');
+      title.textContent = `${confirmed ? '✓ 확인함 · ' : ''}${issue.title}`;
+      const position = document.createElement('small');
+      const page = warningPage(issue);
+      position.textContent = [page ? `${page.number}페이지` : '',
+        issue.startMs != null ? `${formatRegionTime(issue.startMs / 1000)} 부근` : ''].filter(Boolean).join(' · ');
+      head.append(title, position);
+      const detail = document.createElement('p');
+      detail.textContent = issue.detail;
+      const actions = document.createElement('div');
+      actions.className = 'review-warning-actions';
+      if (issue.startMs != null) {
+        const listen = document.createElement('button');
+        listen.type = 'button';
+        listen.textContent = '앞뒤 듣기';
+        listen.setAttribute('aria-label', `${position.textContent} ${issue.title} 앞뒤 듣기`);
+        listen.addEventListener('click', () => {
+          if (page) selectReviewPage(page, issue.detail);
+          const duration = Number(mediaState.voiceVideo?.durationMs) || Infinity;
+          const from = Math.max(0, issue.startMs - 1500);
+          const to = Math.min(duration, Math.max(issue.endMs ?? issue.startMs, issue.startMs + 300) + 1200);
+          playReviewRange(from / 1000, to / 1000);
+        });
+        actions.append(listen);
+      }
+      const confirm = document.createElement('button');
+      confirm.type = 'button';
+      confirm.textContent = confirmed ? '확인 취소' : '직접 듣고 확인함';
+      confirm.disabled = !reviewTarget || reviewBusy || reviewWarningSaving;
+      confirm.addEventListener('click', async () => {
+        if (!reviewTarget || reviewBusy || reviewWarningSaving) return;
+        const video = mediaState.voiceVideo;
+        const next = new Set((video.clearedReviewWarnings || []).map(String));
+        if (next.has(issue.key)) next.delete(issue.key);
+        else next.add(issue.key);
+        reviewWarningSaving = true;
+        renderReviewWarnings();
+        try {
+          const saved = await api.setClearedReviewWarnings(reviewTarget, [...next]);
+          if (mediaState.voiceVideo !== video) return;
+          video.clearedReviewWarnings = saved;
+          refreshOutputs();
+        } catch (error) { showToast(`경고 확인을 저장하지 못했습니다. ${error.message}`, 'error'); }
+        finally {
+          reviewWarningSaving = false;
+          renderReviewWarnings();
+          if (mediaState.voiceVideo === video) {
+            const updated = [...$('#review-warning-list').children].find(item => item.dataset.warningKey === issue.key);
+            updated?.children?.[2]?.children?.[updated.children[2].children.length - 1]?.focus?.();
+          }
+        }
+      });
+      actions.append(confirm);
+      row.append(head, detail, actions);
+      return row;
+    });
+    $('#review-warning-list').replaceChildren(...rows);
+    paintRailFlags();
+  }
+
+  $('#review-warning-jump').addEventListener('click', () => {
+    $('#review-warnings').scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    $('#review-warning-list').children?.[0]?.children?.[2]?.children?.[0]?.focus?.();
+  });
+
   // 확인할 곳이 여섯이면 여섯 줄이 한꺼번에 펼쳐져 사이드바를 가득 채웠고,
   // 그 안에서 확인·재생성·사유·대본은 22픽셀 아이콘으로 밀려났다. 같은 페이지의
   // 여러 지적은 결국 그 페이지를 한 번 다시 읽히는 한 가지 일이므로, 페이지로
@@ -359,7 +453,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     paintRailFlags();
     renderReviewFacts();
     $('#review-findings-note').textContent = reviewFindings.length === 0
-      ? '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
+      ? mediaState.voiceVideo?.reviewWarnings?.length
+        ? '목소리 자동 검수 항목은 없습니다. 위의 정렬·영상 경고는 별도로 듣고 확인하세요.'
+        : '표시된 자동 검수 항목이 없습니다. 검사가 놓칠 수 있으니 직접 듣고 확인하세요.'
       : remaining.length === 0
         ? '확인할 항목을 모두 정리했습니다. 담아 둔 교체가 있으면 저장하세요.'
         : `자동 검수 권장 ${remaining.length}곳 · ${groups.length}페이지입니다. Enter로 확인하면 다음 항목이 열리고 그 자리가 재생됩니다.${repeatedTermNote(remaining)}`;
@@ -762,7 +858,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-recapture-quality').value = video.recaptureQuality || 'high';
     $('#review-recapture-captions').checked = Boolean(video.burnCaptions);
     $$('audio,video').forEach(media => media.pause());
-    mediaState.voiceVideo = video; reviewTarget = target; reviewSelection = null; reviewStopAt = null;
+    mediaState.voiceVideo = video; reviewTarget = target || video.reviewTarget || null; reviewSelection = null; reviewStopAt = null;
+    reviewWarningSaving = false;
     reviewMode = 'regenerate';
     reviewWaveRequest++; invalidateRegionPreview(); reviewRangeEdited=false;
     $('#review-region-wave').classList.add('hidden');
@@ -789,6 +886,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     paintReviewFileName(video.name);
     reviewPlayer.src = video.videoUrl;
     reviewFindings = video.voiceFindings || [];
+    renderReviewWarnings();
     clearedFindings.clear();
     for (const key of video.clearedFindings || []) clearedFindings.add(String(key));
     renderPageRail(video);
@@ -855,8 +953,10 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       cell.type = 'button';
       cell.dataset.page = page.number;
       if (!dense) cell.textContent = String(page.number);
-      cell.title = `${page.number}페이지 · ${formatDuration(page.startMs)} · ${String(page.text || '').slice(0, 70)}`;
-      cell.setAttribute('aria-label', `${page.number}페이지 · ${formatDuration(page.startMs)}`);
+      cell.dataset.baseTitle = `${page.number}페이지 · ${formatDuration(page.startMs)} · ${String(page.text || '').slice(0, 70)}`;
+      cell.dataset.baseAria = `${page.number}페이지 · ${formatDuration(page.startMs)}`;
+      cell.title = cell.dataset.baseTitle;
+      cell.setAttribute('aria-label', cell.dataset.baseAria);
       cell.addEventListener('click', () => { selectReviewPage(page); seekReview(page.startMs / 1000); });
       railCells.set(page.number, cell);
       return cell;
@@ -874,6 +974,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
 
   function paintRailFlags() {
     const flagged = new Map();
+    const alignmentPages = new Set((mediaState.voiceVideo?.reviewWarnings || [])
+      .filter(issue => !(mediaState.voiceVideo?.clearedReviewWarnings || []).includes(issue.key))
+      .map(issue => warningPage(issue)?.number).filter(Boolean));
     for (const finding of visibleFindings()) {
       const number = Number(finding.slideNumber);
       if (finding.severity !== 'warning' || !flagged.has(number)) {
@@ -887,11 +990,15 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       const severity = flagged.get(number);
       cell.classList.toggle('flagged', severity === 'failed');
       cell.classList.toggle('advised', severity === 'warning');
+      cell.classList.toggle('alignment-warning', alignmentPages.has(number));
       cell.classList.toggle('queued', fixed.has(number));
+      cell.title = `${cell.dataset.baseTitle || ''}${alignmentPages.has(number) ? ' · 정렬·영상 확인 필요' : ''}`;
+      cell.setAttribute('aria-label', `${cell.dataset.baseAria || `${number}페이지`}${alignmentPages.has(number) ? ' · 정렬·영상 확인 필요' : ''}`);
       if (severity === 'failed') failed += 1;
       if (severity === 'warning') warned += 1;
     }
     const legend = [failed ? `재생성 필요 ${failed}` : '', warned ? `청취 확인 ${warned}` : '',
+      alignmentPages.size ? `정렬·영상 확인 ${alignmentPages.size}페이지` : '',
       fixed.size ? `교체 대기 ${fixed.size}` : ''].filter(Boolean);
     $('#page-rail-legend').textContent = legend.join(' · ');
   }
@@ -1082,6 +1189,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-recapture-timeline-name').textContent = recaptureTimeline?.name || '현재 영상의 자막·전환 시각 사용';
     $('#review-recapture-note').textContent = pendingFixes.size
       ? '교체 대기 중인 목소리를 저장하고 수정본을 연 뒤 재촬영하세요.'
+      : recaptureTimeline ? '교정된 자막·전환 시각이 선택됐습니다. 아래 단추로 새 영상을 만드세요.'
       : available ? '대본·페이지 구성이 달라졌거나 화면 편집점이 음성과 맞지 않으면 촬영 전에 알려드립니다.'
         : '페이지 타임라인이 있는 강의 영상을 선택하세요.';
   }

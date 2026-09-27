@@ -1,5 +1,5 @@
 import { animateLayout } from "../motion.mjs";
-import { filterOutputItems, visibleVoiceFindings, outputIcon, outputKind, outputState, outputRowTitle, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs, outputGroupKey, outputVersionLinks } from "../view-utils.mjs";
+import { filterOutputItems, visibleOutputReviewWarnings, visibleVoiceFindings, outputIcon, outputKind, outputState, outputRowTitle, outputUnitLabel, voiceFindingSummaryLine, shouldOpenMenuUpward, outputGroupTitle, groupOutputs, outputGroupKey, outputVersionLinks } from "../view-utils.mjs";
 
 export function createOutputsController({ $, $$, api, showToast, formatDuration, formatDate, review, demoPolish,
   reopenVoiceCandidates = null, document = globalThis.document }) {
@@ -18,12 +18,13 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
   }
 
   function renderOutputSummary() {
-    $("#results-count").textContent = String(outputItems.length);
-    $("#result-count-summary").textContent = `${outputItems.length}개`;
+    const current = outputItems;
+    $("#results-count").textContent = String(current.length);
+    $("#result-count-summary").textContent = `${current.length}개`;
     // 종류마다 몇 개인지 거르기 단추에 적는다. 녹화가 있는지 눌러 봐야 알 수 있으면 안 된다.
     for (const button of $$("#result-filters [data-output-filter]")) {
       const count = button.querySelector("small");
-      if (count) count.textContent = String(filterOutputItems(outputItems, "", button.dataset.outputFilter).length);
+      if (count) count.textContent = String(filterOutputItems(current, "", button.dataset.outputFilter).length);
     }
   }
 
@@ -69,10 +70,12 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
 
   function renderOutputs() {
     return animateLayout($("#output-list"), () => {
-      const list = filterOutputItems(outputItems, $("#result-search").value, outputFilter);
+      pauseAudio();
+      const current = outputItems;
+      const list = filterOutputItems(current, $("#result-search").value, outputFilter);
       const container = $("#output-list");
       if (!list.length) {
-        container.innerHTML = `<div class="empty-output">${outputItems.length ? "조건에 맞는 결과가 없습니다." : "아직 완성된 결과가 없습니다."}</div>`;
+        container.innerHTML = `<div class="empty-output">${current.length ? "조건에 맞는 결과가 없습니다." : "아직 완성된 결과가 없습니다."}</div>`;
         return;
       }
       // 결과를 나열하는 것과, 남은 일을 보여 주는 것은 다르다. 상태를 한 마디로
@@ -80,11 +83,12 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
       // 읽히게 한다.
       const findingsOf = (item) => visibleVoiceFindings(item.voiceFindings, item.review?.clearedFindings);
       // 고친 판이 쌓이면 어느 파일이 지금 쓸 것인지 이름만으로는 알 수 없다.
-      const versions = outputVersionLinks(outputItems);
+      const versions = outputVersionLinks(current);
 
       function buildRow(item, { compact = false } = {}) {
         const kind = outputKind(item);
         const findings = findingsOf(item);
+        const reviewWarnings = visibleOutputReviewWarnings(item);
         const state = outputState(item, findings);
         const approved = item.review?.status === "approved";
         const target = { root: item.root, name: item.name, day: item.day, store: item.store };
@@ -99,7 +103,7 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
           <div class="output-copy"><strong></strong><div class="output-meta"><span class="kind-tag"></span><small></small></div></div>
           <div class="output-status" aria-label="결과 상태"><span class="state-pill ${state.tone}"></span></div>
           <div class="item-actions">
-            <button class="open-button" type="button">열기</button>
+            <button class="open-button" type="button">${item.video ? "다듬기" : "듣기"}</button>
             <details class="result-menu">
               <summary aria-label="결과 작업 더 보기">•••</summary>
               <div>
@@ -125,8 +129,9 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
         const newer = versions.get(item.key) || [];
         row.querySelector("small").textContent = [
           formatDuration(item.durationMs),
-          compact ? "" : formatDate(item.updatedAt),
+          compact ? "" : formatDate(item.versionAt || item.updatedAt),
           findings.length ? voiceFindingSummaryLine(findings) : "",
+          reviewWarnings.length ? `${reviewWarnings[0].title}${reviewWarnings[0].startMs != null ? ` · ${formatDuration(reviewWarnings[0].startMs)} 부근` : ""}${reviewWarnings.length > 1 ? ` 외 ${reviewWarnings.length - 1}곳` : ""}` : "",
           item.awaitingSelection && item.candidateSetStatus === "partial"
             ? `요청 ${item.candidateCount || "?"}개 중 완성 ${item.availableCandidateCount || "?"}개 · 성공 후보를 고를 수 있습니다`
             : item.awaitingSelection && item.candidateSetStatus === "cancelled"
@@ -166,7 +171,7 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
           : state.key === "failed"
           ? "자동 검증에 실패했거나 기록이 없습니다."
           : state.key === "attention"
-            ? `${voiceFindingSummaryLine(findings)} · 다듬기에서 처리하세요`
+            ? `${reviewWarnings.length ? `${reviewWarnings[0].title} · 다듬기에서 해당 구간을 확인하세요` : findings.length ? `${voiceFindingSummaryLine(findings)} · 다듬기에서 처리하세요` : "다듬기에서 확인하세요"}`
             : state.key === "approved"
               ? "직접 듣고 승인한 결과입니다."
               : "자동 검수에서 걸린 곳이 없습니다. 직접 들어 보고 승인할 수 있습니다.";
@@ -198,7 +203,6 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
           // 앱 데모도 다듬기에서 본다. 다만 강의처럼 mp4를 고치지 않고 장면·대본·후보를 고쳐
           // 다시 굽는 작업면이 따로 열린다.
           const open = row.querySelector(".open-button");
-          open.textContent = "다듬기";
           open.addEventListener("click", () => demoPolish.openTarget(target)
             .catch((error) => showToast(error.message, "error")));
         } else if (item.awaitingSelection) {
@@ -206,10 +210,32 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
           row.querySelector(".open-button").addEventListener("click", () => reopenVoiceCandidates?.(target)
             .catch((error) => showToast(error.message, "error")));
         } else if (item.video) {
-          row.querySelector(".open-button").textContent = findings.length ? "다듬기" : "열기";
           row.querySelector(".open-button").addEventListener("click", () => review.openReview(target));
         } else {
-          row.querySelector(".open-button").addEventListener("click", () => api.open(target).catch((error) => showToast(error.message, "error")));
+          const open = row.querySelector(".open-button");
+          if (item.root === "render" || !item.fileName) {
+            open.textContent = "Finder에서 보기";
+            open.addEventListener("click", () => api.reveal(target).catch((error) => showToast(error.message, "error")));
+          } else {
+            open.addEventListener("click", async () => {
+              let player = row.querySelector(".output-audio");
+              if (player) {
+                if (player.paused) await player.play().catch((error) => showToast(error.message, "error"));
+                else player.pause();
+                return;
+              }
+              try {
+                const audioUrl = await api.previewOutputAudio(target);
+                player = document.createElement("audio");
+                player.className = "output-audio";
+                player.controls = true;
+                player.src = audioUrl;
+                player.setAttribute("aria-label", `${outputRowTitle(item)} 듣기`);
+                row.append(player);
+                await player.play();
+              } catch (error) { showToast(error.message, "error"); }
+            });
+          }
         }
         row.querySelector(".rename-button").addEventListener("click", () => {
           resultMenu.removeAttribute("open");
@@ -276,6 +302,10 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
     });
   }
 
+  function pauseAudio() {
+    for (const player of $$("#output-list .output-audio")) player.pause();
+  }
+
   async function loadOutputs() {
     const refresh = $("#refresh-outputs");
     refresh.disabled = true;
@@ -297,26 +327,32 @@ export function createOutputsController({ $, $$, api, showToast, formatDuration,
   // 결과 목록으로 돌아가 다음 줄을 찾는 일이 열 번 반복된다. 같은 작업에서 나온
   // 영상들의 앞뒤를 알려 주어 그 걸음을 지운다.
   function videoNeighbours(target) {
+    const current = outputItems;
     const name = String(target?.name || "");
-    const current = outputItems.find((item) => item.name === name && item.video);
-    const key = current ? outputGroupKey(current) : null;
-    if (!current || !key) return { previous: null, next: null, index: 0, total: 0 };
-    const siblings = outputItems
+    const opened = current.find((item) => item.name === name && item.video);
+    const key = opened ? outputGroupKey(opened) : null;
+    if (!opened || !key) return { previous: null, next: null, index: 0, total: 0 };
+    const siblings = current
       .filter((item) => item.video && outputGroupKey(item) === key)
-      .sort((left, right) => String(left.name).localeCompare(String(right.name)));
+      .sort((left, right) => String(outputUnitLabel(left)).localeCompare(String(outputUnitLabel(right))));
     const index = siblings.findIndex((item) => item.name === name);
     return {
-      previous: siblings[index - 1]?.target || null,
-      next: siblings[index + 1]?.target || null,
+      previous: siblings[index - 1] ? pickTarget(siblings[index - 1]) : null,
+      next: siblings[index + 1] ? pickTarget(siblings[index + 1]) : null,
       index: index + 1,
       total: siblings.length,
     };
+  }
+
+  function pickTarget(item) {
+    return { root: item.root, name: item.name, day: item.day, store: item.store };
   }
 
   return {
     loadOutputs,
     renderOutputs,
     closeResultMenus,
+    pauseAudio,
     videoNeighbours,
     get outputFilter() { return outputFilter; },
     set outputFilter(value) { outputFilter = value; },

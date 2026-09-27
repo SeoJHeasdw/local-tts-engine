@@ -1217,7 +1217,7 @@ function renderJobEvent(event) {
     // 기록이 진행 중인 작업 위에 그대로 남는다.
     refreshResumable();
     latestTarget = { root: "render", name: event.options.name };
-    $("#open-latest").textContent = "영상 열기";
+    $("#open-latest").textContent = "다듬기";
     $("#job-log").textContent = "";
     review.renderCompleteVoiceFindings([]);
     showJobView("active");
@@ -1321,7 +1321,9 @@ function renderJobEvent(event) {
     const alignmentWarningCount = renderCompletionWarnings($('#complete-warnings'), report);
     if ((findings.length || alignmentWarningCount) && !failedCount) setJobState('제작 완료 · 확인 필요', 'idle');
     $("#complete-panel .complete-actions").classList.toggle('hidden', !report.target);
-    $("#open-latest").textContent = unitCount > 1 ? "첫 영상 열기" : "영상 열기";
+    $("#open-latest").textContent = report.videoPath
+      ? unitCount > 1 ? "첫 영상 다듬기" : "다듬기"
+      : "Finder에서 보기";
     review.renderCompleteVoiceFindings(findings, report.videoPath ? report.target : null);
     outputs.loadOutputs();
     $("#job-name").value = suggestedName();
@@ -1600,7 +1602,9 @@ $("#text-voice-form").addEventListener("submit", async (event) => {
   }
 });
 $("#cancel-button").addEventListener("click", (event) => requestJobCancellation(event.currentTarget, "create"));
-$("#open-latest").addEventListener("click", () => review.latestCompleteReview ? review.openReview(review.latestCompleteReview) : latestTarget && api.open(latestTarget));
+$("#open-latest").addEventListener("click", () => review.latestCompleteReview
+  ? review.openReview(review.latestCompleteReview)
+  : latestTarget && api.reveal(latestTarget));
 $("#reveal-latest").addEventListener("click", () => latestTarget && api.reveal(latestTarget));
 $("#refresh-outputs").addEventListener("click", outputs.loadOutputs);
 $("#result-search").addEventListener("input", outputs.renderOutputs);
@@ -1812,10 +1816,22 @@ function attachNativeDrop(element, kind, onFiles) {
     }
   });
 }
-// 왼쪽에 영상 자리가 있는데 오른쪽 작은 상자에만 놓을 수 있으면, 놓을 자리를
-// 먼저 겨눠야 한다. 편집 화면 전체가 받는다.
+// 작은 선택 단추를 겨누지 않아도 된다. 다듬기 화면 전체와 사이드바 항목에서
+// 같은 영상을 받고, 다른 작업면이 열려 있어도 영상 작업면으로 전환한다.
 attachNativeDrop($("#view-edit"), "video", (files) => editor.addEditorClips(files));
-attachNativeDrop($("#pick-voice-video"), "video", (files) => { if (files[0]) review.setReviewVideo(files[0]); });
+function openDroppedReviewVideo(files, navigate = false) {
+  if (!files[0]) return;
+  if (review.reviewBusy) {
+    showToast("진행 중인 다듬기가 끝난 뒤 영상을 열어 주세요.", "error");
+    return;
+  }
+  showPolishBench("lecture");
+  review.setReviewVideo(files[0]);
+  if (navigate) navigateToView("review");
+  if (files.length > 1) showToast("첫 영상만 열었습니다. 다른 영상은 한 편씩 놓아 주세요.");
+}
+attachNativeDrop($("#view-review"), "video", (files) => openDroppedReviewVideo(files));
+attachNativeDrop($(".nav-item[data-view='review']"), "video", (files) => openDroppedReviewVideo(files, true));
 let currentView = "new";
 let renderedView = "new";
 let navigationVersion = 0;
@@ -1900,6 +1916,7 @@ function navigateToView(view, traversal = false) {
   });
   if (CREATE_VIEWS.includes(view)) lastCreateView = view;
   if (view !== "review") { review.reviewPlayer.pause(); demoPolish.pause(); }
+  if (view !== "results") outputs.pauseAudio();
   if (view === "results") outputs.loadOutputs();
   if (view === "record") recording.opened();
   if (view === "demo") void appDemo.opened();

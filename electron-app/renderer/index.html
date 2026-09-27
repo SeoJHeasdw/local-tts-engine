@@ -380,6 +380,7 @@
                 <span id="review-sibling-position"></span>
                 <button type="button" class="secondary-small" id="review-next-video" aria-label="같은 작업의 다음 영상 열기">▶</button>
               </span>
+              <button type="button" class="secondary-small hidden" id="review-warning-jump" aria-controls="review-warnings">정렬 확인 0곳 ↓</button>
               <button type="button" class="secondary-small drop-target" id="pick-voice-video">영상 선택</button>
             </div>
             <div class="review-head-meta">
@@ -413,8 +414,13 @@
                 </div>
                 <p id="review-wave-note">파형의 시작·끝 손잡이를 끌거나 시간을 입력하세요.</p>
               </section>
+              <section class="review-warnings hidden" id="review-warnings" aria-label="정렬·영상 확인">
+                <div class="findings-head"><h2>정렬·영상 확인 <span id="review-warning-count">0</span></h2></div>
+                <p id="review-warnings-note" role="status">해당 구간을 직접 듣고 화면·자막을 확인하세요.</p>
+                <ul id="review-warning-list"></ul>
+              </section>
               <section class="review-findings" id="review-findings">
-                <div class="findings-head"><h2>확인할 부분 <span id="review-finding-count">0</span></h2><button type="button" class="secondary-small" id="review-findings-expand" aria-expanded="false">모두 펼치기</button></div>
+                <div class="findings-head"><h2>목소리 확인 <span id="review-finding-count">0</span></h2><button type="button" class="secondary-small" id="review-findings-expand" aria-expanded="false">모두 펼치기</button></div>
                 <p id="review-findings-note">자동 검수 결과는 참고용입니다. 아래 목록에 없어도 직접 수정할 수 있습니다.</p><ul id="review-findings-list"></ul>
               </section>
               <section class="polish-diff hidden" id="polish-diff" aria-label="원문과 받아쓰기 대조">
