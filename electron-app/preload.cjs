@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("ttsStudio", {
   renameVideo: (token, name) => ipcRenderer.invoke("studio:rename-video", token, name),
   pickVideos: (multiple) => ipcRenderer.invoke("studio:pick-videos", Boolean(multiple)),
   pickAudio: () => ipcRenderer.invoke("studio:pick-audio"),
+  pickRecaptureTimeline: (videoToken) => ipcRenderer.invoke('studio:pick-recapture-timeline', videoToken),
   reviewWaveform: options => ipcRenderer.invoke('studio:review-waveform',options),
   reviewPreview: options => ipcRenderer.invoke('studio:review-preview',options),
   // FileList 는 이 경계를 건너오지 못한다. 건너편에서는 length 도 없는 빈 객체가

@@ -45,6 +45,10 @@ from .course.alignment import (
     load_or_create_alignment,
     merge_step_record_parts,
 )
+from .course.alignment_audit import audit_timeline, detect_silences, voiced_spans
+from .course.alignment_evidence import measure_speech_evidence
+from .course.alignment_repair import repair_timeline
+from .export_udemy import timeline_from_course_manifest
 from .course.audio import (
     chunk_gap_after,
     gap_after,
@@ -1041,6 +1045,34 @@ def _synthesize_excerpt(
         record["transitionAtMs"] = transition
         record["durationMs"] = transition - visual_start
 
+    # The final PCM is the clock used by captions and capture. Alignment can
+    # contain zero-length/LIS-interpolated words even when token counts agree.
+    # Keep raw words and evidence; timing warnings never trigger new synthesis.
+    alignment_repair: dict[str, Any] = {}
+    try:
+        initial_timeline = timeline_from_course_manifest({
+            "schemaVersion": 9, "durationMs": total_ms, "entries": step_records,
+            "timing": {"startPadMs": START_PAD_MS},
+        }, {}, {})
+        silences = detect_silences(final_track)
+        evidence = measure_speech_evidence(final_track, [span for span in voiced_spans(silences, 0, total_ms)
+            if span["endMs"] - span["startMs"] <= 150])
+        corrected_timeline, alignment_repair = repair_timeline(initial_timeline, silences, speech_evidence=evidence)
+        for record, corrected in zip(step_records, corrected_timeline["entries"]):
+            for field in ("startMs", "endMs", "transitionAtMs", "speechStartMs", "speechEndMs", "alignment", "forcedPauses"):
+                record[field] = corrected[field]
+            record["durationMs"] = record["endMs"] - record["startMs"]
+        alignment_quality = audit_timeline(corrected_timeline, None, silences)
+        alignment_quality["repairWarnings"] = alignment_repair["warnings"]
+        write_json(output_dir / "alignment-repair.json", alignment_repair)
+        write_json(output_dir / "alignment-quality.json", alignment_quality)
+        if alignment_quality["status"] != "passed" or alignment_repair["warnings"]:
+            print("[정렬 검수] 자막·화면 시각에 확인할 부분이 있습니다. 음성은 그대로 보존합니다.")
+    except Exception as error:
+        alignment_quality = {"status": "not-checked", "severity": "warning", "reason": str(error),
+                             "captionAuditStatus": "not-run"}
+        print(f"[정렬 검수 경고] {error}. 음성은 다시 만들지 않습니다.")
+
     # ─── manifest.json 생성 ──────────────────────────────────────────────────
     quality_by_chunk = {item["chunkKey"]: item for item in quality_records}
     selected_entries = [entry for item in selected_chunks for entry in item["chunk"].entries]
@@ -1233,6 +1265,8 @@ def _synthesize_excerpt(
               "changedChunks": sum(bool(item.get("voiceRouting")) for item in chunk_manifest)}}
            if any(item.get("voiceRouting") for item in chunk_manifest) else {}),
         "entries": step_records,
+        "alignmentQuality": alignment_quality,
+        "alignmentRepair": {key: value for key, value in alignment_repair.items() if key != "changes"},
         "software": {
             "python": platform.python_version(),
             "mlxAudio": version("mlx-audio"),

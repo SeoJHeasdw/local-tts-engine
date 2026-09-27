@@ -1,4 +1,5 @@
 import { omissionEvidence, textWords } from "../shared/transcript-evidence.mjs";
+import { alignmentWarnings } from '../shared/quality.mjs';
 export { findingStatus } from '../shared/transcript-evidence.mjs';
 
 export function buildChapterRanges(pages = []) {
@@ -146,6 +147,21 @@ export function completionFindings(report = {}) {
     ...finding, target: unit.target, displayName: unit.displayName || unit.name,
   })));
   return report.voiceFindings || [];
+}
+
+export function completionWarnings(report = {}) {
+  const own = (report.warnings || []).filter(warning => typeof warning === 'string' && warning.trim());
+  if (own.length) return [...new Set(own)];
+  if (report.units?.length) return report.units.flatMap(unit => completionWarnings({ ...unit, units: null })
+    .map(warning => `${unit.displayName || unit.name}: ${warning}`));
+  return alignmentWarnings(report.alignmentQuality);
+}
+
+export function renderCompletionWarnings(element, report) {
+  const warnings = completionWarnings(report);
+  element.textContent = warnings.join('\n');
+  element.classList.toggle('hidden', !warnings.length);
+  return warnings.length;
 }
 
 export function completionSummary(report, durationLabel) {

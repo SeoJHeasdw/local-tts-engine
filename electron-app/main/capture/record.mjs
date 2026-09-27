@@ -47,6 +47,7 @@ export async function captureVideo({
   maxDurationMs = null,
   noCache = false,
   quality = "standard",
+  audioFile = null,
 }) {
   const profile = videoQuality(quality);
   if (!siteDir && !url) throw new Error("촬영할 화면이 없습니다. --site-dir 또는 --url이 필요합니다.");
@@ -64,9 +65,9 @@ export async function captureVideo({
   // 영상과 오디오를 한 번에 인코딩하므로 트랙을 촬영 전에 확인한다.
   // 길이가 어긋난 채로 수십 분을 촬영하고 나서야 실패하는 일이 없어진다.
   const importedM4a = path.join(outDir, "audio/track.m4a");
-  const trackFile = timeline.provider?.provider === "qwen3-local" && fs.existsSync(importedM4a)
+  const trackFile = audioFile || (timeline.provider?.provider === "qwen3-local" && fs.existsSync(importedM4a)
     ? importedM4a
-    : path.join(outDir, "audio/track.wav");
+    : path.join(outDir, "audio/track.wav"));
   const trackDurationMs = await durationMs(trackFile);
   if (trackDurationMs + 100 < captureDurationMs) {
     throw new Error(`오디오가 촬영 범위보다 짧습니다: audio=${trackDurationMs}ms, capture=${captureDurationMs}ms`);

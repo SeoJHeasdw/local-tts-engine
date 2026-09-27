@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 
-import { etaLabel, unitLabel, completionFindings, completionSummary } from "../../electron-app/renderer/view-utils.mjs";
+import { etaLabel, unitLabel, completionFindings, completionSummary, renderCompletionWarnings } from "../../electron-app/renderer/view-utils.mjs";
 import { createJobPace } from "../../electron-app/renderer/job-pace.mjs";
 
 const source = await fs.readFile(new URL("../../electron-app/renderer/app.js", import.meta.url), "utf8");
@@ -30,7 +30,7 @@ function fixture(cancel = async () => false) {
     refreshResumable() {},
     formatDuration: ms => `${ms}ms`, suggestedName: () => 'next', updateProductionBrief() {},
     updateStages: stage => { $("#current-stage").textContent = stage; },
-    createJobPace, etaLabel, unitLabel, completionFindings, completionSummary, setInterval: () => 0, Date,
+    createJobPace, etaLabel, unitLabel, completionFindings, completionSummary, renderCompletionWarnings, setInterval: () => 0, Date,
     document: { createElement: element },
   });
   vm.runInContext('let creationState="idle", latestTarget=null;\n'

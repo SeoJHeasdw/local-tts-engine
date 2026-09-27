@@ -30,6 +30,13 @@ if (maxDurationSeconds !== null && (!Number.isFinite(maxDurationSeconds) || maxD
 }
 
 const timeline = JSON.parse(fs.readFileSync(timelineFile, "utf8"));
+const suppliedCaptions = flags.captions
+  ? JSON.parse(fs.readFileSync(requireFlag(flags, 'captions'), 'utf8')) : null;
+if (suppliedCaptions && (!Array.isArray(suppliedCaptions) || suppliedCaptions.some(cue =>
+  !Number.isFinite(cue.startMs) || !Number.isFinite(cue.endMs) || cue.startMs < 0
+  || cue.endMs <= cue.startMs || cue.endMs > timeline.totalMs + 50 || typeof cue.text !== 'string'))) {
+  throw new Error('재사용할 자막의 시간 범위가 올바르지 않습니다.');
+}
 
 if (checkSource) {
   const deckRoot = path.resolve(requireFlag(flags, "deck-root"));
@@ -41,7 +48,8 @@ if (checkSource) {
 // 자막 합성 촬영은 현재 타임라인에서 cue를 다시 만들어 오래된 자막을 차단한다.
 const file = await captureVideo({
   timeline,
-  captions: burnCaptions ? buildCaptionCues(timeline) : [],
+  captions: burnCaptions ? (suppliedCaptions ?? buildCaptionCues(timeline)) : [],
+  audioFile: flags['audio-file'] ? path.resolve(requireFlag(flags, 'audio-file')) : null,
   outDir,
   siteDir,
   url,

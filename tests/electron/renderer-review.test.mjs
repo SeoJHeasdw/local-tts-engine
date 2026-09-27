@@ -49,6 +49,79 @@ function fixture() {
   return {context,$,modes,calls,saved,page1,page2,findings};
 }
 
+test('화면 재촬영은 현재 영상·선택 화질만 보내고 저장 전 음성 교체가 있으면 막는다', async () => {
+  const { context, $, calls } = fixture();
+  context.testReview.setReviewVideo({ token: 'latest', name: 'latest.mp4', pages: [],
+    canRecapture: true, recaptureQuality: 'ultra', burnCaptions: true });
+  assert.equal($('#review-recapture-quality').value, 'ultra');
+  assert.equal($('#review-recapture-captions').checked, true);
+  assert.equal($('#review-recapture').disabled, false);
+  await $('#review-recapture').listeners.click();
+  assert.equal(calls[0].operation, 'screen-recapture');
+  assert.equal(calls[0].videoToken, 'latest');
+  assert.equal(calls[0].videoQuality, 'ultra');
+  assert.equal(calls[0].burnCaptions, true);
+  assert.equal(calls[0].audioSource, undefined);
+  context.testReview.pending().set(1, { startPage: 1, label: '새 후보' });
+  context.testReview.renderPendingFixes();
+  assert.equal($('#review-recapture').disabled, true);
+  assert.match($('#review-recapture-note').textContent, /저장하고 수정본/);
+  await $('#review-recapture').listeners.click();
+  assert.equal(calls.length, 1);
+});
+
+test('페이지 정보 없는 영상은 화면 재촬영을 시작할 수 없다', async () => {
+  const { context, $, calls } = fixture();
+  context.testReview.setReviewVideo({ token: 'recording', name: 'screen.mp4', pages: [], canRecapture: false });
+  assert.equal($('#review-recapture').disabled, true);
+  await $('#review-recapture').listeners.click();
+  assert.equal(calls.length, 0);
+});
+
+test('교정 타임라인 선택은 token으로 재촬영에 연결되고 영상 변경 때 해제된다', async () => {
+  const { context, $, calls } = fixture();
+  context.api.pickRecaptureTimeline = async token => {
+    assert.equal(token, 'latest');
+    return { token: 'correction', name: '교정 L01 / timeline.json' };
+  };
+  context.testReview.setReviewVideo({ token: 'latest', name: 'latest.mp4', pages: [], canRecapture: true });
+  await $('#review-recapture-timeline').listeners.click();
+  assert.equal($('#review-recapture-timeline-name').textContent, '교정 L01 / timeline.json');
+  await $('#review-recapture').listeners.click();
+  assert.equal(calls[0].correctedTimelineToken, 'correction');
+  assert.equal(calls[0].correctedTimeline, undefined);
+  $('#review-recapture-timeline-clear').listeners.click();
+  await $('#review-recapture').listeners.click();
+  assert.equal(calls[1].correctedTimelineToken, undefined);
+  await $('#review-recapture-timeline').listeners.click();
+  context.testReview.setReviewVideo({ token: 'other', name: 'other.mp4', pages: [], canRecapture: true });
+  await $('#review-recapture').listeners.click();
+  assert.equal(calls[2].correctedTimelineToken, undefined);
+});
+
+test('교정 타임라인 선택 실패·취소는 이전 선택을 유지하고 지연 응답은 다른 영상에 붙이지 않는다', async () => {
+  const { context, $, calls } = fixture();
+  context.testReview.setReviewVideo({ token: 'latest', name: 'latest.mp4', pages: [], canRecapture: true });
+  context.api.pickRecaptureTimeline = async () => ({ token: 'good', name: '교정본' });
+  await $('#review-recapture-timeline').listeners.click();
+  context.api.pickRecaptureTimeline = async () => { throw new Error('기록 없음'); };
+  await $('#review-recapture-timeline').listeners.click();
+  assert.equal($('#review-recapture').disabled, false);
+  context.api.pickRecaptureTimeline = async () => null;
+  await $('#review-recapture-timeline').listeners.click();
+  await $('#review-recapture').listeners.click();
+  assert.equal(calls[0].correctedTimelineToken, 'good');
+  let finish;
+  context.api.pickRecaptureTimeline = () => new Promise(resolve => { finish = resolve; });
+  const picking = $('#review-recapture-timeline').listeners.click();
+  assert.equal($('#review-recapture').disabled, true);
+  context.testReview.setReviewVideo({ token: 'other', name: 'other.mp4', pages: [], canRecapture: true });
+  finish({ token: 'stale', name: '오래된 응답' });
+  await picking;
+  await $('#review-recapture').listeners.click();
+  assert.equal(calls[1].correctedTimelineToken, undefined);
+});
+
 // 다듬기에서 가장 많이 누르는 것은 확인이다. 예전에는 확인 → 목록에서 다음 줄
 // 찾기 → 펼치기 → 듣기가 네 걸음이었다. 확인 한 번으로 다음 자리가 재생되면
 // 남는 것은 듣고 다시 Enter를 누르는 일뿐이다.

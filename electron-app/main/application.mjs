@@ -11,6 +11,7 @@ import { createEditingComposeService } from "./editing/compose.mjs";
 import { createEditingPagesService } from "./editing/pages.mjs";
 import { createEditingRegionsService } from "./editing/regions.mjs";
 import { createEditingService } from "./editing.mjs";
+import { createRecaptureService } from "./editing/recapture.mjs";
 import { createOutputsService } from "./outputs.mjs";
 import { createIpcService } from "./ipc.mjs";
 import { createAttentionService } from "./attention.mjs";
@@ -85,9 +86,12 @@ export function createStudio({
   const { runMuteEdit, runRegionReplaceEdit } = createEditingRegionsService({
     chosenRecord, inspectMedia, requireRuntimeTool, runProcess, validateEditVideo,
   });
+  const { runScreenRecapture } = createRecaptureService({
+    chosenRecord, emit, inspectMedia, requireRuntimeTool, runProcess, state, validateEditVideo,
+  });
   const { runVideoEdit } = createEditingService({
     emit, runComposeEdit, runMuteEdit, runPageVoicePatchBatch,
-    runRegionReplaceEdit, runVoiceBatchEdit, runVoiceCandidates, state,
+    runRegionReplaceEdit, runScreenRecapture, runVoiceBatchEdit, runVoiceCandidates, state,
   });
   const { registerIpc, cleanupReviewPreviews } = createIpcService({
     applyVoiceSettings, assertRuntime, chosenRecord, clearActiveJob,

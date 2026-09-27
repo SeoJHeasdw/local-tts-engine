@@ -7,6 +7,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   let reviewSelection = null;
   let reviewMode = 'regenerate';
   let regionAudio = null;
+  let recaptureTimeline = null;
+  let recaptureTimelinePicking = false;
   let reviewStopAt = null;
   let reviewRequest = 0;
   let reviewBusy = false;
@@ -123,6 +125,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
 
   function renderPendingFixes() {
     const fixes = pendingFixList();
+    updateRecaptureAction();
     paintRailFlags();
     renderReviewFacts();
     const badge = $('#polish-count');
@@ -755,6 +758,9 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
 
   function setReviewVideo(video, target = null) {
     if (!video || reviewBusy) return;
+    recaptureTimeline = null;
+    $('#review-recapture-quality').value = video.recaptureQuality || 'high';
+    $('#review-recapture-captions').checked = Boolean(video.burnCaptions);
     $$('audio,video').forEach(media => media.pause());
     mediaState.voiceVideo = video; reviewTarget = target; reviewSelection = null; reviewStopAt = null;
     reviewMode = 'regenerate';
@@ -951,6 +957,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     updateVoicePageMeta(); updateReviewAction();
   }
   function updateReviewAction() {
+    updateRecaptureAction();
     // 작업이 도는 동안에는 승인·편 이동도 함께 잠근다.
     renderApproval();
     renderSiblingNavigation();
@@ -1064,6 +1071,51 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
   $('#review-wave-track').addEventListener('click',event=>{if(event.target.closest?.('.wave-handle'))return;const rect=$('#review-wave-track').getBoundingClientRect();seekReview(timeAtFraction((event.clientX-rect.left)/rect.width,reviewWaveWindow));});
   reviewPlayer.addEventListener('play',()=>{ $('#review-preview-player').pause();$('#region-audio-preview').pause(); });
   $('#review-form').addEventListener('submit', event => { event.preventDefault(); return startReviewRepair(); });
+
+  function updateRecaptureAction() {
+    const available = mediaState.voiceVideo?.canRecapture;
+    $('#review-recapture').disabled = !available || reviewBusy || recaptureTimelinePicking || pendingFixes.size > 0;
+    $('#review-recapture-quality').disabled = reviewBusy;
+    $('#review-recapture-captions').disabled = reviewBusy;
+    $('#review-recapture-timeline').disabled = !available || reviewBusy || recaptureTimelinePicking || pendingFixes.size > 0;
+    $('#review-recapture-timeline-clear').disabled = !recaptureTimeline || reviewBusy || recaptureTimelinePicking;
+    $('#review-recapture-timeline-name').textContent = recaptureTimeline?.name || '현재 영상의 자막·전환 시각 사용';
+    $('#review-recapture-note').textContent = pendingFixes.size
+      ? '교체 대기 중인 목소리를 저장하고 수정본을 연 뒤 재촬영하세요.'
+      : available ? '대본·페이지 구성이 달라졌거나 화면 편집점이 음성과 맞지 않으면 촬영 전에 알려드립니다.'
+        : '페이지 타임라인이 있는 강의 영상을 선택하세요.';
+  }
+
+  $('#review-recapture-timeline').addEventListener('click', async () => {
+    if (!mediaState.voiceVideo?.canRecapture || reviewBusy || recaptureTimelinePicking || pendingFixes.size) return;
+    const videoToken = mediaState.voiceVideo.token;
+    recaptureTimelinePicking = true;
+    updateRecaptureAction();
+    try {
+      const selected = await api.pickRecaptureTimeline(videoToken);
+      if (selected && mediaState.voiceVideo?.token === videoToken) recaptureTimeline = selected;
+    } catch (error) { showToast(error.message, 'error'); }
+    finally { recaptureTimelinePicking = false; updateRecaptureAction(); }
+  });
+  $('#review-recapture-timeline-clear').addEventListener('click', () => {
+    if (reviewBusy || recaptureTimelinePicking) return;
+    recaptureTimeline = null;
+    updateRecaptureAction();
+  });
+
+  $('#review-recapture').addEventListener('click', async () => {
+    if (!mediaState.voiceVideo?.canRecapture || reviewBusy || recaptureTimelinePicking || pendingFixes.size) return;
+    const payload = { operation: 'screen-recapture', name: `recapture-${Date.now()}`,
+      videoToken: mediaState.voiceVideo.token,
+      correctedTimelineToken: recaptureTimeline?.token,
+      videoQuality: $('#review-recapture-quality').value || 'high',
+      burnCaptions: $('#review-recapture-captions').checked };
+    reviewResumeMs = Math.round(reviewPlayer.currentTime * 1000);
+    reviewPlayer.pause();
+    $('#review-saved').classList.add('hidden');
+    try { setEditBusy(true); await api.startEdit(payload); }
+    catch (error) { setEditBusy(false); showToast(error.message, 'error'); }
+  });
 
   async function startReviewRepair() {
     if (!mediaState.voiceVideo || reviewBusy) return;

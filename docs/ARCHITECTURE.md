@@ -26,6 +26,7 @@
 | `electron-app/shared/` | 옵션·이름·타임라인·검수·시간 계산·촬영 규격·자막 cue·데모 시나리오와 편집 계획 |
 | `src/local_tts_engine/course_pilot.py` | 강의 생성 CLI 조립 |
 | `src/local_tts_engine/course/` | 대본 입력·청킹·오디오·정렬·직렬화 |
+| `src/local_tts_engine/realign_course.py` | 완성 제작본의 음성 보존 재정렬·전후 비교, 읽기 전용 정렬 검사 |
 | `src/local_tts_engine/text_candidate.py` | 자유 텍스트·앱 데모의 청크 합성·후보 검수·최종 WAV 기록 |
 | `src/local_tts_engine/course_catalog.py` | 생성 모델을 로드하지 않는 목록 CLI |
 | `src/local_tts_engine/`의 나머지 모듈 | 발음·독립 검수·텍스트 후보·내보내기·학습 |
@@ -303,9 +304,53 @@ CDP 왕복이 4K에서 한 번에 200ms라 커서가 화면을 기어간다. 실
 
 ## 타임라인과 편집
 
+`editing/recapture.mjs`의 `screen-recapture`는 선택한 강의 영상 한 편에서 실제 AAC
+트랙을 스트림 복사한다. 원래 manifest의 음성으로 돌아가지 않고 현재 수정본의
+타임라인·자막을 기본으로 사용하며 발음 검수·확인 키를 보존한다. 교정 타임라인을
+선택한 경우에는 음성을 유지하고 자막·화면 전환 시각을 교정본에서 가져온다.
+합성·정렬 모델은 필요하지 않다.
+최신 덱을 새 `.production-input`에 고정한 다음 `workers/recapture-timeline.mjs`가
+`capture/deck-source.mjs`를 통해 덱의 대본·ID·순서와 실제 편집점 검사를 모두 부른다.
+재촬영의 호환성은 화면 지문 대신 `slideId`·`step`·`chapter`·`slideNumber`·`sourceText`와
+스텝 순서의 1:1 일치로 확인한다. 덱의 `checkCaptureContract`·`inspectProductionTimeline`을
+호출하고, 선택 상태의 개수·순서 어댑터도 이 bridge에만 둔다. 덱 소스는 읽기만 한다.
+통과하면 `sourceContract`를 새 화면 판본으로 연결하고 음성 판본은
+`voiceSourceContract`에 남긴다. 일반 촬영의 판본 검사는 그대로 수행한다.
+촬영 캐시는 우회하며 선택한 화질로 한 번 재시도한다. 사용자 중지는 재시도하지 않는다.
+
+교정본은 파일 선택창이 발급한 영상별 token으로만 지정한다. `realignment`의
+원본 타임라인 경로·해시·음성 경로·해시·전체 길이를 확인하고, 선택 영상과 원본의
+대본·시간 배치, 교정본과 원본의 WAV 바이트, 선택 영상과 원본·교정본의 AAC 디코딩
+샘플을 대조한다. 이름이나 길이만 같은 다른 수정본은 받아들이지 않는다.
+
+현재 음성은 `--audio-file`, 현재 자막은 `--captions`로 촬영 작업자에 명시한다.
+이 인자가 없는 기존 CLI 호출은 기존 파일 선택·자막 계산을 유지한다. 새 결과 폴더에만
+저장하고 재촬영 전후 디코딩 샘플 해시·원본 파일 해시·촬영 해시·규격을 검사한다.
+보고서의 `recapture`는 원본 경로와 음성 보존 근거, 선택한 교정본 경로·해시를 남긴다.
+`timingPreserved`는 기존 시각 사용 여부이며, `voiceReview`는 이전 청취 기록이다.
+교정본의 `alignment-quality.json`과 `alignmentQuality`·경고도 새 결과에 이어 둔다.
+새 영상의 `review.status`는 `pending`이며 사용자가 다시 시청한다. 입력 스냅샷은
+종료 시 정리하고 실패 보고서·기존 음성·영상은 보존한다.
+
 `sourceText`/`source_text`는 자막 원문, `ttsText`/`tts_text`는 발음문이다. 생성 후
-실제 오디오와 ForcedAligner 단어 시각으로 화면·자막을 배치한다. `[Ns]` 단독 줄은
+최종 WAV의 파형으로 ForcedAligner 단어 시각을 교정해 화면·자막을 배치한다. `[Ns]` 단독 줄은
 0.1~10초 무음이며 자막에 노출하지 않는다. 읽을 문장 없는 마커는 입력 오류다.
+
+정렬 교정은 `course/alignment_repair.py`, 파형 근거는 `alignment_evidence.py`,
+읽기 전용 관문은 `alignment_audit.py`가 맡는다. 새 제작은 최종 WAV 조립 뒤 교정하고,
+export 후 실제 자막과 함께 관문을 다시 검사한다. 새 manifest와 export 타임라인은
+`alignmentRepair`를 보존하며, 엔트리의 `alignment.rawWords`는 원래 시각,
+`alignment.words`는 교정 시각이다. `alignment.correction.interpolatedSpans`는
+음절 가중치로 보간한 범위, `wordTimingHumanApproved`는 사람의 단어 시각 승인 여부다.
+교정 상세는 `alignment-repair.json`, 관문은 `alignment-quality.json`과
+`validation-report.json.alignmentQuality`에 둔다. 경고는 완료 UI와 챕터별 결과에도 전달한다.
+
+기존 제작본 재정렬은 `realign_course`가 같은 교정·검사 모듈을 사용한다. 새 폴더에
+음성을 그대로 복사하고 대본 계약·스텝 순서·전체 길이·원본 해시를 검증한다.
+`comparison-report.json`의 `before`·`after`는 원래 무음 탐지 기준의 측정이며,
+`acousticAwareQuality`는 미확정 약한 소리를 제외한다고 가정한 별도 참고값이다.
+후자를 원래 측정이나 청취 승인으로 대체하지 않는다. 측정 한계와 경고 해석은
+[QUALITY](QUALITY.md#자막화면-정렬-검수)에 둔다.
 
 페이지 교체는 선택 음성과 그 길이 차이만 반영한다. 여러 교체는 뒤에서부터 적용하고
 다른 페이지의 검수·확인 키·자막을 보존한다. 교체된 판독은 다시 청취할 대상으로 표시한다.

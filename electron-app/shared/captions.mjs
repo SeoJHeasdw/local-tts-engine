@@ -150,10 +150,12 @@ export function buildCaptionCues(timeline, { maxCharsPerCue, maxCharsPerLine } =
               ),
             );
         const nextWord = words[wordEnd];
-        const startMs = Math.max(0, words[wordStart].startMs - 60);
+        const corrected = Boolean(entry.alignment?.correction);
+        const startMs = Math.max(0, corrected ? Number(entry.startMs) || 0 : 0, words[wordStart].startMs - 60);
         const endMs = nextWord
           ? Math.max(startMs + 120, nextWord.startMs - 40)
-          : Math.max(startMs + 120, words[wordEnd - 1].endMs + 100);
+          : Math.min(timeline.totalMs, Math.max(startMs + 120, words[wordEnd - 1].endMs + 100,
+              corrected ? Number(entry.endMs) || 0 : 0));
         cues.push({
           startMs: Math.round(startMs),
           endMs: Math.round(endMs),

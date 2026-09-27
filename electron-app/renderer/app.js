@@ -7,7 +7,7 @@ import { createDemoPolishController } from "./controllers/demo-polish.mjs";
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
-import { CREATE_VIEWS, buildChapterRanges, createViewHistory, completionFindings, completionSummary, etaLabel, shortPath, summarizePageRange, summarizeVoiceFindings, jobActivity, jobView, unitLabel, voiceFindingReason } from "./view-utils.mjs";
+import { CREATE_VIEWS, buildChapterRanges, createViewHistory, completionFindings, completionSummary, renderCompletionWarnings, etaLabel, shortPath, summarizePageRange, summarizeVoiceFindings, jobActivity, jobView, unitLabel, voiceFindingReason } from "./view-utils.mjs";
 import { createJobPace } from "./job-pace.mjs";
 
 const api = window.ttsStudio;
@@ -659,6 +659,7 @@ function openJobDialog(title) {
   $("#edit-dialog-title").textContent = title;
   $("#edit-dialog-spinner").classList.remove("hidden");
   $("#edit-dialog-success").classList.add("hidden");
+  $('#edit-complete-warnings').classList.add('hidden');
   $("#edit-dialog-error").classList.add("hidden");
   $("#candidate-gallery").classList.add("hidden");
   $("#batch-progress").classList.add("hidden");
@@ -740,11 +741,13 @@ function handleEditEvent(event) {
         ? "목소리 후보 생성 중"
         : event.options.operation === "voice"
           ? "선택한 목소리로 교체 중"
-          : "영상 편집 중",
+          : event.options.operation === 'screen-recapture' ? '목소리를 유지하고 화면 재촬영 중' : "영상 편집 중",
     );
     setEditBusy(true);
   } else if (event.type === "stage") {
-    $("#edit-running-label").textContent = event.stage === "voice" ? "새 목소리 생성 중" : event.stage === "verify" ? "결과 검증 중" : "영상 처리 중";
+    $("#edit-running-label").textContent = ({ voice: '새 목소리 생성 중', verify: '결과 검증 중',
+      snapshot: '최신 강의 화면 준비 중', capture: '음성 타이밍에 맞춰 화면 촬영 중', export: '음성·타임라인 연결 중',
+    })[event.stage] || '영상 처리 중';
   } else if (event.type === "log") {
     appendEditLog(event.text);
   } else if (event.type === "voice-item-complete") {
@@ -791,7 +794,7 @@ function handleEditEvent(event) {
     setIconStatus("#edit-top-status", "영상 편집과 검증이 완료됐습니다", "complete");
     mediaState.latestEditTarget = event.report.target;
     if (event.report.operation === 'voice-pages') { review.pendingFixes.clear(); review.renderPendingFixes(); }
-    if (['mute-region', 'replace-region', 'voice-page', 'voice-batch', 'voice-pages'].includes(event.report.operation)) {
+    if (['mute-region', 'replace-region', 'voice-page', 'voice-batch', 'voice-pages', 'screen-recapture'].includes(event.report.operation)) {
       $('#review-saved').classList.remove('hidden');
       $('#review-candidates-host').classList.add('hidden');
     }
@@ -799,11 +802,13 @@ function handleEditEvent(event) {
     $("#edit-dialog-success").classList.remove("hidden");
     const count = event.report.outputs?.length || 1;
     $("#edit-complete-summary").textContent = `${count}개 결과 · 자동 검증 ${event.report.summary.passed}개 통과`;
+    renderCompletionWarnings($('#edit-complete-warnings'), event.report);
+    renderCompletionWarnings($('#review-saved-warnings'), event.report);
     $("#cancel-edit-button").classList.add("hidden");
     $("#open-edit-result").classList.remove("hidden");
     $("#reveal-edit-result").classList.remove("hidden");
     $("#close-edit-dialog").classList.remove("hidden");
-    if (['mute-region', 'replace-region', 'voice-page', 'voice-batch', 'voice-pages'].includes(event.report.operation)) {
+    if (['mute-region', 'replace-region', 'voice-page', 'voice-batch', 'voice-pages', 'screen-recapture'].includes(event.report.operation)) {
       $('#edit-job-dialog').close();
       $('#review-saved').scrollIntoView({behavior:'smooth',block:'nearest'});
     }
@@ -1313,7 +1318,8 @@ function renderJobEvent(event) {
     const findings = completionFindings(report);
     const unitCount = report.units?.length || 1;
     $("#complete-summary").textContent = completionSummary(report, formatDuration(report.durationMs));
-    if (findings.length && !failedCount) setJobState('제작 완료 · 확인 필요', 'idle');
+    const alignmentWarningCount = renderCompletionWarnings($('#complete-warnings'), report);
+    if ((findings.length || alignmentWarningCount) && !failedCount) setJobState('제작 완료 · 확인 필요', 'idle');
     $("#complete-panel .complete-actions").classList.toggle('hidden', !report.target);
     $("#open-latest").textContent = unitCount > 1 ? "첫 영상 열기" : "영상 열기";
     review.renderCompleteVoiceFindings(findings, report.videoPath ? report.target : null);
@@ -1830,6 +1836,7 @@ const CREATE_STARTERS = {
   voice: ["#start-text-voices"],
   record: ["#record-start"],
   demo: ["#demo-record-start"],
+  review: ["#review-recapture"],
 };
 const RUNNING_NOTE = {
   create: "강의 영상을 만드는 중입니다",

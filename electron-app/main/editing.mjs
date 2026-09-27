@@ -9,6 +9,7 @@ export function createEditingService({
   runMuteEdit,
   runPageVoicePatchBatch,
   runRegionReplaceEdit,
+  runScreenRecapture,
   runVoiceBatchEdit,
   runVoiceCandidates,
   state,
@@ -21,7 +22,13 @@ export function createEditingService({
     if (existing?.summary?.ok || await fs.stat(path.join(outputDir, `${options.name}.mp4`)).catch(() => null)) {
       throw new Error('같은 이름의 편집 결과가 있습니다. 기존 영상을 보존하도록 새 결과 이름을 사용해 주세요.');
     }
-    await fs.mkdir(outputDir, { recursive: true });
+    if (options.operation === 'screen-recapture') {
+      await fs.mkdir(path.dirname(outputDir), { recursive: true });
+      await fs.mkdir(outputDir).catch(error => {
+        if (error.code === 'EEXIST') throw new Error('같은 이름의 결과 폴더가 있습니다. 재촬영 결과는 새 이름으로 저장해 주세요.');
+        throw error;
+      });
+    } else await fs.mkdir(outputDir, { recursive: true });
     if (options.operation === "voice-candidates") {
       const candidates = await runVoiceCandidates(options, outputDir);
       if (state.activeJob !== job) return;
@@ -31,7 +38,8 @@ export function createEditingService({
       return;
     }
     let report;
-    if (options.operation === "mute-region") report = await runMuteEdit(options, outputDir);
+    if (options.operation === "screen-recapture") report = await runScreenRecapture(options, outputDir);
+    else if (options.operation === "mute-region") report = await runMuteEdit(options, outputDir);
     else if (options.operation === "replace-region") report = await runRegionReplaceEdit(options, outputDir);
     else if (options.operation === "voice") report = await runVoiceBatchEdit(options, outputDir);
     else if (options.operation === "voice-pages") report = await runPageVoicePatchBatch(options, outputDir);

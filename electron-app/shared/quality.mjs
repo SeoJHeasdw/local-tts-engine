@@ -8,6 +8,30 @@ export function summarizeChecks(checks) {
   };
 }
 
+// 시간 정렬 경고는 파일 무결성 실패나 발음 재생성 판정과 분리한다.
+export function alignmentWarnings(quality) {
+  if (!quality || quality.status === 'passed') return [];
+  if (['not-checked', 'failed', 'error'].includes(quality.status)) {
+    return [`자막·화면 정렬 검사를 완료하지 못했습니다${quality.error ? `: ${quality.error}` : '.'}`];
+  }
+  const summary = quality.summary || {};
+  const warnings = [
+    [summary.alignmentEndBeyond250Ms, '말 끝과 정렬 끝이 0.25초 넘게 어긋난 스텝'],
+    [summary.transitions, '목소리 위에 걸린 화면 전환'],
+    [summary.earlyCaptionsOver20Ms ?? summary.earlyCaptions, '말보다 먼저 사라진 자막'],
+    [summary.collapsedWords, '지나치게 짧게 정렬된 단어'],
+    [summary.implausibleWords, '음절 수에 비해 지나치게 짧게 정렬된 단어'],
+    [summary.missingCaptionSteps, '자막이 확인되지 않은 스텝'],
+  ].filter(([count]) => Number(count) > 0)
+    .map(([count, label]) => `자막·화면 정렬 확인: ${label} ${count}곳`);
+  if (!warnings.length && (quality.status === 'warning' || Number(quality.warningCount) > 0)) {
+    warnings.push(Number(quality.warningCount) > 0
+      ? `자막·화면 정렬 확인: 경고 ${quality.warningCount}곳`
+      : '자막·화면 정렬에 확인할 경고가 있습니다.');
+  }
+  return warnings;
+}
+
 export function voiceFindingSeverity(chunk = {}) {
   const recorded = String(chunk.severity || "");
   if (recorded) return recorded;
@@ -147,11 +171,15 @@ export function combineChapterReports(options, reports, failedUnits = []) {
       clean: reports.every(report => report.voiceQuality.clean),
     } : null,
     voiceFindings, checks, summary: summarizeChecks(checks),
+    alignmentQuality: reports.length === 1 ? reports[0].alignmentQuality ?? null : null,
+    warnings: reports.flatMap(report => (report.warnings?.length ? report.warnings : alignmentWarnings(report.alignmentQuality))
+      .map(warning => reports.length > 1 ? `${report.displayName || report.name}: ${warning}` : warning)),
     failedUnits, completedUnits: reports.length, totalUnits: reports.length + failedUnits.length,
     units: reports.map(report => ({name: report.name, displayName: report.displayName,
       durationMs: report.durationMs, videoPath: report.videoPath || null,
       audioPath: report.audioPath || null, target: report.target, summary: report.summary,
-      voiceQuality: report.voiceQuality, voiceFindings: report.voiceFindings || []})),
+      voiceQuality: report.voiceQuality, voiceFindings: report.voiceFindings || [],
+      alignmentQuality: report.alignmentQuality ?? null, warnings: report.warnings || []})),
   };
 }
 

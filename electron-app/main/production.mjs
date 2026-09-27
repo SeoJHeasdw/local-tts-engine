@@ -6,6 +6,7 @@ import { ACTIVE_JOB_PATH, ADAPTER, ROOT, dateFolder, runtimePaths } from "./path
 import { combineChapterReports, pendingUnits, mapWithConcurrency, presetFromManifest, providerForOptions, summarizeChecks, voiceQualityFindings } from "../shared/index.mjs";
 import { fileSha256, findVideo, publishVideo, safeStat, writeReport } from "./files.mjs";
 import { assertCurrentCourseManifest } from "./course-run-state.mjs";
+import { alignmentWarnings } from "../shared/quality.mjs";
 
 export function createProductionService({
   emit,
@@ -82,6 +83,21 @@ export function createProductionService({
       },
     } : null;
     const voiceFindings = voiceQualityFindings(manifest);
+    // Timing review is separate from file/integrity success. Old results do not
+    // have this optional report; audio-only output keeps the manifest's review.
+    let alignmentQuality = manifest.alignmentQuality || null;
+    if (options.deliverable !== 'audio') {
+      try {
+        alignmentQuality = JSON.parse(await fs.readFile(path.join(renderDir, 'alignment-quality.json'), 'utf8'));
+      } catch (error) {
+        if (error.code !== 'ENOENT') alignmentQuality = {
+          status: 'not-checked', severity: 'warning', blocksAudioGeneration: false,
+          error: `정렬 검사 결과를 읽지 못했습니다: ${error.message}`,
+        };
+      }
+    }
+    const warnings = alignmentWarnings(alignmentQuality);
+    for (const warning of warnings) emit({ type: 'log', stream: 'stderr', text: `${warning}\n` });
     const audioProbe = await ffprobe(manifest.audioPath);
     const audioDurationMs = Math.round(Number(audioProbe.format?.duration || 0) * 1000);
     const checks = [
@@ -162,6 +178,8 @@ export function createProductionService({
       voiceQuality,
       voiceFinalTrack,
       voiceFindings,
+      alignmentQuality,
+      warnings,
       needsReview: [...(voiceQuality?.needsReview || []), ...(voiceFinalTrack?.transcript?.needsReview || [])]
         .filter((item, index, all) => all.findIndex((other) => other.chapter === item.chapter
           && other.slideId === item.slideId && other.slideNumber === item.slideNumber) === index),
@@ -220,6 +238,27 @@ export function createProductionService({
         "--timeline", path.join(renderDir, "timeline.json"),
         "--out-dir", renderDir,
       ]);
+      const alignmentReport = path.join(renderDir, 'alignment-quality.json');
+      await fs.rm(alignmentReport, { force: true });
+      try {
+        await runProcess('verify', requireRuntimeTool('basePython', '강의 도구 Python'), [
+          '-m', 'local_tts_engine.realign_course', '--audit-only',
+          '--timeline', path.join(renderDir, 'timeline.json'),
+          '--audio', path.join(renderDir, 'audio', 'track.wav'),
+          '--captions', path.join(renderDir, 'captions.json'),
+          '--report', alignmentReport,
+        ]);
+        // A successful exit without a report is unverified, not a timing pass.
+        await fs.readFile(alignmentReport, 'utf8');
+      } catch (error) {
+        if (job.cancelled || state.activeJob !== job) throw error;
+        // An unavailable audit must remain visible, but never triggers TTS
+        // regeneration or discards an otherwise valid voice/video result.
+        await fs.writeFile(alignmentReport, `${JSON.stringify({
+          schemaVersion: 1, status: 'not-checked', severity: 'warning',
+          blocksAudioGeneration: false, error: error.message || String(error),
+        }, null, 2)}\n`, 'utf8');
+      }
     }
 
     if (options.deliverable === "video") {

@@ -184,6 +184,7 @@
               <div class="complete-icon">✓</div>
               <h3 id="complete-title">제작과 검증이 끝났습니다</h3>
               <p id="complete-summary"></p>
+              <p class="record-done-warnings hidden" id="complete-warnings" role="status"></p>
               <div class="unit-failures hidden" id="complete-failures"></div>
               <section class="voice-quality-panel hidden" id="voice-quality-panel" data-tone="warning" aria-label="목소리 확인 구간">
                 <div><strong id="voice-quality-title"></strong><small class="repair-hint">구간을 먼저 듣고, 필요하면 해당 페이지를 교체하세요</small></div>
@@ -388,7 +389,7 @@
             </div>
           </header>
           <section class="card hidden" id="review-candidates-host"><h2>원본과 비교하고 후보 선택</h2><p id="review-candidate-scope"></p><div id="review-candidate-actions"><button type="button" class="secondary-small" id="review-candidate-original">이 후보의 원본 페이지 듣기</button></div></section>
-          <section class="card hidden" id="review-saved"><h2>수정본이 저장됐습니다</h2><p>새 버전에서 수정한 부분을 확인한 뒤 이어서 검수하세요.</p><button type="button" class="primary-small" id="review-continue">수정본에서 이어서 검수</button></section>
+          <section class="card hidden" id="review-saved"><h2>수정본이 저장됐습니다</h2><p>새 버전에서 수정한 부분을 확인한 뒤 이어서 검수하세요.</p><p class="record-done-warnings hidden" id="review-saved-warnings" role="status"></p><button type="button" class="primary-small" id="review-continue">수정본에서 이어서 검수</button></section>
           <div class="review-layout">
             <section class="review-stage card">
               <video id="review-player" controls preload="metadata" aria-label="검수 영상"></video>
@@ -427,6 +428,17 @@
               <details class="review-recipe hidden" id="review-recipe"><summary>이 목소리를 만든 기록</summary><dl id="review-recipe-facts"></dl></details>
             </section>
             <aside class="review-sidebar">
+              <details class="card recapture-panel" id="review-recapture-panel">
+                <summary>화면만 재촬영</summary>
+                <p>현재 목소리를 그대로 두고 최신 강의 화면을 새 버전으로 저장합니다. 정렬을 교정했다면 새 자막·화면 전환 시각을 선택할 수 있습니다.</p>
+                <button type="button" id="review-recapture-timeline">교정 타임라인 선택</button>
+                <button type="button" id="review-recapture-timeline-clear" disabled>현재 시각 사용</button>
+                <p id="review-recapture-timeline-name" role="status">현재 영상의 자막·전환 시각 사용</p>
+                <label class="field"><span>재촬영 화질</span><select id="review-recapture-quality"><option value="standard">1080p</option><option value="high" selected>1440p</option><option value="ultra">4K</option></select></label>
+                <label class="checkbox-field"><input id="review-recapture-captions" type="checkbox">자막을 화면에 넣기</label>
+                <p id="review-recapture-note" role="status">페이지 타임라인이 있는 강의 영상을 선택하세요.</p>
+                <button type="button" class="primary-button full" id="review-recapture" disabled>현재 목소리로 화면 다시 찍기</button>
+              </details>
               <form class="card" id="review-form">
                 <h2 id="review-selection-title">수정할 부분을 선택하세요</h2><p id="review-selection-reason">영상을 멈추고 ‘이 페이지 수정’을 누르세요.</p>
                 <div class="segmented" id="review-mode-tabs"><button type="button" data-repair-mode="regenerate" class="selected">페이지 재생성</button><button type="button" data-repair-mode="mute">짧은 소리 제거</button><button type="button" data-repair-mode="replace">구간 음성 교체</button></div>
@@ -855,7 +867,7 @@
       <div class="modal-head"><div><p class="eyebrow">작업 상태</p><h2 id="edit-dialog-title">영상 처리 중</h2></div><button type="button" class="icon-button hidden" id="close-edit-dialog">×</button></div>
       <div class="job-modal-body">
         <div class="job-spinner" id="edit-dialog-spinner"><span class="spinner"></span><p id="edit-running-label">원본은 그대로 두고 새 결과를 만들고 있습니다.</p></div>
-        <div class="job-success hidden" id="edit-dialog-success"><div class="complete-icon">✓</div><p id="edit-complete-summary"></p></div>
+        <div class="job-success hidden" id="edit-dialog-success"><div class="complete-icon">✓</div><p id="edit-complete-summary"></p><p class="record-done-warnings hidden" id="edit-complete-warnings" role="status"></p></div>
         <div class="job-error hidden" id="edit-dialog-error"><strong>작업을 완료하지 못했습니다.</strong><p id="edit-error-message"></p></div>
         <div class="candidate-gallery hidden" id="candidate-gallery"><p>각 후보를 재생해 보고 가장 마음에 드는 목소리를 고르세요.</p><div id="candidate-list"></div></div>
         <div class="batch-progress hidden" id="batch-progress"><div class="batch-progress-head"><span id="batch-progress-text">0 / 0 완료</span><span class="batch-eta" id="batch-eta"></span></div><div><i id="batch-progress-bar"></i></div></div>

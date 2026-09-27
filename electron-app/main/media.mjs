@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { reportDescribesVideo, safeStat } from "./files.mjs";
 import { runtimePaths } from "./paths.mjs";
 import { assertCurrentCourseManifest } from "./course-run-state.mjs";
+import { VIDEO_QUALITIES } from '../shared/video-quality.mjs';
 
 export function recipeFromManifest(manifest, report) {
   if (!manifest?.model || !manifest?.audioPath || !report?.audioPath
@@ -47,7 +48,7 @@ export function createMediaService({
   async function inspectMedia(file) {
     const raw = await runUtility(requireRuntimeTool("ffprobe", "FFprobe"), [
       "-v", "error",
-      "-show_entries", "format=duration:stream=codec_type,codec_name,profile,level,width,height,pix_fmt,avg_frame_rate,r_frame_rate,time_base,sample_aspect_ratio,sample_rate,channels,channel_layout,color_space,color_range,color_transfer,color_primaries,extradata_hash",
+      "-show_entries", "format=duration:stream=codec_type,codec_name,profile,level,width,height,pix_fmt,avg_frame_rate,r_frame_rate,time_base,start_time,duration,sample_aspect_ratio,sample_rate,channels,channel_layout,color_space,color_range,color_transfer,color_primaries,extradata_hash",
       "-show_data_hash", "sha256",
       "-of", "json",
       file,
@@ -95,6 +96,9 @@ export function createMediaService({
       if (!probes.has(value.path)) probes.set(value.path, inspectMedia(value.path));
       const mediaProbe = await probes.get(value.path);
       value.durationMs = Math.round(Number(mediaProbe.format?.duration || 0) * 1000);
+      const videoStream = mediaProbe.streams?.find(stream => stream.codec_type === 'video');
+      value.recaptureQuality = Object.values(VIDEO_QUALITIES).find(profile =>
+        profile.width === videoStream?.width && profile.height === videoStream?.height)?.id || null;
       if (kind === "video" && !value.timelinePath) {
         const timelinePath = await findVideoTimeline(value.path, captionRoot);
         const timeline = timelinePath
@@ -120,6 +124,7 @@ export function createMediaService({
             // 청취 승인도 결과에 적혀 있다. 검수 화면에서 바로 표시하려면 함께 온다.
             value.review = report.review || null;
             value.reportPath = reportPath;
+            value.burnCaptions = report.recapture?.burnCaptions ?? /-captioned(?:-|\.)/.test(report.capture?.file || '');
             if (report.sourceDir) {
               const manifest = await fs.readFile(path.join(report.sourceDir, "manifest.json"), "utf8")
                 .then(JSON.parse).catch(() => null);
@@ -143,6 +148,9 @@ export function createMediaService({
       clearedFindings: value.clearedFindings || [], reviewTarget: value.reviewTarget || null,
       review: value.review || null,
       recipe: value.recipe || null,
+      canRecapture: Boolean(value.timelinePath && value.pageRange),
+      recaptureQuality: value.recaptureQuality,
+      burnCaptions: Boolean(value.burnCaptions),
     }));
   }
 

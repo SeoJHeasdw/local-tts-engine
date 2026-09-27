@@ -8,6 +8,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isInside, normalizeEditName, normalizeOptions, normalizeVoiceText, pendingUnits } from "../shared/index.mjs";
 import { renameMediaFile, repointReportFile, safeStat } from "./files.mjs";
 import { inspectVoiceReadiness } from "./voice-readiness.mjs";
+import { videoQuality } from '../shared/video-quality.mjs';
+import { readRecaptureTimelineSelection } from './editing/recapture.mjs';
 
 // ffmpeg 가 읽는 흔한 컨테이너는 모두 받는다. 코덱·색 형식이 편집에 맞지 않으면
 // 렌더 직전의 검사가 그 이유를 따로 말해 주므로, 담는 문턱에서 미리 막지 않는다.
@@ -72,6 +74,7 @@ export function createIpcService({
   writeActiveJob,
 }) {
   const reviewPreviewDirectories = [];
+  const recaptureTimelines = new Map();
 
   let reviewPreviewBusy = false;
 
@@ -309,13 +312,30 @@ export function createIpcService({
       return result.canceled ? [] : registerSelected(result.filePaths, "audio");
     });
 
+    ipcMain.handle('studio:pick-recapture-timeline', async (event, videoToken) => {
+      guard(event);
+      const video = chosenRecord(videoToken, 'video');
+      if (!video.timelinePath) throw new Error('페이지 타임라인이 있는 강의 영상을 먼저 선택하세요.');
+      const result = await dialog.showOpenDialog(state.mainWindow, {
+        title: '교정된 자막·화면 전환 타임라인 선택', properties: ['openFile'],
+        filters: [{ name: '교정 타임라인', extensions: ['json'] }],
+      });
+      if (result.canceled) return null;
+      const selection = await readRecaptureTimelineSelection(result.filePaths[0]);
+      const token = crypto.randomUUID();
+      recaptureTimelines.set(token, { ...selection, videoToken });
+      // 오래된 선택은 다시 고르면 된다. renderer에는 파일 경로를 받는 API가 없다.
+      if (recaptureTimelines.size > 32) recaptureTimelines.delete(recaptureTimelines.keys().next().value);
+      return { token, name: path.basename(path.dirname(selection.path)) + ' / ' + path.basename(selection.path) };
+    });
+
     ipcMain.handle("studio:start-edit", async (event, rawOptions = {}) => {
       guard(event);
-      if (state.activeJob && ["running", "cancelling"].includes(state.activeJob.state)) {
+      if (state.activeJob && ["running", "paused", "cancelling"].includes(state.activeJob.state)) {
         throw new Error("이미 실행 중인 작업이 있습니다.");
       }
       requireRuntimeTool("ffmpeg", "FFmpeg");
-      const operation = ["compose", "voice", "voice-pages", "voice-candidates", "mute-region", "replace-region"].includes(rawOptions.operation)
+      const operation = ["compose", "voice", "voice-pages", "voice-candidates", "mute-region", "replace-region", "screen-recapture"].includes(rawOptions.operation)
         ? rawOptions.operation
         : null;
       if (!operation) throw new Error("편집 종류를 선택해 주세요.");
@@ -335,7 +355,25 @@ export function createIpcService({
         overrideText: typeof rawOptions.overrideText === "string"
           ? rawOptions.overrideText.replace(/\s+/g, " ").trim().slice(0, 2000) : "",
       };
+      // 내부 경로 기록은 renderer가 주입할 수 없고, 선택창의 token으로만 해석한다.
+      delete options.correctedTimeline;
       options = applyVoiceSettings(options, settings);
+      if (operation === 'screen-recapture') {
+        if (!chosenRecord(options.videoToken, 'video').timelinePath) {
+          throw new Error('화면 재촬영에는 페이지 타임라인이 있는 강의 영상이 필요합니다.');
+        }
+        requireRuntimeTool('node', 'Node.js');
+        requireRuntimeTool('ffprobe', 'FFprobe');
+        options.videoQuality = videoQuality(rawOptions.videoQuality).id;
+        options.burnCaptions = rawOptions.burnCaptions === true;
+        if (rawOptions.correctedTimelineToken) {
+          const selected = recaptureTimelines.get(String(rawOptions.correctedTimelineToken));
+          if (!selected || selected.videoToken !== options.videoToken) {
+            throw new Error('이 영상에 사용할 교정 타임라인을 다시 선택해 주세요.');
+          }
+          options.correctedTimeline = { path: selected.path, sha256: selected.sha256 };
+        }
+      }
       if (options.overrideText && !(operation === "voice-candidates" && options.audioSource === "generate")) {
         throw new Error("읽을 말을 직접 적는 것은 페이지 재생성에서만 사용할 수 있습니다.");
       }
