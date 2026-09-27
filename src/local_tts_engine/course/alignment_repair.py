@@ -1,8 +1,8 @@
 """Constrain forced alignment to measured speech, without changing any audio.
 
 Energy boundaries constrain timing but do not identify phonemes. Stable model
-timestamps remain anchors; collapsed regions use explicitly recorded syllable
-interpolation inside speech islands. Ambiguous boundaries stay review warnings.
+timestamps remain anchors; only runs of collapsed or stretched words between them
+use explicitly recorded syllable interpolation. Ambiguous boundaries stay review warnings.
 """
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ from typing import Any
 from .alignment_audit import voiced_spans
 from .settings import STEP_VISUAL_LEAD_MS, SLIDE_VISUAL_LEAD_MS
 
-ALIGNMENT_REPAIR_VERSION = "waveform-constrained-v2"
+ALIGNMENT_REPAIR_VERSION = "waveform-constrained-v3"
+# CH06 (2026-09-28, Whisper word times as an independent judge): 300–400 ms gave the same
+# result; 350 ms is the middle of that plateau.
+ANCHOR_DRIFT_MS = 350
 
 
 def syllable_weight(text: str) -> float:
@@ -86,22 +89,87 @@ def _word_groups(words: list[dict], islands: list[dict]) -> list[tuple[int, int]
     return costs.get((m, n), (0, []))[1]
 
 
-def _place_words(words: list[dict], start: float, end: float) -> tuple[list[dict], bool]:
-    """Preserve sound anchors; interpolate only an island with broken words."""
+def _spread(result: list[dict], weights: list[float], minimums: list[float], first: int, stop: int,
+            start: float, end: float) -> None:
+    """Syllable-weighted placement of words[first:stop] inside [start, end]."""
+    spare = max(0, end - start - sum(minimums[first:stop]))
+    cursor, total = start, sum(weights[first:stop])
+    for i in range(first, stop):
+        until = end if i == stop - 1 else cursor + minimums[i] + spare * weights[i] / total
+        result[i].update(startMs=round(cursor), endMs=round(until))
+        cursor = until
+
+
+def _place_words(words: list[dict], start: float, end: float) -> tuple[list[dict], list[tuple[int, int, float, float]]]:
+    """Preserve sound anchors; interpolate only the runs of broken words between them.
+
+    Returns the placed words and the interpolated runs as (first, stop, startMs, endMs)
+    relative to ``words``. A sound anchor is a model word inside the island whose length
+    is plausible for its syllables: not collapsed (< 60 ms per syllable or < 80 ms) and
+    not stretched over a pause or a neighbour's syllables. Stretching is how a collapsed
+    long word usually appears next to it (e.g. "바로" taking 1 s before a squeezed
+    "오케스트레이터입니다"), so a stretched word is re-spread with the broken run.
+    """
     result = deepcopy(words)
-    suspect = any(w["endMs"] - w["startMs"] < max(80, syllable_weight(w['text']) * 60)
-        or w["startMs"] < start - 180 or w["endMs"] > end + 180 for w in words)
+    n = len(words)
+    weights = [syllable_weight(w["text"]) for w in words]
+    minimums = [max(80, weight * 60) for weight in weights]
+    collapsed = [w["endMs"] - w["startMs"] < minimum for w, minimum in zip(words, minimums)]
+    outside = [w["startMs"] < start - 180 or w["endMs"] > end + 180 for w in words]
     # Strong trailing drift is another indication that later anchors failed.
-    suspect = suspect or end - words[-1]["endMs"] > 350
-    if suspect:
-        weights = [syllable_weight(w["text"]) for w in words]
-        minimums = [max(80, weight * 60) for weight in weights]
-        spare = max(0, end - start - sum(minimums))
-        cursor, total = start, sum(weights)
-        for i, (word, weight) in enumerate(zip(result, weights)):
-            stop = end if i == len(words) - 1 else cursor + minimums[i] + spare * weight / total
-            word.update(startMs=round(cursor), endMs=round(stop))
-            cursor = stop
+    drift = end - words[-1]["endMs"] > 350
+    if any(collapsed) or any(outside) or drift:
+        rates = sorted((w["endMs"] - w["startMs"]) / weight
+                       for w, weight, bad in zip(words, weights, collapsed) if not bad)
+        cap = max(400.0, 3 * rates[len(rates) // 2]) if rates else 400.0
+        # A sound-length word far from its syllable-proportional place is the model
+        # drifting late through a phrase, not an anchor.
+        uniform = deepcopy(words)
+        _spread(uniform, weights, minimums, 0, n, start, end)
+        anchor = [not collapsed[i] and not outside[i]
+                  and (words[i]["endMs"] - words[i]["startMs"]) / weights[i] <= cap
+                  and abs(words[i]["startMs"] - uniform[i]["startMs"]) <= ANCHOR_DRIFT_MS for i in range(n)]
+        # Consecutive collapsed words before an unassigned tail mean the model run failed
+        # there; later timestamps are not anchors (see _word_groups).
+        if drift:
+            for i in range(n - 1):
+                if collapsed[i] and collapsed[i + 1]:
+                    anchor[i:] = [False] * (n - i)
+                    break
+        previous_end = -math.inf
+        for i in range(n):
+            if anchor[i] and words[i]["startMs"] < previous_end - 20:
+                anchor[i] = False
+            elif anchor[i]:
+                previous_end = words[i]["endMs"]
+        for i in range(n):
+            if anchor[i]:
+                result[i]["startMs"] = round(max(start, min(end, words[i]["startMs"])))
+                result[i]["endMs"] = round(max(result[i]["startMs"], min(end, words[i]["endMs"])))
+        if anchor[0]:
+            result[0]["startMs"] = round(start)
+        if anchor[-1]:
+            result[-1]["endMs"] = round(words[-1]["endMs"] if abs(words[-1]["endMs"] - end) <= 100 else end)
+        runs: list[tuple[int, int, float, float]] = []
+        i = 0
+        while i < n:
+            if anchor[i]:
+                i += 1
+                continue
+            stop = i
+            while stop < n and not anchor[stop]:
+                stop += 1
+            left = result[i - 1]["endMs"] if i else start
+            right = result[stop]["startMs"] if stop < n else end
+            if right - left < sum(minimums[i:stop]):
+                # No room between the anchors: the anchors themselves are unreliable.
+                result = deepcopy(words)
+                _spread(result, weights, minimums, 0, n, start, end)
+                return result, [(0, n, start, end)]
+            _spread(result, weights, minimums, i, stop, left, right)
+            runs.append((i, stop, left, right))
+            i = stop
+        return result, runs
     else:
         for word in result:
             word["startMs"] = round(max(start, min(end, word["startMs"])))
@@ -117,7 +185,18 @@ def _place_words(words: list[dict], start: float, end: float) -> tuple[list[dict
         # already within one grid interval plus rounding tolerance; a silence
         # threshold is not a more precise phonetic label.
         result[-1]["endMs"] = round(words[-1]['endMs'] if abs(words[-1]['endMs'] - end) <= 100 else end)
-    return result, suspect
+    return result, []
+
+
+def _warning_place(entry: dict, words: list[dict]) -> dict:
+    """Where a reviewer should listen: step id, the sentence end and its last word."""
+    text = " ".join(str(entry.get("sourceText", "")).split())
+    tail = text[-28:]
+    if len(text) > 28 and " " in tail:
+        tail = tail[tail.index(" ") + 1:]  # 단어 중간에서 끊지 않는다
+    return {"step": f"{entry.get('slideId', '')}:{entry.get('step', '')}",
+            "lastWord": words[-1]["text"] if words else None,
+            "sentenceEnd": text if len(text) <= 28 else f"…{tail}"}
 
 
 def repair_timeline(timeline: dict[str, Any], silences: list[dict], *,
@@ -179,7 +258,8 @@ def repair_timeline(timeline: dict[str, Any], silences: list[dict], *,
                 and words[-1]['startMs'] < spans[-2]['endMs']
                 and all(w['endMs'] - w['startMs'] >= 80 for w in words[-2:])):
                 effective_silences = sorted([*silences, tail], key=lambda s: s['startMs'])
-                item = {'entry': i, 'type': 'unassigned-weak-tail', **evidence}
+                # Say where to listen: the step and the last word before the weak sound.
+                item = {'entry': i, 'type': 'unassigned-weak-tail', **evidence, **_warning_place(entry, words)}
                 unassigned.append(item)
                 warnings.append(item)
         islands = _speech_islands(effective_silences, start, end)
@@ -192,28 +272,32 @@ def repair_timeline(timeline: dict[str, Any], silences: list[dict], *,
             continue
         placed, interpolated = [], []
         for island, (a, b) in zip(islands, groups):
-            revised, inferred = _place_words(words[a:b], island["startMs"], island["endMs"])
+            revised, runs = _place_words(words[a:b], island["startMs"], island["endMs"])
             # Only a failed region loses its internal model anchors. Finer
             # pauses there can separate e.g. a collapsed phrase and its final
             # sentence, while an unvoiced stop in a good word stays untouched.
             collapsed = [w['endMs'] - w['startMs'] < 80 for w in words[a:b]]
             severe = any(left and right for left, right in zip(collapsed, collapsed[1:]))
             severe = severe or (any(collapsed) and island['endMs'] - words[b - 1]['endMs'] > 350)
-            if inferred and severe:
+            if runs and severe:
                 finer = _speech_islands(effective_silences, island['startMs'], island['endMs'], 150)
                 partitions = _word_groups(words[a:b], finer)
                 if len(finer) > 1 and partitions:
-                    revised = []
+                    revised, runs = [], []
                     for piece, (left, right) in zip(finer, partitions):
-                        placed_piece, _ = _place_words(words[a + left:a + right], piece['startMs'], piece['endMs'])
+                        placed_piece, piece_runs = _place_words(words[a + left:a + right], piece['startMs'], piece['endMs'])
                         revised.extend(placed_piece)
+                        runs.extend((left + first, left + stop, low, high) for first, stop, low, high in piece_runs)
             placed.extend(revised)
-            if inferred:
-                interpolated.append({"wordFrom": a, "wordTo": b, **island})
+            interpolated.extend({"wordFrom": a + first, "wordTo": a + stop, "startMs": low, "endMs": high}
+                                for first, stop, low, high in runs)
         entry["alignment"] = {**entry["alignment"], "rawWords": deepcopy(words), "words": placed,
             "correction": {"algorithmVersion": ALIGNMENT_REPAIR_VERSION,
                 "interpolatedSpans": interpolated, "wordTimingHumanApproved": False}}
         entry["speechStartMs"], entry["speechEndMs"] = placed[0]["startMs"], placed[-1]["endMs"]
+        for warning in warnings:
+            if warning.get('entry') == i and warning.get('lastWord') == placed[-1]['text']:
+                warning['lastWordEndMs'] = placed[-1]['endMs']
         entry["audio"] = {**entry.get("audio", {}), "durationMs": entry["endMs"] - entry["startMs"]}
         changed = [{"index": j, "text": a["text"], "before": [a["startMs"], a["endMs"]],
                     "after": [b["startMs"], b["endMs"]]}
@@ -230,6 +314,10 @@ def repair_timeline(timeline: dict[str, Any], silences: list[dict], *,
             # Duration describes inserted PCM silence and remains immutable.
             # Only the reference to the following corrected word onset moves.
             pause['nextSpeechStartMs'] = onset_map.get(pause.get('nextSpeechStartMs'), pause.get('nextSpeechStartMs'))
+    for warning in warnings:
+        if isinstance(warning.get("entry"), int) and "step" not in warning:
+            source = entries[warning["entry"]]
+            warning["step"] = f"{source.get('slideId', '')}:{source.get('step', '')}"
     details = {"algorithmVersion": ALIGNMENT_REPAIR_VERSION, "changes": changes, "warnings": warnings,
         "unassignedSpeechCandidates": unassigned,
         "audioModified": False, "lexicalTimingGuaranteed": False}

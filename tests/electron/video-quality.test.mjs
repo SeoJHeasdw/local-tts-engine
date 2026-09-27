@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileSha256, findVideo } from '../../electron-app/main/files.mjs';
+import { fileSha256, findVideo, publishVideo, renameMediaFile } from '../../electron-app/main/files.mjs';
 import { VIDEO_QUALITIES, captureFrameCount, captureVideoFileName, videoFrameRate, videoQuality } from '../../electron-app/shared/video-quality.mjs';
 import { normalizeOptions } from '../../electron-app/shared/options.mjs';
 import { createProductionService } from '../../electron-app/main/production.mjs';
@@ -130,4 +130,22 @@ test('이어하기는 파일·화질·판본·해시가 확인되는 완성본�
   assert.deepEqual(await service.finishedUnitNames([{name:'unit',videoQuality:'high'}],studio,'source-v1'),[]);
   await fs.writeFile(file,'changed');assert.deepEqual(await service.finishedUnitNames(units,studio,'source-v1'),[]);
   await fs.unlink(file);assert.deepEqual(await service.finishedUnitNames(units,studio,'source-v1'),[]);
+});
+
+test('완성 영상은 자막 파일(SRT·VTT)을 같은 이름으로 데리고 발행되고 이름을 바꾸면 함께 옮긴다', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'publish-captions-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const renderDir = path.join(root, 'projects', 'job-a');
+  await fs.mkdir(renderDir, { recursive: true });
+  for (const [name, body] of [['timeline.json', '{}'], ['captions.srt', '1'], ['captions.vtt', 'WEBVTT'], ['job-a.mp4', 'video']]) {
+    await fs.writeFile(path.join(renderDir, name), body);
+  }
+  const studio = { videoOutputRoot: path.join(root, 'videos') };
+  const published = await publishVideo(path.join(renderDir, 'job-a.mp4'), studio, 'job-a', 'CH06 L01 · 제목', renderDir);
+  assert.equal(path.basename(published), 'CH06 L01 · 제목.mp4');
+  assert.deepEqual((await fs.readdir(path.dirname(published))).sort(),
+    ['CH06 L01 · 제목.mp4', 'CH06 L01 · 제목.srt', 'CH06 L01 · 제목.timeline.json', 'CH06 L01 · 제목.vtt']);
+  const renamed = await renameMediaFile(published, 'CH06 L01 · 새 제목');
+  assert.deepEqual((await fs.readdir(path.dirname(renamed))).sort(),
+    ['CH06 L01 · 새 제목.mp4', 'CH06 L01 · 새 제목.srt', 'CH06 L01 · 새 제목.timeline.json', 'CH06 L01 · 새 제목.vtt']);
 });

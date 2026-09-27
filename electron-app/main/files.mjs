@@ -68,6 +68,12 @@ export async function publishVideo(source, studio, name, title, renderDir = null
       path.join(renderDir, "timeline.json"),
       path.join(outputDir, videoTimelineFileName(target)),
     );
+    // 강의의 정본은 자막 없는 영상 + 자막 파일이다. Udemy·유튜브에 올릴 때 짝을 찾기 쉽게
+    // 영상과 같은 이름으로 둔다(이름을 바꾸면 renameMediaFile이 함께 옮긴다).
+    const stem = path.join(outputDir, path.basename(target, path.extname(target)));
+    for (const extension of ["srt", "vtt"]) {
+      await fs.copyFile(path.join(renderDir, `captions.${extension}`), `${stem}.${extension}`).catch(() => {});
+    }
   }
   if (path.resolve(source) === path.resolve(target)) return target;
   try {

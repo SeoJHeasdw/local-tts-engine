@@ -22,6 +22,8 @@ export function alignmentWarnings(quality) {
     [summary.collapsedWords, '지나치게 짧게 정렬된 단어'],
     [summary.implausibleWords, '음절 수에 비해 지나치게 짧게 정렬된 단어'],
     [summary.missingCaptionSteps, '자막이 확인되지 않은 스텝'],
+    [summary.captionTextIssues, '제 말과 어긋난 자막'],
+    [summary.captionTextMismatches, '대본과 대응하지 않는 자막'],
   ].filter(([count]) => Number(count) > 0)
     .map(([count, label]) => `자막·화면 정렬 확인: ${label} ${count}곳`);
   if (!warnings.length && (quality.status === 'warning' || Number(quality.warningCount) > 0)) {
@@ -60,10 +62,14 @@ export function outputReviewWarnings(report = {}) {
       if (match) matchedEnds.add(matchIndex);
       const length = start != null && end != null ? Math.round(end - start) : null;
       const delta = finite(match?.endDeltaMs);
-      const detail = `마지막 ${length ?? '?'}ms 소리는 약해 단어로 확정하지 않았습니다.`
+      // 어디를 들을지 말한다: 그 스텝 문장의 끝과 약한 소리 바로 앞 단어.
+      const word = typeof warning.lastWord === 'string' && warning.lastWord ? `‘${warning.lastWord}’` : '';
+      const sentence = typeof warning.sentenceEnd === 'string' && warning.sentenceEnd ? `“${warning.sentenceEnd}” ` : '';
+      const detail = `${sentence}${word ? `끝 단어 ${word} 뒤의 ` : '마지막 '}${length ?? '?'}ms 소리는 약해 단어로 확정하지 않았습니다.`
         + (delta != null ? ` 단어 정렬 끝과 파형 끝은 약 ${Math.round(Math.abs(delta))}ms 차이입니다.` : '')
         + ' 실제 발화인지, 자막이 먼저 끝나는지 직접 듣고 확인하세요.';
-      add(`alignment:weak-tail:${warning.entry}:${Math.round(start ?? 0)}`, '말끝의 약한 소리 확인', detail, start, end);
+      add(`alignment:weak-tail:${warning.entry}:${Math.round(start ?? 0)}`,
+        word ? `말끝의 약한 소리 확인 · ${word} 뒤` : '말끝의 약한 소리 확인', detail, start, end);
       continue;
     }
     const titles = {
@@ -81,8 +87,9 @@ export function outputReviewWarnings(report = {}) {
     if (matchedEnds.has(index)) continue;
     const aligned = finite(finding.alignmentEndMs), waveform = finite(finding.waveformEndMs);
     const at = aligned != null && waveform != null ? Math.min(aligned, waveform) : finite(finding.startMs);
+    const lastWord = typeof finding.lastWord === 'string' && finding.lastWord ? ` 끝 단어 ‘${finding.lastWord}’ 부근을 들어 보세요.` : '';
     add(`alignment:end:${finding.step}:${Math.round(at ?? 0)}`, '말끝 정렬 차이',
-      `단어 정렬 끝과 파형 끝이 약 ${Math.round(Math.abs(Number(finding.endDeltaMs) || 0))}ms 차이입니다. 실제 말끝과 자막 끝을 확인하세요.`,
+      `단어 정렬 끝과 파형 끝이 약 ${Math.round(Math.abs(Number(finding.endDeltaMs) || 0))}ms 차이입니다. 실제 말끝과 자막 끝을 확인하세요.${lastWord}`,
       at, Math.max(aligned ?? at ?? 0, waveform ?? at ?? 0));
   }
   for (const [index, finding] of records(findings.transitions).entries()) {
@@ -94,6 +101,21 @@ export function outputReviewWarnings(report = {}) {
     add(`alignment:caption:${finding.step}:${index}:${Math.round(Number(finding.cueEndMs) || 0)}`,
       '자막이 말보다 먼저 사라짐', '말이 끝나기 전에 자막이 사라졌을 수 있습니다. 이 부분을 확인하세요.',
       finding.cueEndMs, finding.cueEndMs);
+  }
+  const captionTextTitles = {
+    'early-end': ['자막이 제 말보다 먼저 사라짐', '이 자막의 말이 끝나기 전에 다음 자막으로 바뀝니다.'],
+    'during-previous': ['자막이 앞 문장을 말하는 중에 뜸', '앞 자막의 말이 끝나기 전에 이 자막이 먼저 뜹니다.'],
+    'late-start': ['자막이 말보다 늦게 뜸', '이 자막의 말이 시작된 뒤에야 자막이 뜹니다.'],
+  };
+  for (const [index, finding] of records(findings.captionText).entries()) {
+    const [title, detail] = captionTextTitles[finding.type] || ['자막과 말의 시각 확인', '이 자막과 말의 시각을 확인하세요.'];
+    add(`alignment:caption-text:${finding.step}:${finding.type}:${index}:${Math.round(Number(finding.cueStartMs) || 0)}`,
+      title, `“${finding.text || ''}” — ${detail}`,
+      Math.min(Number(finding.cueStartMs), Number(finding.speechStartMs)), Math.max(Number(finding.cueEndMs), Number(finding.speechEndMs)));
+  }
+  for (const [index, finding] of records(findings.captionTextMismatch).entries()) {
+    add(`alignment:caption-text-mismatch:${finding.step}:${index}`, '대본과 대응하지 않는 자막',
+      '자막 글이 대본이나 정렬 단어와 맞지 않아 이 뒤의 자막 시각을 검사하지 못했습니다.');
   }
   for (const [kind, title] of [['collapsedWords', '지나치게 짧은 단어 시각'],
     ['implausibleWords', '음절 수에 비해 짧은 단어 시각'], ['missingCaptions', '자막이 없는 스텝']]) {

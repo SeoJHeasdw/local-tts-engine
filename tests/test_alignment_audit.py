@@ -223,3 +223,44 @@ def test_real_ffmpeg_silence_measurement_keeps_original_audio(tmp_path: Path):
     assert spans[1]["startMs"] == pytest.approx(1000, abs=2)
     assert spans[1]["endMs"] == pytest.approx(1500, abs=2)
     assert audio.read_bytes() == original
+
+
+def _numbers_entry() -> dict:
+    # "80점" → "팔십 점"처럼 대본 토큰 수와 정렬 단어 수가 다르다.
+    return entry(0, 400, 5800, [
+        word("팔십", 500, 900), word("점", 900, 1100), word("만점에", 1100, 1600), word("오십칠", 1600, 2100),
+        word("점입니다", 2100, 2700), word("에이전트", 3200, 3700), word("하나에", 3700, 4100),
+        word("이십삼", 4100, 4600), word("점", 4600, 4800), word("졌습니다", 4800, 5400),
+    ], sourceText="80점 만점에 57점입니다. Agent 하나에 23점 졌습니다.")
+
+
+def test_caption_text_audit_checks_every_cue_against_the_words_that_read_it():
+    timeline = {"entries": [_numbers_entry()]}
+    silences = [{"startMs": 0, "endMs": 500}, {"startMs": 2700, "endMs": 3200}, {"startMs": 5400, "endMs": 5800}]
+    good = [{"startMs": 440, "endMs": 3160, "text": "80점 만점에 57점입니다."},
+            {"startMs": 3140, "endMs": 5800, "text": "Agent 하나에 23점 졌습니다."}]
+    report = audit_timeline(timeline, good, silences)
+    assert report["summary"]["captionTextIssues"] == 0
+    assert report["status"] == "passed"
+    # 글자 수 비례로 나눈 옛 자막: 첫 cue가 "점입니다" 전에 끝나고 둘째 cue가 그 말 중에 뜬다.
+    shifted = [{"startMs": 440, "endMs": 2040, "text": "80점 만점에 57점입니다."},
+               {"startMs": 2060, "endMs": 5800, "text": "Agent 하나에 23점 졌습니다."}]
+    report = audit_timeline(timeline, shifted, silences)
+    assert [issue["type"] for issue in report["findings"]["captionText"]] == ["early-end", "during-previous"]
+    assert report["findings"]["captionText"][0]["words"] == "팔십 점 만점에 오십칠 점입니다"
+    assert report["findings"]["captionText"][0]["deltaMs"] == 660
+    # 스텝의 마지막 cue만 보는 파형 검사는 이 어긋남을 보지 못한다.
+    assert report["summary"]["earlyCaptionsOver20Ms"] == 0
+    assert report["status"] == "warning"
+
+
+def test_caption_text_audit_reports_late_cues_and_text_that_does_not_match_the_script():
+    timeline = {"entries": [_numbers_entry()]}
+    late = [{"startMs": 440, "endMs": 3160, "text": "80점 만점에 57점입니다."},
+            {"startMs": 3700, "endMs": 5800, "text": "Agent 하나에 23점 졌습니다."}]
+    report = audit_timeline(timeline, late, [])
+    assert [(issue["type"], issue["cueIndex"]) for issue in report["findings"]["captionText"]] == [("late-start", 1)]
+    report = audit_timeline(timeline, [{"startMs": 440, "endMs": 5800, "text": "다른 문장입니다."}], [])
+    assert report["summary"]["captionTextMismatches"] == 1
+    assert report["findings"]["captionTextMismatch"][0]["type"] == "text"
+    assert report["status"] == "warning"

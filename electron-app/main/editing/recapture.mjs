@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ROOT, runtimePaths } from '../paths.mjs';
-import { fileSha256, writeReport } from '../files.mjs';
+import { fileSha256, renameMediaFile, repointReportFile, writeReport } from '../files.mjs';
 import { buildCaptionCues } from '../../shared/captions.mjs';
 import { captureVideoFileName, videoQuality } from '../../shared/video-quality.mjs';
 import { summarizeChecks, videoTimelineFileName } from '../../shared/index.mjs';
@@ -194,7 +194,7 @@ export function createRecaptureService({
       const report = await validateEditVideo(output, 'screen-recapture', [record.path], outputDir,
         { ...quality, durationMs: timeline.totalMs });
       Object.assign(report, {
-        displayName: `${path.parse(record.name).name} · 화면 재촬영`,
+        displayName: `${path.parse(record.name).name.replace(/ · 화면 재촬영$/, '')} · 화면 재촬영`,
         timelinePath, audioPath, renderDir: outputDir, videoQuality: quality, capture, lessonReview,
         sourceContract: nextTimeline.sourceContract,
         voiceSourceContract: nextTimeline.voiceSourceContract,
@@ -223,7 +223,15 @@ export function createRecaptureService({
       await writeReport(reportPath, report, 'recapture');
       if (!report.summary.ok) throw new Error(`재촬영 검증 실패: ${report.summary.failed.join(', ')}`);
       await fs.copyFile(timelinePath, path.join(outputDir, videoTimelineFileName(output)));
-      return report;
+      // 결과 목록·Finder에서 무슨 영상인지 보이게 `recapture-<시각>-high.mp4`를 강의 제목으로
+      // 바꾼다. 같은 이름의 짝 파일(.capture.json·.timeline.json)도 함께 옮기고 기록을 따라 고친다.
+      const titled = await renameMediaFile(output, report.displayName).catch(() => output);
+      // 자막 파일이 정본이다. 올릴 때 짝을 찾기 쉽게 영상과 같은 이름의 SRT·VTT를 둔다.
+      const stem = path.join(outputDir, path.basename(titled, path.extname(titled)));
+      await fs.copyFile(path.join(outputDir, 'captions.srt'), `${stem}.srt`).catch(() => {});
+      await fs.copyFile(path.join(outputDir, 'captions.vtt'), `${stem}.vtt`).catch(() => {});
+      if (titled === output) return report;
+      return await repointReportFile(reportPath, output, titled) ?? report;
     } catch (error) {
       // 실패한 MP4가 최근 결과에서 성공으로 보이지 않게 별도 상태를 남긴다.
       const failed = await fs.readFile(reportPath, 'utf8').then(JSON.parse).catch(() => ({}));

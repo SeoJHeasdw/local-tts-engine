@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 
+CAPTION_TEXT_TOLERANCE_MS = 100
 _SILENCE_EVENT = re.compile(r"silence_(start|end):\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)")
 
 
@@ -130,6 +131,128 @@ def _step(entry: dict[str, Any]) -> str:
     return f"{entry.get('slideId', entry.get('slide_id', ''))}:{entry['step']}"
 
 
+_HANGUL_ONLY = re.compile(r"^[가-힣]+$")
+_HANGUL_TAIL = re.compile(r"[가-힣]+$")
+_MAX_WORDS_PER_TOKEN = 8
+
+
+def _alignment_token(text: Any) -> str:
+    return "".join(char for char in str(text) if char == "'" or unicodedata.category(char).startswith(("L", "N")))
+
+
+def _tokens(text: Any) -> list[str]:
+    return [token for token in (_alignment_token(part) for part in str(text or "").split()) if token]
+
+
+def source_token_spans(tokens: list[str], spoken: list[str]) -> list[tuple[int, int]] | None:
+    """Map caption source tokens to aligned spoken words, independently of the caption builder.
+
+    A digit or Latin token may be read as several words ("30점" -> "삼십 점"). A Hangul-only
+    token should equal one spoken word; a mixed token should end on a word ending with its
+    Hangul tail ("점과", "라면"). Returns [start, end) word indices per token, or None.
+    """
+    n, m = len(tokens), len(spoken)
+    if not n or not m:
+        return None
+    cost = [[math.inf] * (m + 1) for _ in range(n + 1)]
+    back = [[-1] * (m + 1) for _ in range(n + 1)]
+    cost[0][0] = 0.0
+    for i, token in enumerate(tokens):
+        pure = bool(_HANGUL_ONLY.match(token))
+        tail_match = None if pure else _HANGUL_TAIL.search(token)
+        tail = tail_match.group(0) if tail_match else ""
+        for j in range(m + 1):
+            base = cost[i][j]
+            if base == math.inf:
+                continue
+            # An unread token (k=0) means the reading merged two tokens; keep it rare.
+            for k in range(0, min(_MAX_WORDS_PER_TOKEN, m - j) + 1):
+                if k == 0:
+                    step = 10.0
+                elif pure:
+                    step = 0.0 if k == 1 and spoken[j] == token else (
+                        3.0 * k if "".join(spoken[j:j + k]) == token else 8.0 * k)
+                elif tail:
+                    step = (0.0 if spoken[j + k - 1].endswith(tail) else 6.0) + 0.1 * k
+                else:
+                    step = 0.5 * k
+                if base + step < cost[i + 1][j + k]:
+                    cost[i + 1][j + k] = base + step
+                    back[i + 1][j + k] = k
+    if cost[n][m] == math.inf:
+        return None
+    spans: list[tuple[int, int]] = [(0, 0)] * n
+    j = m
+    for i in range(n, 0, -1):
+        k = back[i][j]
+        spans[i - 1] = (j - k, j)
+        j -= k
+    return spans
+
+
+def _caption_text_audit(
+    entries: list[dict[str, Any]], captions: list[dict[str, Any]], tolerance_ms: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Check every cue against the words that actually read its text.
+
+    Cues are attached to steps by consuming source tokens in order, not by time windows,
+    so a misplaced cue cannot hide in the neighbouring step. The last-cue voiced-tail check
+    above stays as the waveform measurement; this check catches mid-step cue boundaries.
+    """
+    issues: list[dict[str, Any]] = []
+    mismatches: list[dict[str, Any]] = []
+    cues = sorted(captions, key=lambda cue: (_time(cue, "startMs"), _time(cue, "endMs")))
+    cursor = 0
+    for entry in entries:
+        want = _tokens(entry.get("sourceText", entry.get("source_text", "")))
+        if not want:
+            continue
+        step = _step(entry)
+        taken: list[tuple[dict[str, Any], list[str]]] = []
+        got: list[str] = []
+        while cursor < len(cues) and len(got) < len(want):
+            cue = cues[cursor]
+            cursor += 1
+            taken.append((cue, _tokens(cue.get("text", ""))))
+            got.extend(taken[-1][1])
+        text = " / ".join(" ".join(str(cue.get("text", "")).split()) for cue, _ in taken)
+        if got != want:
+            # Later cues no longer have a reliable step to belong to.
+            mismatches.append({"step": step, "type": "text", "expectedTokens": len(want),
+                               "captionTokens": len(got), "text": text})
+            break
+        words = [word for word in entry.get("alignment", {}).get("words", [])
+                 if math.isfinite(_time(word, "startMs")) and math.isfinite(_time(word, "endMs"))]
+        spans = source_token_spans(want, [_alignment_token(word.get("text", "")) for word in words])
+        if spans is None:
+            mismatches.append({"step": step, "type": "words", "expectedTokens": len(want),
+                               "spokenWords": len(words), "text": text})
+            continue
+        index, previous_end = 0, None
+        for cue_index, (cue, cue_tokens) in enumerate(taken):
+            first, last = spans[index][0], spans[index + len(cue_tokens) - 1][1] - 1
+            index += len(cue_tokens)
+            if last < first:
+                continue
+            speech_start, speech_end = _time(words[first], "startMs"), _time(words[last], "endMs")
+            cue_start, cue_end = _time(cue, "startMs"), _time(cue, "endMs")
+            record = {
+                "step": step, "cueIndex": cue_index, "cueCount": len(taken),
+                "text": " ".join(str(cue.get("text", "")).split()),
+                "cueStartMs": cue_start, "cueEndMs": cue_end,
+                "speechStartMs": speech_start, "speechEndMs": speech_end,
+                "words": " ".join(str(word.get("text", "")) for word in words[first:last + 1]),
+            }
+            if cue_end < speech_end - tolerance_ms:
+                issues.append({**record, "type": "early-end", "deltaMs": round(speech_end - cue_end, 3)})
+            if previous_end is not None and cue_start < previous_end - tolerance_ms:
+                issues.append({**record, "type": "during-previous", "deltaMs": round(previous_end - cue_start, 3)})
+            if cue_start > speech_start + tolerance_ms:
+                issues.append({**record, "type": "late-start", "deltaMs": round(cue_start - speech_start, 3)})
+            previous_end = speech_end
+    return issues, mismatches
+
+
 def _speech_duration(silences: list[dict[str, Any]], start: float, end: float) -> float:
     return sum(span["endMs"] - span["startMs"] for span in voiced_spans(silences, start, max(start, end), 0))
 
@@ -144,6 +267,9 @@ def audit_timeline(
     Word and cue timestamps are absolute track milliseconds. Step windows use
     startMs .. endMs + gapAfterMs, exactly as the original read-only audit does.
     ``captions`` counts >400 ms of voiced tail; ``captionCoverage`` uses >20 ms.
+    ``captionText`` maps every cue's text to the words that read it (all cues, not
+    only the last one per step) and flags cues that end before those words, appear
+    while the previous cue's words are still spoken, or appear after their words.
     None means caption generation has not run; [] means checked but missing.
     Empty captions are recorded separately instead of silently counting as good.
     A plausible short Korean monosyllable is reported, not phonetically approved.
@@ -153,6 +279,7 @@ def audit_timeline(
     findings: dict[str, list[dict[str, Any]]] = {
         "alignmentEnd": [], "transitions": [], "captions": [], "captionCoverage": [],
         "tinyWords": [], "collapsedWords": [], "implausibleWords": [], "legacyAlignment": [], "missingCaptions": [],
+        "captionText": [], "captionTextMismatch": [],
     }
     measurements: list[dict[str, Any]] = []
     for entry in entries:
@@ -167,6 +294,7 @@ def audit_timeline(
             "step": step, "startMs": start, "endMs": end,
             "alignmentEndMs": aligned_end, "waveformEndMs": waveform_end,
             "endDeltaMs": round(delta, 3), "within250Ms": abs(delta) <= 250,
+            "lastWord": words[-1].get("text") if words else None,
             "voicedSpans": spans,
         }
         measurements.append(measurement)
@@ -236,6 +364,9 @@ def audit_timeline(
                     findings["captions"].append(issue)
                 if tail > 20:
                     findings["captionCoverage"].append(issue)
+    if captions:
+        findings["captionText"], findings["captionTextMismatch"] = _caption_text_audit(
+            entries, captions, CAPTION_TEXT_TOLERANCE_MS)
     for previous, following in zip(entries, entries[1:]):
         transition = _time(previous, "transitionAtMs", _time(previous, "endMs"))
         if any(span["startMs"] - 20 <= transition <= span["endMs"] + 20 for span in silence):
@@ -259,6 +390,8 @@ def audit_timeline(
         "earlyCaptions": len(findings["captions"]),
         "earlyCaptionsOver20Ms": len(findings["captionCoverage"]),
         "missingCaptionSteps": len(findings["missingCaptions"]),
+        "captionTextIssues": len(findings["captionText"]),
+        "captionTextMismatches": len(findings["captionTextMismatch"]),
         "tinyWords": len(findings["tinyWords"]),
         "collapsedWords": len(findings["collapsedWords"]),
         "implausibleWords": len(findings["implausibleWords"]),
@@ -267,6 +400,7 @@ def audit_timeline(
     }
     warning = any(findings[key] for key in (
         "alignmentEnd", "transitions", "captionCoverage", "collapsedWords", "implausibleWords", "missingCaptions",
+        "captionText", "captionTextMismatch",
     ))
     return {
         "schemaVersion": 1, "status": "not-checked" if not entries else "warning" if warning else "passed",
@@ -278,7 +412,7 @@ def audit_timeline(
             "legacyAlignmentEndToleranceMs": 400, "legacyCaptionVoicedTailMs": 400,
             "captionVoicedTailToleranceMs": 20, "shortWordThresholdMs": 80,
             "minimumPlausibleShortSyllableMs": 40, "targetAlignmentEndPassRate": 0.98,
-            "minimumKoreanMultisyllableMsPerSyllable": 60,
+            "minimumKoreanMultisyllableMsPerSyllable": 60, "captionTextToleranceMs": CAPTION_TEXT_TOLERANCE_MS,
         },
         "summary": summary, "findings": findings, "stepMeasurements": measurements,
         "limitations": [
@@ -287,5 +421,6 @@ def audit_timeline(
             "Compare unchanged audio and source contracts, and review word-to-speech attribution separately.",
             "Plausible short Korean monosyllables require voiced support but remain unverified phonetic candidates.",
             "Korean multisyllable words below 60 ms per Hangul syllable are timing plausibility warnings, not proven pronunciation errors.",
+            "Caption text timing trusts the aligned word times; interpolated words carry that uncertainty.",
         ],
     }

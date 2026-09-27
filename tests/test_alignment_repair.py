@@ -61,6 +61,9 @@ def test_weak_unvoiced_tail_does_not_steal_a_normal_multisyllable_word():
     assert last == timeline['entries'][0]['alignment']['words'][-1]
     assert report['unassignedSpeechCandidates'][0]['startMs'] == 4562
     assert report['warnings'][0]['type'] == 'unassigned-weak-tail'
+    # 어디를 들을지: 스텝, 문장 끝, 약한 소리 바로 앞 단어와 그 끝 시각
+    assert {key: report['warnings'][0][key] for key in ('step', 'lastWord', 'sentenceEnd', 'lastWordEndMs')} == {
+        'step': 'test:0', 'lastWord': '봤습니다', 'sentenceEnd': '원문 그대로', 'lastWordEndMs': last['endMs']}
 
 
 def test_tiny_waveform_island_cannot_compress_a_good_long_word_even_without_acoustic_evidence():
@@ -113,3 +116,36 @@ def test_rate_warning_does_not_split_normal_number_phrase_at_short_unvoiced_isla
     assert revised[3]['startMs'] > 4200, '십구 점을 앞 구절로 밀면 안 된다'
     assert revised[4]['endMs'] - revised[4]['startMs'] >= 120, '87ms 무성 꼬리에 점을 강제 배정하지 않는다'
     assert revised[5]['startMs'] > 5000, '위험과가 원래 숫자 구절을 차지하지 않는다'
+
+
+def test_only_the_broken_word_is_respread_and_sound_neighbours_keep_model_times():
+    words = [word('가나다', 0, 300), word('라마', 300, 500), word('바사아자', 500, 520),
+             word('차카', 800, 1000), word('타파하', 1000, 1300)]
+    timeline = {'totalMs': 1400, 'entries': [entry(words, end=1400)]}
+    fixed, _ = repair_timeline(timeline, [{'startMs': 1300, 'endMs': 1400}])
+    revised = fixed['entries'][0]['alignment']['words']
+    assert [(w['startMs'], w['endMs']) for w in revised] == [(0, 300), (300, 500), (500, 800), (800, 1000), (1000, 1300)]
+    spans = fixed['entries'][0]['alignment']['correction']['interpolatedSpans']
+    assert spans == [{'wordFrom': 2, 'wordTo': 3, 'startMs': 500, 'endMs': 800}]
+
+
+def test_a_stretched_word_before_a_squeezed_long_word_is_respread_with_it():
+    # 모델이 "바로"에 1초 넘게 주고 "오케스트레이터입니다"를 80ms로 짓눌렀다.
+    words = [word('셋째', 0, 300), word('대화에는', 300, 800), word('여러분이', 800, 1360),
+             word('바로', 1360, 2400), word('오케스트레이터입니다', 2400, 2480)]
+    timeline = {'totalMs': 4000, 'entries': [entry(words, end=4000)]}
+    fixed, _ = repair_timeline(timeline, [{'startMs': 3900, 'endMs': 4000}])
+    revised = fixed['entries'][0]['alignment']['words']
+    assert revised[2] == word('여러분이', 800, 1360), '멀쩡한 단어는 음절 비율로 옮기지 않는다'
+    assert revised[3]['startMs'] == 1360 and revised[3]['endMs'] - revised[3]['startMs'] < 500
+    assert revised[4]['endMs'] == 3900 and revised[4]['endMs'] - revised[4]['startMs'] >= 10 * 150
+
+
+def test_a_sound_length_word_far_from_its_syllable_place_is_model_drift_not_an_anchor():
+    words = [word('하나', 0, 200), word('둘셋넷', 200, 500), word('다섯여섯', 1150, 1450), word('일곱', 1450, 1460)]
+    timeline = {'totalMs': 1800, 'entries': [entry(words, end=1800)]}
+    fixed, _ = repair_timeline(timeline, [{'startMs': 1700, 'endMs': 1800}])
+    revised = fixed['entries'][0]['alignment']['words']
+    assert revised[1] == word('둘셋넷', 200, 500)
+    assert revised[2]['startMs'] == 500, '0.35초 넘게 늦게 흘러간 단어는 기준점으로 남기지 않는다'
+    assert revised[3]['endMs'] == 1700

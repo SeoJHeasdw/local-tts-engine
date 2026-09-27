@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { combineChapterReports } from '../../electron-app/shared/quality.mjs';
+import { alignmentWarnings, combineChapterReports, outputReviewWarnings } from '../../electron-app/shared/quality.mjs';
 import { completionWarnings, renderCompletionWarnings } from '../../electron-app/renderer/view-utils.mjs';
 
 test('챕터 두 번째 레슨의 정렬 경고가 완료 안내까지 보존되며 음성 실패로 합쳐지지 않는다', () => {
@@ -37,4 +37,19 @@ test('저장된 경고와 레슨 기록만 있는 옛 챕터 보고서도 완료
     { name: 'L01', alignmentQuality: { status: 'passed' } },
     { name: 'L02', warnings: ['전환 확인'] },
   ] }), ['L02: 전환 확인']);
+});
+
+test('스텝 중간 자막이 제 말과 어긋나면 완료 경고와 결과 경고에 위치까지 남는다', () => {
+  const quality = { status: 'warning', summary: { captionTextIssues: 2 }, findings: { captionText: [
+    { step: 'lab-orch-metric:1', type: 'early-end', text: '80점 만점에 57점입니다.',
+      cueStartMs: 57450, cueEndMs: 59190, speechStartMs: 57510, speechEndMs: 59670 },
+    { step: 'lab-orch-metric:1', type: 'during-previous', text: 'Agent 하나에 23점 졌습니다.',
+      cueStartMs: 59210, cueEndMs: 62830, speechStartMs: 60280, speechEndMs: 62550 },
+  ] } };
+  assert.deepEqual(alignmentWarnings(quality), ['자막·화면 정렬 확인: 제 말과 어긋난 자막 2곳']);
+  const issues = outputReviewWarnings({ alignmentQuality: quality });
+  assert.deepEqual(issues.map((issue) => issue.title), ['자막이 제 말보다 먼저 사라짐', '자막이 앞 문장을 말하는 중에 뜸']);
+  assert.equal(issues[1].startMs, 59210);
+  assert.equal(issues[1].endMs, 62830);
+  assert.match(issues[0].detail, /80점 만점에 57점입니다/);
 });

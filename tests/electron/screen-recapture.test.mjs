@@ -184,6 +184,14 @@ test('재촬영은 최신 수정본의 실제 음성·자막·전환·검수를 
   assert.deepEqual(report.voiceFindings, f.findings);
   assert.deepEqual(report.voiceReview, f.review);
   assert.equal(report.review.status, 'pending', '새 화면의 시청 승인을 자동으로 부여하지 않는다');
+  // 결과 영상은 `again-standard-captioned.mp4`가 아니라 강의 제목으로 남고 짝 파일도 따라간다.
+  assert.equal(path.basename(report.videoPath), 'latest · 화면 재촬영.mp4');
+  assert.equal(report.displayName, 'latest · 화면 재촬영');
+  const files = await fs.readdir(f.out);
+  assert.ok(files.includes('latest · 화면 재촬영.mp4.capture.json') && files.includes('latest · 화면 재촬영.timeline.json'));
+  assert.ok(files.includes('latest · 화면 재촬영.srt') && files.includes('latest · 화면 재촬영.vtt'), '올릴 자막 파일도 같은 이름으로 둔다');
+  assert.equal(files.some(name => name.startsWith('again')), false);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.out, 'validation-report.json'), 'utf8')).videoPath, report.videoPath);
   assert.deepEqual(report.review.clearedFindings, f.review.clearedFindings);
   assert.equal(f.calls.some(c => c.command.includes('python') || c.stage === 'voice'), false);
   const capture = f.calls.find(c => c.stage === 'capture');

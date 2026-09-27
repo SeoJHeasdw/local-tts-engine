@@ -94,3 +94,14 @@ test('저장·재열기에서도 경고 위치와 확인 상태가 같은 결과
   assert.deepEqual(opened.reviewTarget, target);
   assert.equal(opened.pages[0].number, 705);
 });
+
+test('말끝의 약한 소리 경고는 어느 문장의 어느 단어 뒤를 들을지 적고 확인 키는 그대로다', () => {
+  const report = { alignmentQuality: { status: 'warning', summary: {}, findings: { alignmentEnd: [] }, repairWarnings: [
+    { entry: 13, type: 'unassigned-weak-tail', startMs: 94_562, endMs: 94_650.833, step: 'lab-orch-relay:0',
+      lastWord: '세어', sentenceEnd: '…단계마다 세어 봤습니다.', lastWordEndMs: 94_011 },
+  ] } };
+  const [issue] = outputReviewWarnings(report);
+  assert.equal(issue.key, 'alignment:weak-tail:13:94562', '이미 확인한 경고가 다시 뜨지 않게 키를 바꾸지 않는다');
+  assert.equal(issue.title, '말끝의 약한 소리 확인 · ‘세어’ 뒤');
+  assert.match(issue.detail, /“…단계마다 세어 봤습니다\.” 끝 단어 ‘세어’ 뒤의 89ms 소리/);
+});

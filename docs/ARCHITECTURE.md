@@ -327,6 +327,9 @@ CDP 왕복이 4K에서 한 번에 200ms라 커서가 화면을 기어간다. 실
 이 인자가 없는 기존 CLI 호출은 기존 파일 선택·자막 계산을 유지한다. 새 결과 폴더에만
 저장하고 재촬영 전후 디코딩 샘플 해시·원본 파일 해시·촬영 해시·규격을 검사한다.
 보고서의 `recapture`는 원본 경로와 음성 보존 근거, 선택한 교정본 경로·해시를 남긴다.
+결과 폴더 이름은 목록 규칙상 `recapture-<시각>`이지만, 영상 파일은 표시 이름(`CH06 L01 · 제목 · 화면 재촬영.mp4`)으로
+바꾸고 짝 파일(`.capture.json`·`.timeline.json`)과 같은 이름의 `.srt`·`.vtt`를 함께 둔다. 제작 발행(`publishVideo`)도
+영상 폴더에 같은 이름의 `.srt`·`.vtt`를 둔다 — 강의의 정본은 자막 없는 영상 + 자막 파일이다.
 `timingPreserved`는 기존 시각 사용 여부이며, `voiceReview`는 이전 청취 기록이다.
 교정본의 `alignment-quality.json`과 `alignmentQuality`·경고도 새 결과에 이어 둔다.
 새 영상의 `review.status`는 `pending`이며 사용자가 다시 시청한다. 입력 스냅샷은
@@ -336,16 +339,25 @@ CDP 왕복이 4K에서 한 번에 200ms라 커서가 화면을 기어간다. 실
 최종 WAV의 파형으로 ForcedAligner 단어 시각을 교정해 화면·자막을 배치한다. `[Ns]` 단독 줄은
 0.1~10초 무음이며 자막에 노출하지 않는다. 읽을 문장 없는 마커는 입력 오류다.
 
+자막 cue(`shared/captions.mjs`)는 문장 단위로 나누고, 46자를 넘는 문장만 조각 수를 최소로 하되 길이를
+고르게 나눈다(끝 서술어만 남은 조각을 만들지 않는다). 각 cue의 시각은 그 글의 대본 토큰을 정렬 단어에
+대응시켜 정한다 — 숫자·영문 토큰은 여러 단어로 읽힌다(`30점` → `삼십 점`). cue는 제 첫 단어 직전에 뜨고
+다음 cue의 첫 단어 직전까지 남는다. 글자 수 비례는 정렬 단어가 없을 때만 쓴다. 재촬영은 선택한 폴더의
+`captions.json`을 그대로 쓰므로, 자막 규칙이 바뀐 옛 제작본은 `realign_course`로 새 폴더를 만들어
+(자막을 새로 만든다) 그 교정 타임라인으로 재촬영한다.
+
 정렬 교정은 `course/alignment_repair.py`, 파형 근거는 `alignment_evidence.py`,
 읽기 전용 관문은 `alignment_audit.py`가 맡는다. 새 제작은 최종 WAV 조립 뒤 교정하고,
 export 후 실제 자막과 함께 관문을 다시 검사한다. 새 manifest와 export 타임라인은
 `alignmentRepair`를 보존하며, 엔트리의 `alignment.rawWords`는 원래 시각,
 `alignment.words`는 교정 시각이다. `alignment.correction.interpolatedSpans`는
-음절 가중치로 보간한 범위, `wordTimingHumanApproved`는 사람의 단어 시각 승인 여부다.
+기준점 사이에서 음절 가중치로 보간한 단어 묶음, `wordTimingHumanApproved`는 사람의 단어 시각 승인 여부다.
+약한 말끝 등 교정 경고는 `step`·`lastWord`·`sentenceEnd`(들을 자리)를 함께 적고, 결과 경고는 그 단어를 제목에 보인다.
 교정 상세는 `alignment-repair.json`, 관문은 `alignment-quality.json`과
 `validation-report.json.alignmentQuality`에 둔다. 경고는 완료 UI와 챕터별 결과에도 전달한다.
 
-기존 제작본 재정렬은 `realign_course`가 같은 교정·검사 모듈을 사용한다. 새 폴더에
+기존 제작본 재정렬은 `realign_course`가 같은 교정·검사 모듈을 사용한다. 결과는 최근 결과가 읽지 않는
+`output/reviews/<날짜>/` 아래에 둔다(영상 없는 교정 폴더가 원본과 같은 이름으로 목록에 뜨지 않게). 새 폴더에
 음성을 그대로 복사하고 대본 계약·스텝 순서·전체 길이·원본 해시를 검증한다.
 `comparison-report.json`의 `before`·`after`는 원래 무음 탐지 기준의 측정이며,
 `acousticAwareQuality`는 미확정 약한 소리를 제외한다고 가정한 별도 참고값이다.
