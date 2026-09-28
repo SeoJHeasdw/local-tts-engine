@@ -36,6 +36,22 @@ EDGE_FADE_MS = 24
 MAX_INTERNAL_SILENCE_MS = 700
 # 단축 대상 무음 구간을 이 길이로 줄인다.
 TARGET_INTERNAL_SILENCE_MS = 480
+# 단어 안 폐쇄(받침 뒤 파열음 앞의 무음) 보정. 화자 녹음의 단어 안 폐쇄는 p97 125ms·
+# p99 135ms이고 바닥이 봉우리보다 45~50dB 아래다. 모델은 받침+된소리(바깥과·받고)에서
+# 165ms 넘게, 약 10dB 더 비어 있는 무음을 끌어 뒤 파열음이 틱처럼 튄다(2026-09-28 청취 확인).
+CLOSURE_POLICY = "ko-word-closure-v1"
+# 이보다 긴 폐쇄는 앞뒤 절반씩 남기고 가운데를 덜어 낸다.
+CLOSURE_CAP_MS = 120
+# 이보다 긴 단어 안 무음은 폐쇄가 아니라 쉼이다. 단어 내부 끊김 관문이 재시도로 다룬다.
+CLOSURE_MAX_MS = 240
+# 폐쇄 앞뒤 40ms 안에 그 단어의 소리가 15ms 이상 있어야 한다. 정렬기가 단어에 붙인 쉼은 가장자리에 닿는다.
+CLOSURE_VOICED_EDGE_MS = 40
+CLOSURE_WORD_MARGIN_MS = 30
+# 5ms 창의 RMS가 클립 |x| 99.5백분위보다 이만큼 낮으면 폐쇄로 본다.
+CLOSURE_QUIET_DB = -35.0
+# 이 길이 이상의 폐쇄는 참조 녹음의 바닥 소리로 이 수준(봉우리 기준)까지 채운다.
+CLOSURE_FLOOR_DB = -48.0
+CLOSURE_FILL_FROM_MS = 90
 # 같은 슬라이드 내 다음 스텝의 첫 단어 몇 ms 전에 화면 전환할지.
 STEP_VISUAL_LEAD_MS = 120
 # 슬라이드 전환 시 첫 단어보다 더 이른 전환 시점 (슬라이드 빌드 애니메이션 고려).

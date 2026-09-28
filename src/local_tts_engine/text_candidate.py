@@ -27,6 +27,7 @@ from .course_pilot import (
     adapter_identity,
     apply_adapter_scale,
     apply_pronunciation,
+    closure_refiner,
     generate_candidate_audio,
     production_pronunciation,
     write_json,
@@ -425,15 +426,15 @@ def generate_candidate(
     quality_load_ms = 0
     quality_evaluation_ms = 0
     aligner_path = None
+    try:
+        aligner_path = _installed_model_path(ALIGNER_REPOSITORY)
+    except FileNotFoundError:
+        pass
     if quality_review:
         from mlx_audio.stt.utils import load_model as load_stt_model
 
         quality_model_path = _installed_model_path(ASR_REPOSITORY, preferred=LOCAL_QUALITY_ASR_PATH)
         quality_revision = snapshot_revision(quality_model_path)
-        try:
-            aligner_path = _installed_model_path(ALIGNER_REPOSITORY)
-        except FileNotFoundError:
-            pass
         started = time.perf_counter()
         quality_model = load_stt_model(quality_model_path)
         quality_load_ms = round((time.perf_counter() - started) * 1000)
@@ -469,6 +470,8 @@ def generate_candidate(
               if model_key == "qwen3-tts" else None)
     reviewer = (_make_quality_reviewer(quality_model, dictionary, aligner_path)
                 if quality_model is not None else None)
+    refine_closures = (closure_refiner(reference_path, lambda path, text: _read_local_independent_word_times(
+        path, text, aligner_path)) if aligner_path is not None else None)
     chunk_dir = output_path.with_name(f"{output_path.stem}-chunks")
     chunk_dir.mkdir(parents=True, exist_ok=True)
     generation_ms = 0
@@ -493,7 +496,8 @@ def generate_candidate(
                 arguments["ref_text"] = reference_text
             started = time.perf_counter()
             try:
-                generated = generate_candidate_audio(model.generate, arguments, voice_router=router)
+                generated = generate_candidate_audio(model.generate, arguments, voice_router=router,
+                                                     refine=refine_closures)
             except CourseCandidateAudioError as error:
                 raise CandidateAudioError(str(error)) from error
             finally:

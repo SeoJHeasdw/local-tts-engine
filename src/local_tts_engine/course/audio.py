@@ -1,10 +1,22 @@
-"""Measured audio trimming and inter-chunk timing."""
+"""Measured audio trimming, word-internal closure correction and inter-chunk timing."""
 
 from __future__ import annotations
+
+import math
+import re
+from typing import Any
 
 import numpy as np
 
 from .settings import (
+    CLOSURE_CAP_MS,
+    CLOSURE_FILL_FROM_MS,
+    CLOSURE_FLOOR_DB,
+    CLOSURE_MAX_MS,
+    CLOSURE_POLICY,
+    CLOSURE_QUIET_DB,
+    CLOSURE_VOICED_EDGE_MS,
+    CLOSURE_WORD_MARGIN_MS,
     EDGE_FADE_MS,
     EDGE_PAD_MS,
     MAX_INTERNAL_SILENCE_MS,
@@ -14,6 +26,8 @@ from .settings import (
     UNTRIMMED_AUDIO_STATS,
 )
 from .types import CourseChunk, CourseEntry
+
+HANGUL_SYLLABLE = re.compile(r"[가-힣]")
 
 
 def milliseconds_to_samples(milliseconds: int, sample_rate: int) -> int:
@@ -136,3 +150,112 @@ def trim_and_fade_audio(audio: np.ndarray, sample_rate: int) -> tuple[np.ndarray
         "shortenedSilenceCount": len(runs),
         "shortenedSilenceMs": shortened_ms,
     }
+
+
+def room_tone(reference: np.ndarray, reference_rate: int, rate: int, window_ms: int = 250) -> np.ndarray | None:
+    """Return the quietest stretch of the speaker's recording at unit RMS.
+
+    Digital silence cannot stand in for a room, so a reference without any
+    audible floor yields ``None`` and closures are then only shortened.
+    """
+    mono = np.asarray(reference, dtype=np.float32)
+    if mono.ndim > 1:
+        mono = mono.mean(axis=1)
+    window = round(reference_rate * window_ms / 1000)
+    if window < 1 or len(mono) < window:
+        return None
+    starts = range(0, len(mono) - window + 1, max(1, window // 4))
+    best = min(starts, key=lambda start: float(np.mean(mono[start:start + window] ** 2)))
+    tone = mono[best:best + window].astype(np.float64)
+    if reference_rate != rate:
+        target = np.linspace(0, len(tone) - 1, max(1, round(len(tone) * rate / reference_rate)))
+        tone = np.interp(target, np.arange(len(tone)), tone)
+    tone -= tone.mean()
+    level = float(np.sqrt(np.mean(tone ** 2)))
+    if level < 1e-6:
+        return None
+    return (tone / level).astype(np.float32)
+
+
+def normalize_word_closures(
+    samples: np.ndarray,
+    rate: int,
+    words: list[dict[str, Any]],
+    tone: np.ndarray | None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Bring over-long, dead-silent stop closures inside words to the speaker's range.
+
+    Only silence strictly inside a word is touched: a word of two or more Hangul
+    syllables, 30 ms inside its aligned span, with the word's own sound on both
+    sides, and at most 240 ms long. A closure longer than 120 ms keeps its first
+    and last 60 ms. A closure of 90 ms or more is lifted to the speaker's floor
+    with her room tone. Pauses between words and everything audible stay as they are.
+    """
+    samples = np.asarray(samples, dtype=np.float32).reshape(-1)
+    record: dict[str, Any] = {"policy": CLOSURE_POLICY, "closures": 0, "filled": 0, "capped": [], "removedMs": 0}
+    hop = max(1, round(rate * 0.005))
+    frames = len(samples) // hop
+    peak = float(np.percentile(np.abs(samples), 99.5)) if len(samples) else 0.0
+    if not words or frames < 2 or peak <= 0:
+        return samples, {**record, "status": "not-applicable"}
+    levels = np.sqrt(np.mean(samples[:frames * hop].reshape(frames, hop).astype(np.float64) ** 2, axis=1))
+    quiet = 20 * np.log10(levels / peak + 1e-12) < CLOSURE_QUIET_DB
+    edge = CLOSURE_VOICED_EDGE_MS // 5
+    runs: list[tuple[int, int, str]] = []
+    for word in words:
+        text = str(word.get("text", ""))
+        if len(HANGUL_SYLLABLE.findall(text)) < 2:
+            continue
+        try:
+            start, end = float(word["startMs"]), float(word["endMs"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (math.isfinite(start) and math.isfinite(end)):
+            continue
+        first = max(0, math.ceil((start + CLOSURE_WORD_MARGIN_MS) / 5))
+        last = min(frames, math.floor((end - CLOSURE_WORD_MARGIN_MS) / 5))
+        flags = quiet[first:last]
+        begin = None
+        for index in range(len(flags) + 1):
+            silent = index < len(flags) and bool(flags[index])
+            if silent and begin is None:
+                begin = index
+            if silent or begin is None:
+                continue
+            length_ms = (index - begin) * 5
+            voiced_before = begin > 0 and int(np.count_nonzero(~flags[max(0, begin - edge):begin])) >= 3
+            voiced_after = index < len(flags) and int(np.count_nonzero(~flags[index:index + edge])) >= 3
+            if 25 <= length_ms <= CLOSURE_MAX_MS and voiced_before and voiced_after:
+                runs.append(((first + begin) * hop, (first + index) * hop, text))
+            begin = None
+    record["closures"] = len(runs)
+
+    out = samples.copy()
+    target = peak * 10 ** (CLOSURE_FLOOR_DB / 20)
+    fade = max(1, round(rate * 0.01))
+    cuts: list[tuple[int, int]] = []
+    for begin, end, text in runs:
+        length = end - begin
+        if tone is not None and len(tone) and length >= rate * CLOSURE_FILL_FROM_MS / 1000:
+            # Lift each 5 ms frame to the speaker's closure floor, never above it.
+            need = np.sqrt(np.maximum(target ** 2 - levels[begin // hop:end // hop] ** 2, 0.0))
+            gain = np.repeat(np.convolve(need, np.ones(4) / 4, mode="same"), hop)
+            gain = np.pad(gain, (0, max(0, length - len(gain))), mode="edge")[:length]
+            ramp = np.ones(length)
+            span = min(fade, length // 2)
+            ramp[:span] = np.sin(np.linspace(0, np.pi / 2, span)) ** 2
+            ramp[length - span:] = np.cos(np.linspace(0, np.pi / 2, span)) ** 2
+            noise = np.resize(np.roll(tone, -(begin % len(tone))), length)
+            out[begin:end] += (noise * gain * ramp).astype(np.float32)
+            record["filled"] += 1
+        if length > rate * CLOSURE_CAP_MS / 1000:
+            keep = round(rate * CLOSURE_CAP_MS / 2000)
+            cuts.append((begin + keep, end - keep))
+            record["capped"].append({"word": text, "startMs": round(begin * 1000 / rate),
+                                     "lengthMs": round(length * 1000 / rate)})
+    for begin, end in sorted(cuts, reverse=True):
+        blend = min(round(rate * 0.004), begin, len(out) - end)
+        joined = out[begin - blend:begin] * np.linspace(1, 0, blend) + out[end - blend:end] * np.linspace(0, 1, blend)
+        out = np.concatenate([out[:begin - blend], joined.astype(np.float32), out[end:]])
+    record["removedMs"] = round((len(samples) - len(out)) * 1000 / rate)
+    return out, {**record, "status": "checked"}

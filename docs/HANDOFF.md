@@ -4,9 +4,10 @@
 
 ## 남은 일
 
-- **CH00 다시 제작:** 앱에서 CH00을 다시 만든다. 낱말 사이 끊김 관문이 1·2페이지의 `사 … 초`와
-  `있는 … 에이아이`를 새 후보로 바꾸고, 나머지 청크는 시드가 같아 지금과 같은 소리로 나온다.
-  진단과 전후 청취 비교는 `output/reviews/2026-09-28/voice-diagnosis/`(`진단 결과.md`, `main/listen.html`)에 있다.
+- **CH00 다시 제작(선택):** 지금 CH00(`studio-20260928-210855-ch00-full`)은 낱말 사이 끊김 관문까지 들어간
+  판이다. 다시 만들면 단어 안 폐쇄 보정으로 3:46 `바깥과`의 끊김이 줄어든다. 10페이지의 '재생성 권장'은
+  Whisper가 `셋뿐`을 `3분`으로 받아쓴 것이라 들어 보고 넘기면 된다. 진단·청취 비교는
+  `output/reviews/2026-09-28/voice-diagnosis/`(`진단 결과.md`, `main/listen.html`, `closure-ab/listen.html`)에 있다.
 - **CH06 새 판 시청:** 자막을 굽지 않은 영상과 같은 이름의 `.srt`·`.vtt`다. 음성은 청취 승인한 원본
   그대로이고, 화면이 새로 찍혀 검수 상태는 '대기'다. 옛 판과 기록은 `output/reviews/2026-09-28/ch06-archive/`에 있다.
 - **CH04 이후 촬영:** CH01~CH03은 제작·청취 승인까지 끝났다.
@@ -26,7 +27,7 @@
 
 | 대상 | 경로 |
 | --- | --- |
-| CH00 | `output/videos/studio-20260928-192428-ch00-full/` (1·2페이지 재제작 예정) |
+| CH00 | `output/videos/studio-20260928-210855-ch00-full/` |
 | CH01 전체·CH02 16편 | `output/edits/2026-09-10/ch01-ch02-english-retrofit-index/최신 영상 목록.md` |
 | CH02 L04 후속 수정본 | `output/edits/2026-09-10/ch02-l04-anthropic-refined/` |
 | CH03 | `output/videos/studio-20260911-161338-ch03-lessons-ch03-*` |

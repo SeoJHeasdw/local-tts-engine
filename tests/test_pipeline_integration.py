@@ -248,8 +248,14 @@ def test_a_correctly_spelled_but_broken_word_is_retried_before_export(studio, mo
         ]
     monkeypatch.setattr(course_pilot, "read_timed_words", timed_words)
     confirmations = []
+    closure_alignments = []
     original_confirmation = course_pilot.read_independent_word_times
     def confirm(path, text):
+        # Closure correction aligns every fresh take once, before it is cached;
+        # the pause confirmation this test is about aligns the cached clip.
+        if Path(path).name == "segment.wav":
+            closure_alignments.append(str(path))
+            return original_confirmation(path, text)
         confirmations.append(str(path))
         words = original_confirmation(path, text)
         if short_alignment:
@@ -258,6 +264,7 @@ def test_a_correctly_spelled_but_broken_word_is_retried_before_export(studio, mo
     monkeypatch.setattr(course_pilot, "read_independent_word_times", confirm)
     manifest = lecture.run(start_page=1, end_page=1, quality_attempts=2)
     assert count == 2
+    assert len(closure_alignments) == 2
     record = manifest["quality"]["chunks"][0]
     assert record["candidates"][0]["phoneticErrorRate"] == 0
     assert record["candidates"][0]["prosody"]["checks"][0]["term"] == "똑똑한"
@@ -382,7 +389,7 @@ def test_a_damaged_cached_clip_is_regenerated_without_reusing_it(studio, tmp_pat
     assert sidecars, "클립 사이드카가 있어야 캐시가 동작한다"
     for sidecar in sidecars:
         assert set(json.loads(sidecar.read_text(encoding="utf-8"))) == {
-            "trimmedHeadMs", "trimmedTailMs", "shortenedSilenceCount", "shortenedSilenceMs",
+            "trimmedHeadMs", "trimmedTailMs", "shortenedSilenceCount", "shortenedSilenceMs", "wordClosures",
         }
 
     damaged = sorted((output / "clips/native").glob("*.wav"))[1]

@@ -53,6 +53,8 @@ from .course.audio import (
     chunk_gap_after,
     gap_after,
     milliseconds_to_samples,
+    normalize_word_closures,
+    room_tone,
     trim_and_fade_audio,
 )
 from .course.candidates import (
@@ -87,6 +89,11 @@ from .course.serialization import stable_digest, write_json
 from .course.settings import (
     ALIGNER_REPOSITORY,
     AUDIO_TRIM_STAT_KEYS,
+    CLOSURE_CAP_MS,
+    CLOSURE_FILL_FROM_MS,
+    CLOSURE_FLOOR_DB,
+    CLOSURE_MAX_MS,
+    CLOSURE_POLICY,
     COURSE_SETTING_OVERRIDES,
     DEFAULT_SOURCE_PROJECT,
     EDGE_FADE_MS,
@@ -267,9 +274,38 @@ def read_independent_word_times(audio_path: Path, text: str) -> list[dict[str, A
         mx.clear_cache()
 
 
+def closure_refiner(reference_path: Path, align: Any) -> Any:
+    """Return ``refine(audio, rate, text)`` that corrects word-internal closures.
+
+    ``align(path, text)`` returns forced-aligner words for a WAV. A segment whose
+    alignment fails keeps its audio, and its record says why.
+    """
+    reference, reference_rate = sf.read(reference_path, dtype="float32", always_2d=True)
+    tones: dict[int, Any] = {}
+
+    def refine(audio: np.ndarray, rate: int, text: str) -> tuple[np.ndarray, dict[str, Any]]:
+        if rate not in tones:
+            tones[rate] = room_tone(reference, reference_rate, rate)
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "segment.wav"
+            sf.write(path, audio, rate, subtype="FLOAT")
+            try:
+                words = align(path, text)
+            except Exception as error:  # noqa: BLE001 - an aligner fault must not cost the take
+                return audio, {"policy": CLOSURE_POLICY, "status": "alignment-failed", "reason": str(error)}
+        return normalize_word_closures(audio, rate, words, tones[rate])
+
+    return refine
+
+
 def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: list[str] | None = None,
-                             *, voice_router: EnglishVoiceRouter | None = None) -> dict[str, Any]:
-    """Make a normal take or join punctuation-bounded recovery pieces."""
+                             *, voice_router: EnglishVoiceRouter | None = None,
+                             refine: Any | None = None) -> dict[str, Any]:
+    """Make a normal take or join punctuation-bounded recovery pieces.
+
+    ``refine`` corrects each Korean segment before it is placed, so segment
+    positions and the cached clip describe the corrected audio.
+    """
     texts = parts or [arguments["text"]]
     if parts and " ".join(texts) != " ".join(arguments["text"].split()):
         raise ValueError("누락 복구 조각이 원래 발음문과 다릅니다.")
@@ -277,7 +313,7 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
     segments = [segment for text in texts for segment in (
         speech_segments(text, voice_router.dictionary) if routing else [{"text": text, "language": arguments.get("lang_code", "Korean")}]
     )]
-    pieces, cleanups, part_records = [], [], []
+    pieces, cleanups, part_records, closures = [], [], [], []
     rate, generation_ms, peak, cursor = None, 0, 0.0, 0
     previous_language = None
     for segment in segments:
@@ -294,6 +330,10 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
         raw = validate_candidate_audio(np.concatenate([np.asarray(result.audio) for result in results]), rate)
         audio, cleanup = trim_and_fade_audio(raw, rate)
         audio = validate_candidate_audio(audio, rate)
+        closure = None
+        if refine is not None and language != "English":
+            audio, closure = refine(audio, rate, text)
+            audio = validate_candidate_audio(audio, rate)
         if pieces:
             gap_ms = LANGUAGE_GAP_MS if routing and previous_language != language else STEP_GAP_MS
             gap = np.zeros(round(gap_ms * rate / 1000), dtype=audio.dtype)
@@ -302,6 +342,10 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
         part_records.append({"text": text, "startMs": round(cursor * 1000 / rate),
                              "durationMs": round(len(audio) * 1000 / rate),
                              **({"language": language, "startSample": cursor, "endSample": cursor + len(audio)} if routing else {})})
+        if closure is not None:
+            offset = round(cursor * 1000 / rate)
+            closures.append({**closure, "capped": [{**item, "startMs": item["startMs"] + offset}
+                                                   for item in closure.get("capped", [])]})
         pieces.append(audio)
         cleanups.append(cleanup)
         cursor += len(audio)
@@ -316,6 +360,16 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
         })
     if parts:
         cleanup["recovery"] = {"strategy": COVERAGE_POLICY, "gapMs": STEP_GAP_MS, "parts": part_records}
+    if closures:
+        statuses = {item["status"] for item in closures}
+        cleanup["wordClosures"] = {
+            "policy": CLOSURE_POLICY,
+            "status": "checked" if statuses == {"checked"} else sorted(statuses - {"checked"})[0],
+            "closures": sum(item.get("closures", 0) for item in closures),
+            "filled": sum(item.get("filled", 0) for item in closures),
+            "capped": [entry for item in closures for entry in item.get("capped", [])],
+            "removedMs": sum(item.get("removedMs", 0) for item in closures),
+        }
     combined = np.concatenate(pieces)
     if routing:
         match_english_level(combined, rate, part_records)
@@ -570,6 +624,11 @@ def _synthesize_excerpt(
     load_ms = round((time.perf_counter() - load_started) * 1000)
 
     voice_router = EnglishVoiceRouter(pronunciation, training_wrapper.model if training_wrapper else None) if model_key == "qwen3-tts" else None
+    refine_closures = closure_refiner(reference_path, read_independent_word_times)
+    closure_policy = {
+        "policy": CLOSURE_POLICY, "capMs": CLOSURE_CAP_MS, "maxMs": CLOSURE_MAX_MS,
+        "floorDb": CLOSURE_FLOOR_DB, "fillFromMs": CLOSURE_FILL_FROM_MS,
+    }
 
     # 루프 전 초기화 (첫 번째 클립에서 샘플레이트가 결정된다)
     target_samples: int | None = None
@@ -613,6 +672,7 @@ def _synthesize_excerpt(
                 "edgeFadeMs": EDGE_FADE_MS,
                 "maxInternalSilenceMs": MAX_INTERNAL_SILENCE_MS,
                 "targetInternalSilenceMs": TARGET_INTERNAL_SILENCE_MS,
+                "wordClosures": closure_policy,
                 **({"recovery": {"policy": COVERAGE_POLICY, "parts": parts, "gapMs": STEP_GAP_MS}} if parts else {}),
                 **({"voiceRouting": voice_router.identity(chunk.tts_text)} if voice_router and voice_router.identity(chunk.tts_text) else {}),
             }
@@ -638,7 +698,8 @@ def _synthesize_excerpt(
             if parts:
                 print(f"[구절 누락 복구] {chunk.key}: 후보 {attempt}, 원문 그대로 {len(parts)}조각 합성", flush=True)
             try:
-                generated = generate_candidate_audio(model.generate, generation_args, parts, voice_router=voice_router)
+                generated = generate_candidate_audio(model.generate, generation_args, parts, voice_router=voice_router,
+                                                     refine=refine_closures)
             except CandidateAudioError as error:
                 error.seed = candidate_seed
                 error.cache_hash = cache_hash
@@ -803,6 +864,7 @@ def _synthesize_excerpt(
                 "endMs": round(end_sample * 1000 / rate),
                 "durationMs": round(frames * 1000 / rate),
                 **({"voiceRouting": selected["voiceRouting"]} if selected.get("voiceRouting") else {}),
+                **({"wordClosures": selected["wordClosures"]} if selected.get("wordClosures") else {}),
                 **{
                     key: selected[key]
                     for key in (
@@ -1100,6 +1162,7 @@ def _synthesize_excerpt(
             "qualityPassed": quality_by_chunk[item["key"]]["selected"].get("passed"),
             "qualitySeverity": quality_by_chunk[item["key"]].get("severity", "not-checked"),
             **({"voiceRouting": item["voiceRouting"]} if item.get("voiceRouting") else {}),
+            **({"wordClosures": item["wordClosures"]} if item.get("wordClosures") else {}),
         }
         for item in selected_chunks
     ]
@@ -1231,6 +1294,7 @@ def _synthesize_excerpt(
             "edgeFadeMs": EDGE_FADE_MS,
             "maxInternalSilenceMs": MAX_INTERNAL_SILENCE_MS,
             "targetInternalSilenceMs": TARGET_INTERNAL_SILENCE_MS,
+            "wordClosures": closure_policy,
             "stepVisualLeadMs": STEP_VISUAL_LEAD_MS,
             "slideVisualLeadMs": SLIDE_VISUAL_LEAD_MS,
             "forcedPauseMinMs": MIN_FORCED_PAUSE_MS,

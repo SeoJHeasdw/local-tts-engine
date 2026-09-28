@@ -668,9 +668,12 @@ def review_candidate_prosody(
     warning remains a warning even if every generation has the same rhythm.
     ``dictionary`` names the substituted English terms whose lead-in is checked;
     without it only pauses inside multi-word readings are.
+    A take with only content warnings is still timed: when every seed carries
+    the same reader artifact (셋뿐 written as 3분), its rhythm is what tells the
+    takes apart. A misread take is regenerated without paying for timing.
     """
     result = dict(evaluation)
-    if not evaluation["passed"]:
+    if evaluation.get("failures"):
         result["prosody"] = {"status": "not-checked-content", "checks": []}
         return result
     path = Path(evaluation["audioPath"])

@@ -343,3 +343,18 @@ def test_a_take_without_boundary_targets_does_not_load_the_aligner(tmp_path):
     reviewed = review_candidate_prosody(original, lambda path, temperature: [], refuse, dictionary=TERM_DICTIONARY)
     assert reviewed["passed"]
     assert reviewed["boundaryPauses"]["status"] == "no-targets"
+
+
+def test_a_take_with_only_a_content_warning_is_still_timed(tmp_path):
+    # CH00 slide 10: every seed read 셋뿐 back as 3분, a warning on all four takes.
+    # That reader artifact must not also blind the rhythm checks for the chunk.
+    path = audio_with_pause(tmp_path / "term.wav", 1.0, 1.35, seconds=3.2)
+    original = evaluate_candidate(expected_text=TERM_TEXT, recognized_text=TERM_TEXT, audio_path=path,
+                                  required_pronunciations=TERM_READINGS)
+    warned = {**original, "passed": False, "warnings": ["단어 일부 누락"]}
+    reviewed = review_candidate_prosody(warned, lambda path, temperature: [],
+                                        lambda path, text: term_words(350), dictionary=TERM_DICTIONARY)
+    assert reviewed["warnings"] == ["단어 일부 누락", BOUNDARY_WARNING]
+    assert reviewed["boundaryPauses"]["checks"][0]["term"] == "있는 에이아이"
+    calm = {**warned, "attempt": 2}
+    assert choose_best_candidate([reviewed, calm])["attempt"] == 2
