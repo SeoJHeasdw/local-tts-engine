@@ -174,7 +174,7 @@ k/fps다. 녹화 중의 기다림은 `pacer`로 페이지 시간을 넘기며 �
 
 ```text
 demo record  앱 띄우기 → 동사 실행 + RGB 무손실 녹화 → demo/scenes.json
-Claude·사용자  scenes.json의 화면 글을 근거로 demo/script.json 대본, status=approved
+에이전트·사용자  scenes.json의 화면 글을 근거로 demo/script.json 대본, status=approved
 demo voice   장면마다 목소리 후보 → 사람이 듣고 voice.selected에 적는다
 demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 ```

@@ -28,23 +28,22 @@
 
 `audit_speech_corpus.py --output <새 보고서.json> --replay-text --baseline-ref HEAD`는
 현재 전체 대본과 중복을 제외한 저장 판독을 점검하고, 같은 사전·전사로 변경 전후
-코드 판정을 비교한다. 자동 통과율을 발음 품질 퍼센트로 해석하지 않는다.
+코드 판정을 비교한다.
 `validate_prosody_live.py --samples-file <표본.json> --prepare-only`로 실제 챕터에서
 고정한 1~16개 `{name, text}` 표본을 준비하고, Metal이 가능한 제작 환경에서
 `--prepare-only`를 빼면 기존 제작 목소리·4후보 정책으로 새 음성을 검증한다.
 두 도구의 `--source-project`는 덱 위치를 명시하며 기본 연결을 따른다.
 `validate_prosody_live.py --review-existing <완료된 검증 폴더>`는 선택된 기존 WAV를
 다시 합성하지 않고 실제 언어 구간별 새 받아쓰기·운율 검수로 확인한다. 원본 WAV와
-manifest는 보존하고 새 `review-*.json`에 결과를 쓴다. 기본 2표본의 인위적 끊김
-실험은 해당 대본에만 적용하며, 실제 챕터 표본에는 그 실험을 통과 조건으로 요구하지 않는다.
+manifest는 보존하고 새 `review-*.json`에 결과를 쓴다. 인위적 끊김 실험은 기본 2표본에만 있다.
 검증 폴더의 `listening-review.json`에 정확한 녹음·발음문·경고를 대조할 청취 기록이 있으면,
 그 단일 오탐 뒤의 운율을 별도로 검사한다. `passed`를 덮지 않고 `prosodyAfterListening`에
 쓰므로 원래 자동 판정과 구분한다. 짧은 낱말의 실험적 단서는
 `shortWordReviewCandidates`로만 보관하며 자동 재시도에 적용하지 않는다.
 
-학습 데이터 준비는 이미 완료됐다. 재준비를 요청받은 경우에만 새 출력 폴더에서
+학습 데이터는 `artifacts/finetune-datasets/jaeho-ko-v1/`에 준비돼 있다. 다시 준비할 때는 새 출력 폴더에서
 `segment → transcribe → reconcile-script → spot-check/apply-review → validate → export`
 순으로 실행한다. 원본 `data/private/voice/training/pvc/master-wav/`는 읽기 전용이다.
 각 하위 명령의 `--help`가 옵션의 기준이다. ASR 초안은 자동 승인하지 않으며
-`review.tsv`에서 accepted인 클립만 공식 JSONL로 내보낸다. 기존 준비 데이터는
-`artifacts/finetune-datasets/jaeho-ko-v1/`, 승인·학습 근거는 [DECISIONS](../docs/DECISIONS.md)에 있다.
+`review.tsv`에서 accepted인 클립만 공식 JSONL로 내보낸다. 승인·학습 근거는
+[DECISIONS](../docs/DECISIONS.md)에 있다.
