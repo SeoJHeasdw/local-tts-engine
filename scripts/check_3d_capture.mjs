@@ -282,8 +282,11 @@ trialLoop: for (const plan of plans) {
       trial.frames = report.frames;
       trial.video = { width: report.video.width, height: report.video.height,
         frameCount: Number(report.video.nb_frames), fps: report.video.avg_frame_rate };
+      // 한 칸씩 찍으므로 복제는 0이다. 앞 칸과 같은 그림(페이지가 멈춰 있던 칸)과 촬영 배율을 본다.
       trial.duplicatedPercent = +(100 * report.frames.duplicated / report.frames.written).toFixed(2);
-      trial.longestStallMs = Math.round(report.frames.longestStall * 1000 / 25);
+      trial.unchangedPercent = +(100 * report.frames.unchanged / report.frames.written).toFixed(2);
+      trial.longestUnchangedMs = Math.round(report.frames.longestUnchanged * 1000 / 25);
+      trial.captureRealtimeRatio = +(report.frames.clock.captureRealMs / report.durationMs).toFixed(2);
       trial.peakEncoderBacklogBytes = report.frames.peakBacklog;
       trial.sourceResolutionLimits = report.sourceResolutionLimits;
     } catch (error) {

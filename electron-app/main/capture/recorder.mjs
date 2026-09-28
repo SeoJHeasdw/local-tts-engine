@@ -1,13 +1,109 @@
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { captureFrameCount } from '../../shared/video-quality.mjs';
 
 const LAG_MS = 150;
-// Lossless PNG frames are sampled onto the lecture clock and encoded once.
+
+// 한 칸씩 찍은 PNG를 영상 순서대로 받아 한 번 인코딩한다(덱 촬영). 받은 순서가 곧
+// 영상 순서라 시각 정렬·수신 확인 간격·복제가 없다. 실시간이 아니므로 인코더가 밀리면
+// 실패하지 않고 다음 칸을 찍기 전에 기다린다.
+export function startFrameEncoder({ ffmpegArgs, totalFrames, fps = 25, maxBacklogBytes = 256 * 1024 * 1024 } = {}) {
+  if (!Number.isSafeInteger(totalFrames) || totalFrames <= 0 || !(fps > 0) || !(maxBacklogBytes > 0)) {
+    throw new Error('촬영 프레임 수·프레임률·버퍼 제한이 올바르지 않습니다.');
+  }
+  let phase = 'recording', failure = null, stderrText = '';
+  let written = 0, peakBacklog = 0, peakBacklogAtMs = null, backlogWaits = 0;
+  let previousHash = null, unchanged = 0, unchangedRun = 0, longestUnchanged = 0;
+  const backlogPeakBytesBySecond = [];
+  let rejectFailure;
+  const failed = new Promise((_, reject) => { rejectFailure = reject; });
+  failed.catch(() => {});
+  const ffmpeg = spawn('ffmpeg', ['-xerror', ...ffmpegArgs], { stdio: ['pipe', 'ignore', 'pipe'] });
+  function fail(error) {
+    if (phase === 'failed' || phase === 'finished' || phase === 'aborted') return;
+    failure = error;
+    phase = 'failed';
+    ffmpeg.stdin.destroy();
+    ffmpeg.kill('SIGKILL');
+    rejectFailure(error);
+  }
+  ffmpeg.stderr.on('data', chunk => { stderrText = (stderrText + chunk.toString()).slice(-16384); });
+  ffmpeg.stdin.on('error', error => fail(new Error(`촬영 인코더 입력이 끊겼습니다: ${error.message}`)));
+  const encoded = new Promise((resolve, reject) => {
+    ffmpeg.once('error', reject);
+    ffmpeg.once('close', code => {
+      if (code === 0 && phase === 'finishing') resolve();
+      else reject(new Error(`ffmpeg 인코딩 실패 (code ${code}, ${phase})${stderrText.trim() ? `\n${stderrText.trim()}` : ''}`));
+    });
+  });
+  encoded.catch(fail);
+  const drained = () => new Promise(resolve => {
+    const done = () => { ffmpeg.stdin.off('drain', done); ffmpeg.stdin.off('close', done); resolve(); };
+    ffmpeg.stdin.on('drain', done);
+    ffmpeg.stdin.on('close', done);
+  });
+  return {
+    encoderPid: ffmpeg.pid ?? null,
+    fail,
+    failed,
+    get written() { return written; },
+    throwIfFailed() { if (failure) throw failure; },
+    async write(png) {
+      if (failure) throw failure;
+      if (phase !== 'recording') throw new Error('촬영이 끝난 뒤에 프레임을 쓸 수 없습니다.');
+      if (written >= totalFrames) throw new Error(`예정한 ${totalFrames}프레임을 넘겨 쓰려 했습니다.`);
+      // 같은 그림이 이어진 칸은 페이지가 멈춰 있었다는 뜻이다(촬영 결함이 아니다). 진단으로만 센다.
+      const hash = crypto.createHash('sha1').update(png).digest('hex');
+      if (hash === previousHash) { unchanged++; unchangedRun++; longestUnchanged = Math.max(longestUnchanged, unchangedRun); }
+      else unchangedRun = 0;
+      previousHash = hash;
+      ffmpeg.stdin.write(png);
+      const backlog = ffmpeg.stdin.writableLength;
+      if (backlog > peakBacklog) { peakBacklog = backlog; peakBacklogAtMs = Math.round(written * 1000 / fps); }
+      const second = Math.floor(written / fps);
+      backlogPeakBytesBySecond[second] = Math.max(backlogPeakBytesBySecond[second] ?? 0, backlog);
+      written++;
+      if (backlog > maxBacklogBytes) {
+        backlogWaits++;
+        await Promise.race([drained(), failed]);
+      }
+      if (failure) throw failure;
+    },
+    async finish() {
+      if (failure) throw failure;
+      if (phase !== 'recording') throw new Error('진행 중인 촬영이 없습니다.');
+      if (written !== totalFrames) {
+        const error = new Error(`촬영 프레임 수가 모자랍니다: ${written}/${totalFrames}`);
+        fail(error);
+        throw error;
+      }
+      phase = 'finishing';
+      try {
+        ffmpeg.stdin.end();
+        await encoded;
+        phase = 'finished';
+        return { stepped: true, written, duplicated: 0, longestStall: 0, duplicateRuns: [],
+          unchanged, longestUnchanged, peakBacklog, peakBacklogAtMs, backlogLimitBytes: maxBacklogBytes,
+          backlogWaits, backlogPeakBytesBySecond };
+      } catch (error) { fail(error); throw failure || error; }
+    },
+    async abort() {
+      if (phase === 'finished' || phase === 'aborted') return;
+      failure ||= new Error('촬영을 중단했습니다.');
+      rejectFailure(failure);
+      phase = 'aborted';
+      ffmpeg.stdin.destroy(); ffmpeg.kill('SIGKILL');
+      await encoded.catch(() => {});
+    },
+  };
+}
+
+// 실시간으로 흐르는 화면(앱 데모)을 CDP 스크린캐스트로 받아 영상 시계의 칸에 나눠 담는다.
 // A still page need not send new frames; transport/process failure is separate.
 //
-// `session`은 CDP 세션의 모양(`on`/`off`/`send`)만 요구한다. 프레임을 덱 페이지가
-// 보내는지 다른 화면이 보내는지는 여기서 구분하지 않는다.
+// `session`은 CDP 세션의 모양(`on`/`off`/`send`)만 요구한다. 프레임을 어느 화면이
+// 보내는지는 여기서 구분하지 않는다.
 export function startScreencastEncoder({ session, ffmpegArgs, width = 1920, height = 1080, fps = 25,
   maxBacklogBytes = 512 * 1024 * 1024, maxBufferedBytes = 256 * 1024 * 1024,
   maxBufferedFrames = 64, readyTimeoutMs = 15000, stopTimeoutMs = 2000, ackPaceRatio = .75 } = {}) {

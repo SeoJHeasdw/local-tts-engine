@@ -5,8 +5,8 @@ import { formatCountdown } from "./view-utils.mjs";
 //
 // 한 편은 목소리 → 자료 연결 → 자막 → 촬영 → 검증 순서로 지난다. 진행 숫자가
 // 붙는 단계는 목소리뿐이라, 예전에는 그 단계를 벗어나는 순간 남은 시간이
-// 사라지고 '계산 중'만 남았다. 촬영은 강의 길이만큼 실시간으로 도는 가장 긴
-// 단계다. 정작 기다림이 제일 긴 구간에서 시계가 꺼져 있던 셈이다.
+// 사라지고 '계산 중'만 남았다. 촬영은 강의 길이에 비례해 도는 가장 긴 단계다
+// (한 칸씩 찍어 실시간보다 느리다). 정작 기다림이 제일 긴 구간에서 시계가 꺼져 있던 셈이다.
 //
 // 그래서 여기서는 단계마다 실제로 걸린 시간을 모아 두고, 남은 단계의 몫을 더해
 // 답한다. 촬영은 합성이 끝나야 알 수 있는 음성 길이로 잰다.
@@ -85,7 +85,7 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
     return {
       // 단계별 페이지당 소요. 끝난 단계만 들어간다.
       stages: new Map(),
-      // 촬영 시간 ÷ 음성 길이. 실시간 촬영이라 1에 가깝지만 화질·인코딩으로 는다.
+      // 촬영 시간 ÷ 음성 길이. 한 칸씩 찍으므로 1보다 크고 화질·장면(3D·영상)에 따라 는다.
       capture: { ms: 0, durationMs: 0 },
       // 페이지당 음성 길이. 아직 합성하지 않은 편의 촬영 몫을 여기서 잡는다.
       audio: { durationMs: 0, pages: 0 },
@@ -369,7 +369,7 @@ export function createJobPace({ now = () => Date.now(), store = browserStore() }
       unitPages = Math.max(0, Number(units[unit.index - 1]?.pages) || 0);
       unitStartedAt = now();
     },
-    // 촬영은 강의 길이만큼 실시간으로 돈다. 합성이 끝나야 그 길이를 알 수 있다.
+    // 촬영 시간은 강의 길이에 비례한다. 합성이 끝나야 그 길이를 알 수 있다.
     unitDuration(durationMs) {
       const value = Number(durationMs);
       if (!(value > 0)) return;

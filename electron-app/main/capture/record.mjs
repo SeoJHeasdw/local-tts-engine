@@ -1,6 +1,7 @@
-// 강의 덱 화면을 실시간으로 찍어 음성과 함께 MP4로 굳힌다.
-// 화면 조작 계약은 deck-page.mjs, 프레임 전송은 recorder.mjs, 규격은 encoding.mjs가
-// 소유한다. 이 파일은 그 셋을 타임라인 위에 얹는 조립부다.
+// 강의 덱 화면을 찍어 음성과 함께 MP4로 굳힌다. 페이지 시계를 멈추고 한 칸(1/fps초)씩
+// 넘겨 찍으므로 출력 프레임 k는 정확히 페이지 시각 k/fps초다. 실시간보다 느리게 찍힌다.
+// 화면 조작 계약은 deck-page.mjs, 페이지 시계는 page-clock.mjs, 인코더 입력은 recorder.mjs,
+// 규격은 encoding.mjs가 소유한다. 이 파일은 그것들을 타임라인 위에 얹는 조립부다.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,12 +11,18 @@ import { promisify } from "node:util";
 import { captureFrameCount, captureVideoFileName, videoQuality } from "../../shared/video-quality.mjs";
 import { fileSha256 } from "../files.mjs";
 import { captureMuxArgs, validateCaptureStream, writeCaptureReport } from "./encoding.mjs";
-import { startScreencastEncoder } from "./recorder.mjs";
+import { holdPageClock, installPageClock } from "./page-clock.mjs";
+import { startFrameEncoder } from "./recorder.mjs";
 import { createCaptureResourceSampler } from "./resource-metrics.mjs";
 import { startCaptureServer, waitForServer } from "./site.mjs";
 import { advanceToEntry, auditCapturePage, gotoFirstEntry, prepareDeckPage, replayFirstEntry, startCaptions } from "./deck-page.mjs";
 
 const execFileAsync = promisify(execFile);
+// 장면을 올리는 동안(모듈 받기·WebGL 준비) 페이지 시간을 멈춘 채 기다리는 실제 시간의 상한.
+// 넘기면 페이지 시간을 넘기며(칸을 찍으며) 기다린다. 그때는 불러오는 화면이 영상에 남는다.
+const SETTLE_BUDGET_MS = 5000;
+const SETTLE_POLL_MS = 15;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function run(file, args) {
   try {
@@ -48,6 +55,7 @@ export async function captureVideo({
   noCache = false,
   quality = "standard",
   audioFile = null,
+  settleBudgetMs = SETTLE_BUDGET_MS,
 }) {
   const profile = videoQuality(quality);
   if (!siteDir && !url) throw new Error("촬영할 화면이 없습니다. --site-dir 또는 --url이 필요합니다.");
@@ -155,6 +163,7 @@ export async function captureVideo({
       await session.send("Network.enable");
       await session.send("Network.setCacheDisabled", { cacheDisabled: true });
     }
+    await installPageClock(page);
     await page.goto(baseUrl, { waitUntil: "networkidle" });
     let captureStarted = false;
     let unexpectedNavigation = null;
@@ -180,21 +189,58 @@ export async function captureVideo({
     await gotoFirstEntry(page, first);
     sourceResolutionLimits.push({ slideId: first.slideId, step: first.step, assets: await auditCapturePage(page, profile) });
 
-    // 스크린캐스트를 미리 열어 첫 프레임을 받아둔다. 프레임을 흘려보내기
-    // 시작하는 순간이 곧 영상의 0초라, 예전처럼 마커를 찍어 인코더의 시작
-    // 시점을 되짚고 앞을 잘라낼 필요가 없다.
-    recorder = startScreencastEncoder({ session, ffmpegArgs, width: profile.width, height: profile.height, fps: profile.fps });
+    // 여기서부터 페이지 시간은 우리가 넘길 때만 흐른다. 0ms가 영상의 0프레임이다.
+    const frameMs = 1000 / profile.fps;
+    recorder = startFrameEncoder({ ffmpegArgs, totalFrames, fps: profile.fps });
     resourceSampler.setEncoderPid(recorder.encoderPid);
     await resourceSampler.sample().catch(() => {});
-    await recorder.ready();
-
+    const clock = await holdPageClock(page, session, profile);
     const captureStart = performance.now();
     resourceSampler.setPhase("recording");
-    recorder.begin(Date.now(), totalFrames);
     captureStarted = true;
+
+    let shot = 0;
+    let pageTimeMaxErrorMs = 0;
+    // 칸 하나: 페이지 시계를 k/fps초로 넘기고, 그 시각으로 그린 화면을 찍는다.
+    const shootNext = async () => {
+      recorder.throwIfFailed();
+      const at = shot * frameMs;
+      await clock.advanceTo(at);
+      const drawn = await clock.frame();
+      pageTimeMaxErrorMs = Math.max(pageTimeMaxErrorMs, Math.abs(drawn.at - at));
+      await recorder.write(await clock.shoot());
+      shot++;
+    };
+    // 장면이 오르기를 기다리는 동안의 걸음. 먼저 페이지 시간을 멈춘 채 다시 그려 보고,
+    // 실제 시간 상한을 넘기면 칸을 찍으며(페이지 시간을 넘기며) 기다린다.
+    const settles = [];
+    const pacer = (label) => {
+      const record = { label, atMs: Math.round(clock.elapsedMs), settleRealMs: 0, pageMs: 0 };
+      settles.push(record);
+      const started = performance.now();
+      let pageFrom = null;
+      return {
+        elapsedMs: () => (pageFrom === null ? 0 : clock.elapsedMs - pageFrom),
+        async step() {
+          recorder.throwIfFailed();
+          if (pageFrom === null && performance.now() - started < settleBudgetMs) {
+            await clock.frame();
+            await sleep(SETTLE_POLL_MS);
+            record.settleRealMs = Math.round(performance.now() - started);
+            return;
+          }
+          pageFrom ??= clock.elapsedMs;
+          if (shot < totalFrames) await shootNext();
+          else { await clock.advanceTo(clock.elapsedMs + frameMs); await clock.frame(); }
+          record.pageMs = Math.round(clock.elapsedMs - pageFrom);
+        },
+      };
+    };
+
     if (burnCaptions) await startCaptions(page, captions);
-    const firstReplayRenderMs = await replayFirstEntry(page, first);
-    const firstSceneReadyAtMs = Math.round(performance.now() - captureStart);
+    const firstPacer = pacer(first.key);
+    const firstReplayRenderMs = await replayFirstEntry(page, first, { pacer: firstPacer });
+    const firstSceneReadyAtMs = Math.round(firstPacer.elapsedMs());
     if (Number.isFinite(first.speechStartMs) && firstSceneReadyAtMs > first.speechStartMs) {
       throw new Error(
         `첫 화면이 발화 시작 뒤에 준비됐습니다: 화면 ${firstSceneReadyAtMs}ms, 발화 ${first.speechStartMs}ms. ` +
@@ -202,22 +248,38 @@ export async function captureVideo({
       );
     }
 
+    const lateTransitions = [];
     for (let i = 0; i < timeline.entries.length; i++) {
       const entry = timeline.entries[i];
       const transitionAtMs = Math.min(entry.transitionAtMs ?? entry.endMs, captureDurationMs);
-      const delay = captureStart + transitionAtMs - performance.now();
-      if (delay > 0) await recorder.wait(delay);
+      // 전환 시각과 같거나 앞선 칸은 이전 화면이다. 키는 정확히 전환 시각에 누른다.
+      while (shot < totalFrames && shot * frameMs <= transitionAtMs) await shootNext();
       refreshed();
       const next = timeline.entries[i + 1];
       if (!next || entry.endMs >= captureDurationMs) break;
-      await advanceToEntry(page, entry, next);
-      sourceResolutionLimits.push({ slideId: next.slideId, step: next.step, assets: await auditCapturePage(page, profile) });
+      if (clock.elapsedMs > transitionAtMs) {
+        lateTransitions.push({ key: next.key, lateMs: Math.round(clock.elapsedMs - transitionAtMs) });
+      } else {
+        await clock.advanceTo(transitionAtMs);
+      }
+      const nextPacer = pacer(next.key);
+      await advanceToEntry(page, entry, next, { pacer: nextPacer });
+      sourceResolutionLimits.push({ slideId: next.slideId, step: next.step,
+        assets: await auditCapturePage(page, profile, { pacer: nextPacer }) });
     }
 
-    const remaining = captureStart + captureDurationMs - performance.now();
-    if (remaining > 0) await recorder.wait(remaining);
+    while (shot < totalFrames) await shootNext();
     refreshed();
-    const frames = await recorder.finish();
+    const recorded = await recorder.finish();
+    const frames = {
+      ...recorded,
+      clock: {
+        mode: "stepped", frameMs, pageTimeMaxErrorMs: +pageTimeMaxErrorMs.toFixed(3),
+        captureRealMs: Math.round(performance.now() - captureStart),
+        settles: settles.filter(item => item.settleRealMs || item.pageMs),
+        lateTransitions,
+      },
+    };
     recorder = null;
     resourceSampler.setEncoderPid(null);
     resourceSampler.setPhase("finalizing");
@@ -245,9 +307,9 @@ export async function captureVideo({
     writeCaptureReport(path.join(outDir, "capture-report.json"), captureReport);
     captureCompleted = true;
     console.log(
-      `[capture] ${frames.written}프레임 기록, 복제 ${frames.duplicated}프레임` +
-      `, 최장 정지 ${(frames.longestStall / profile.fps).toFixed(1)}초` +
-      (frames.reordered ? `, 도착 순서 뒤바뀜 ${frames.reordered}프레임` : "") +
+      `[capture] ${frames.written}프레임을 ${(frames.clock.frameMs).toFixed(0)}ms 간격으로 기록` +
+      ` (페이지 시각 오차 최대 ${frames.clock.pageTimeMaxErrorMs}ms, 촬영 ${(frames.clock.captureRealMs / 1000).toFixed(1)}초)` +
+      (frames.clock.lateTransitions.length ? `, 늦은 전환 ${frames.clock.lateTransitions.length}곳` : "") +
       `, 인코더 적체 최대 ${Math.round(frames.peakBacklog / 1024)}KB`,
     );
     await context.close();

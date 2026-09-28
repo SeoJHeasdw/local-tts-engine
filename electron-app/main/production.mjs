@@ -219,7 +219,7 @@ export function createProductionService({
     await runProcess("voice", requireRuntimeTool("trainPython", "음성 생성 Python"), ttsArgs);
     const manifest = JSON.parse(await fs.readFile(path.join(sourceDir, "manifest.json"), "utf8"));
     await assertCurrentCourseManifest(sourceDir, manifest, fs);
-    // 촬영은 강의 길이만큼 실시간으로 돈다. 그 길이는 합성이 끝나야 알 수 있으므로
+    // 촬영 시간은 강의 길이에 비례한다. 그 길이는 합성이 끝나야 알 수 있으므로
     // 여기서 한 번 알려, 남은 시간이 촬영·검증 단계에서도 답을 낼 수 있게 한다.
     emit({ type: "unit-duration", durationMs: Number(manifest.durationMs) || 0 });
 

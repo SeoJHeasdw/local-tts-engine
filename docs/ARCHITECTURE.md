@@ -62,9 +62,12 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 
 촬영은 `main/workers/capture.mjs`가 별도 프로세스로 돈다. 중지 버튼이 프로세스
 그룹째 끝낼 수 있고 페이지 충돌이 앱을 죽이지 않는다. 안에서는 규격
-(`shared/video-quality.mjs`), 프레임 전송(`capture/recorder.mjs`), 인코딩
-(`capture/encoding.mjs`), 사이트 서버(`capture/site.mjs`)가 화면 종류와 무관하게
-동작하고, 덱 고유의 조작만 `capture/deck-page.mjs`에 모인다. 대본·편집점 판정은
+(`shared/video-quality.mjs`), 페이지 시계(`capture/page-clock.mjs`), 인코더 입력
+(`capture/recorder.mjs`), 인코딩(`capture/encoding.mjs`), 사이트 서버(`capture/site.mjs`)가
+화면 종류와 무관하게 동작하고, 덱 고유의 조작만 `capture/deck-page.mjs`에 모인다.
+덱은 페이지 시계를 멈추고 한 칸씩 넘겨 찍으므로 출력 프레임 k가 정확히 페이지 시각
+k/fps다. 녹화 중의 기다림은 `pacer`로 페이지 시간을 넘기며 조건을 본다. 앱 데모만
+실시간 스크린캐스트(`startScreencastEncoder`)를 쓴다. 계약은 [VIDEO-QUALITY](VIDEO-QUALITY.md#프레임실패-처리-계약). 대본·편집점 판정은
 덱이 소유하므로 `capture/deck-source.mjs`가 얼려 둔 입력의 `tools/production.mjs`를
 불러 쓴다. 소스 판본 검사를 건너뛰려면 `--no-source-check`를 명시해야 한다.
 
@@ -77,7 +80,7 @@ preload IPC → 제작 서비스 → 독립 입력 준비 → Python 합성·검
 현재 편 뒤에 처리한다.
 
 남은 시간은 한 편의 단계(목소리·자료 연결·자막·촬영·검증)마다 실제 소요를 모아
-남은 단계의 몫을 더해 낸다. 촬영은 강의 길이만큼 실시간으로 돌므로 합성 직후
+남은 단계의 몫을 더해 낸다. 촬영 시간은 강의 길이에 비례하므로 합성 직후
 `unit-duration`으로 보낸 음성 길이를 쓰고, 아직 합성하지 않은 편은 페이지당 소요로
 잡는다. 실제 정지 시간과 시스템 절전(`powerMonitor`) 시간은 경과에서 제외한다.
 단계별·페이지당 속도와 촬영 비율은 화질별로 브라우저 저장소에 남겨 다음 실행의

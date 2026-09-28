@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 import {
   advanceToEntry, assertDeckPageHealthy, gotoFirstEntry, prepareDeckPage, replayFirstEntry,
 } from "../../electron-app/main/capture/deck-page.mjs";
+import { holdPageClock, installPageClock } from "../../electron-app/main/capture/page-clock.mjs";
 
 const profile = { width: 1920, height: 1080 };
 const first = { key: "opening:0", slideId: "opening", slideNumber: 1, step: 0, chapter: "ch00" };
@@ -13,8 +14,9 @@ const within = (promise) => Promise.race([
   new Promise((_, reject) => setTimeout(() => reject(new Error("3D 실패 알림을 받지 못했습니다.")), 1000)),
 ]);
 
-async function createDeckPage(browser, { firstDrawMs = 80, nextDrawMs = 120, worldClass = "ow" } = {}) {
+async function createDeckPage(browser, { firstDrawMs = 80, nextDrawMs = 120, worldClass = "ow", clock = false } = {}) {
   const page = await browser.newPage({ viewport: profile });
+  if (clock) await installPageClock(page);
   const html = `
     <style>html,body{margin:0}.stage{width:1920px;height:1080px}section,canvas{display:block;width:100%;height:100%}</style>
     <div class="stage"><section data-capture-slide="opening"><div class="${worldClass}"><canvas width="1920" height="1080"></canvas></div></section></div>
@@ -140,4 +142,43 @@ test("덱 촬영은 첫 3D draw와 다음 큐 draw를 확인하고 렌더 실패
   await prepareDeckPage(plainCanvasPage, profile);
   await gotoFirstEntry(plainCanvasPage, first);
   assert.equal(await plainCanvasPage.evaluate(() => document.querySelector("canvas").dataset.ready), undefined);
+});
+
+// 녹화 중에는 페이지 시계가 멈춰 있다. 기다림은 한 칸(40ms)씩 페이지 시간을 넘기며 조건을 보고,
+// 제한 시간도 페이지 시간으로 잰다. 이 가짜 덱은 타이머로 그리므로 준비 시각이 페이지 시간에 묶인다.
+test("멈춘 페이지 시계에서도 첫 장면 재생·전환을 페이지 시간으로 기다린다", { timeout: 30000 }, async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch (error) {
+    if (/MachPortRendezvousServer[\s\S]*Permission denied/.test(error.message)) {
+      t.skip("현재 macOS 작업 샌드박스가 Chromium 실행을 막습니다.");
+      return;
+    }
+    throw error;
+  }
+  t.after(() => browser.close());
+  const held = async (options) => {
+    const page = await createDeckPage(browser, { ...options, clock: true });
+    await prepareDeckPage(page, profile);
+    await gotoFirstEntry(page, first);
+    const session = await page.context().newCDPSession(page);
+    const clock = await holdPageClock(page, session, profile);
+    let steps = 0;
+    const pacer = { elapsedMs: () => clock.elapsedMs, async step() { steps++; await clock.advanceTo(clock.elapsedMs + 40); await clock.frame(); } };
+    return { page, clock, pacer, steps: () => steps };
+  };
+
+  const deck = await held({ firstDrawMs: 80, nextDrawMs: 120 });
+  await replayFirstEntry(deck.page, first, { pacer: deck.pacer });
+  assert.equal(deck.clock.elapsedMs, 80, "80ms 타이머로 그리는 장면은 페이지 시간 80ms에 준비된다");
+  await advanceToEntry(deck.page, first, second, { pacer: deck.pacer });
+  assert.equal(deck.clock.elapsedMs, 200);
+  assert.equal(await deck.page.evaluate(() => document.querySelector("canvas").dataset.frames), "2");
+
+  const stuck = await held({ firstDrawMs: 80, nextDrawMs: 5000 });
+  await replayFirstEntry(stuck.page, first, { pacer: stuck.pacer });
+  const before = stuck.clock.elapsedMs;
+  await assert.rejects(advanceToEntry(stuck.page, first, second, { pacer: stuck.pacer }), /3D 첫 프레임을 1000ms 안에/);
+  assert.equal(stuck.clock.elapsedMs - before, 1000, "제한 시간은 실제 시간이 아니라 페이지 시간이다");
 });

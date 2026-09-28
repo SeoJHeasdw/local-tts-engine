@@ -8,7 +8,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { VIDEO_QUALITIES, captureFrameCount, videoQuality } from '../../electron-app/shared/video-quality.mjs';
 import { captureEncodingArgs, captureMuxArgs, validateCaptureStream } from '../../electron-app/main/capture/encoding.mjs';
-import { startScreencastEncoder } from '../../electron-app/main/capture/recorder.mjs';
+import { startFrameEncoder, startScreencastEncoder } from '../../electron-app/main/capture/recorder.mjs';
 const exec = promisify(execFile);
 const ffmpeg = args => exec('ffmpeg', ['-v', 'error', ...args], { maxBuffer: 16 * 1024 * 1024, encoding: 'buffer' });
 class Session extends EventEmitter {
@@ -302,4 +302,39 @@ test('이미 기록한 시각보다 오래된 프레임은 버려도 영상 시�
     assert.equal(session.calls.filter(call => call.method === 'Page.screencastFrameAck').length, 3,
       '버린 프레임도 확인해 주어야 브라우저가 계속 보낸다');
   } finally { await recorder.abort(); }
+});
+
+// 덱 촬영은 한 칸씩 찍은 PNG를 순서대로 넣는다. 받은 순서가 곧 영상 순서다.
+test('한 칸씩 찍은 PNG를 정한 수만큼 순서대로 인코딩한다', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'capture-stepped-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const profile = { ...videoQuality('standard'), width: 160, height: 90 };
+  const out = path.join(dir, 'video.mp4');
+  const black = await png(160, 90, 'black'), white = await png(160, 90, 'white');
+  const encoder = startFrameEncoder({ ffmpegArgs: encoderArgs(out, profile), totalFrames: 6, fps: 25 });
+  try {
+    for (const frame of [black, white, white, white, black, white]) await encoder.write(frame);
+    await assert.rejects(encoder.write(black), /6프레임을 넘겨/);
+    const frames = await encoder.finish();
+    assert.equal(frames.written, 6);
+    assert.equal(frames.duplicated, 0, '같은 칸을 다시 쓰는 일은 없다');
+    assert.equal(frames.unchanged, 2, '앞 칸과 같은 그림은 진단으로만 센다');
+    assert.equal(frames.longestUnchanged, 2);
+    const pixels = (await ffmpeg(['-i', out, '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'])).stdout;
+    assert.deepEqual([...pixels].filter((_, i) => i % 3 === 0).map(value => value > 128), [false, true, true, true, false, true]);
+  } finally { await encoder.abort(); }
+});
+
+test('한 칸씩 찍는 촬영은 프레임이 모자라거나 인코더가 죽으면 완료하지 않는다', async () => {
+  const frame = await png(160, 90, 'black');
+  const short = startFrameEncoder({ ffmpegArgs: ['-v', 'error', '-f', 'image2pipe', '-i', 'pipe:0', '-f', 'null', '-'], totalFrames: 3 });
+  try {
+    await short.write(frame);
+    await assert.rejects(short.finish(), /모자랍니다: 1\/3/);
+  } finally { await short.abort(); }
+  const broken = startFrameEncoder({ ffmpegArgs: ['-invalid-capture-option'], totalFrames: 3 });
+  try {
+    await assert.rejects(broken.failed, /ffmpeg 인코딩 실패/);
+    await assert.rejects(broken.write(frame), /ffmpeg 인코딩 실패/);
+  } finally { await broken.abort(); }
 });

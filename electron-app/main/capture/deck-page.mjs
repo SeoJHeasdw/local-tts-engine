@@ -11,6 +11,26 @@ const WORLD_CANVAS_SELECTOR = ".ow canvas, .wk canvas, .cs canvas, .pw canvas";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// 녹화 중에는 페이지 시계가 멈춰 있어 waitForFunction의 폴링(rAF·타이머)이 돌지 않는다.
+// 그때는 `pacer`가 조건을 볼 때마다 한 걸음씩 나아간다(시각을 넘기지 않고 다시 그리거나,
+// 한 칸을 찍어 페이지 시간을 넘긴다). 제한 시간은 페이지 시간으로 잰다.
+async function waitUntil(page, predicate, arg, { timeout, pacer = null } = {}) {
+  if (!pacer) {
+    await page.waitForFunction(predicate, arg, { timeout });
+    return;
+  }
+  const started = pacer.elapsedMs();
+  for (;;) {
+    if (await page.evaluate(predicate, arg)) return;
+    if (pacer.elapsedMs() - started >= timeout) {
+      const error = new Error(`페이지 시간 ${timeout}ms 안에 조건을 만족하지 못했습니다.`);
+      error.name = "TimeoutError";
+      throw error;
+    }
+    await pacer.step();
+  }
+}
+
 export async function installCaptionOverlay(page, profile) {
   await page.evaluate(({ css }) => {
     const style = document.createElement("style");
@@ -52,13 +72,13 @@ export async function installCaptionOverlay(page, profile) {
 
 // This reports source limits, not a visual approval. CSS crops/object-fit can make
 // a low-resolution warning conservative; keep actual and rendered sizes as evidence.
-export async function auditCapturePage(page, profile) {
+export async function auditCapturePage(page, profile, { pacer = null } = {}) {
   await assertDeckPageHealthy(page);
-  await page.waitForFunction(({ width, height }) => {
+  await waitUntil(page, ({ width, height }) => {
     const box = document.querySelector('.stage')?.getBoundingClientRect();
     return box && Math.abs(box.width - width) < 2 && Math.abs(box.height - height) < 2
       && Math.abs(box.left) < 2 && Math.abs(box.top) < 2;
-  }, profile, { timeout: 5000 });
+  }, { width: profile.width, height: profile.height }, { timeout: 5000, pacer });
   const limits = await page.evaluate(() => {
     const limits = [];
     for (const element of document.querySelectorAll('.stage img, .stage video, .stage canvas')) {
@@ -141,10 +161,10 @@ async function armFrameCheck(page) {
   }, WORLD_CANVAS_SELECTOR);
 }
 
-async function waitForRenderedEntry(page, entry, { first = false, requireFresh = !first } = {}) {
+async function waitForRenderedEntry(page, entry, { first = false, requireFresh = !first, pacer = null } = {}) {
   const timeout = first ? FIRST_RENDER_TIMEOUT_MS : TRANSITION_RENDER_TIMEOUT_MS;
   try {
-    await page.waitForFunction(({ slideId, requireFresh, selector }) => {
+    await waitUntil(page, ({ slideId, requireFresh, selector }) => {
       if (window.__narrationDeckFailure) return true;
       const slide = [...document.querySelectorAll(".stage [data-capture-slide]")]
         .find((element) => element.getAttribute("data-capture-slide") === slideId);
@@ -156,7 +176,7 @@ async function waitForRenderedEntry(page, entry, { first = false, requireFresh =
         return canvas.dataset.ready === "true" && Number.isFinite(frames) && frames > 0
           && (!requireFresh || baseline === null || baseline === undefined || frames > baseline);
       });
-    }, { slideId: entry.slideId, requireFresh, selector: WORLD_CANVAS_SELECTOR }, { timeout });
+    }, { slideId: entry.slideId, requireFresh, selector: WORLD_CANVAS_SELECTOR }, { timeout, pacer });
   } catch (error) {
     await assertDeckPageHealthy(page);
     throw new Error(
@@ -196,13 +216,13 @@ export function startCaptions(page, captions) {
   return page.evaluate((items) => window.__startNarrationCaptions(items), captions);
 }
 
-async function waitForEntry(page, entry) {
-  await page.waitForFunction(
+async function waitForEntry(page, entry, pacer = null) {
+  await waitUntil(page,
     ({ index, step, slideId }) => window.__narrationDeckFailure
       || (window.__narrationNav?.index === index && window.__narrationNav?.step === step
         && [...document.querySelectorAll("[data-capture-slide]")].some((el) => el.getAttribute("data-capture-slide") === slideId)),
     { index: entry.slideNumber - 1, step: entry.step, slideId: entry.slideId },
-    { timeout: NAV_TIMEOUT_MS },
+    { timeout: NAV_TIMEOUT_MS, pacer },
   );
   await assertDeckPageHealthy(page);
 }
@@ -228,7 +248,8 @@ export async function gotoFirstEntry(page, entry) {
 
 // 녹화 시작점에서 첫 큐를 다시 재생한다. r은 runKey를 올려 3D 무대를
 // 새로 만들기 때문에, 이전 무대의 준비 표시를 재사용해서는 안 된다.
-export async function replayFirstEntry(page, entry) {
+// 영상의 0프레임은 이 재생의 첫 장면이다. 그래서 녹화는 이 함수가 끝난 뒤에 첫 칸을 찍는다.
+export async function replayFirstEntry(page, entry, { pacer = null } = {}) {
   const startedAt = performance.now();
   const previous = await page.evaluate(() => window.__narrationNav);
   if (previous?.index !== entry.slideNumber - 1 || previous?.step !== entry.step) {
@@ -236,22 +257,22 @@ export async function replayFirstEntry(page, entry) {
   }
   await rememberFrameSources(page);
   await page.keyboard.press("r");
-  await page.waitForFunction(
+  await waitUntil(page,
     ({ index, runKey }) => window.__narrationDeckFailure
       || (window.__narrationNav?.index === index && window.__narrationNav?.step === 0
         && window.__narrationNav?.runKey > runKey),
     { index: entry.slideNumber - 1, runKey: previous.runKey },
-    { timeout: NAV_TIMEOUT_MS },
+    { timeout: NAV_TIMEOUT_MS, pacer },
   );
   await assertDeckPageHealthy(page);
   for (let step = 0; step < entry.step; step++) await page.keyboard.press("ArrowRight");
-  await waitForEntry(page, entry);
+  await waitForEntry(page, entry, pacer);
   await armFrameCheck(page);
-  await waitForRenderedEntry(page, entry);
+  await waitForRenderedEntry(page, entry, { pacer });
   return Math.round(performance.now() - startedAt);
 }
 
-export async function advanceToEntry(page, entry, next) {
+export async function advanceToEntry(page, entry, next, { pacer = null } = {}) {
   for (let attempt = 0; attempt < 3; attempt++) {
     await assertDeckPageHealthy(page);
     await rememberFrameSources(page);
@@ -262,7 +283,7 @@ export async function advanceToEntry(page, entry, next) {
       await page.keyboard.press("ArrowRight");
     }
     try {
-      await waitForEntry(page, next);
+      await waitForEntry(page, next, pacer);
     } catch (error) {
       await assertDeckPageHealthy(page);
       const actual = await page.evaluate(() => window.__narrationNav);
@@ -278,7 +299,7 @@ export async function advanceToEntry(page, entry, next) {
       continue;
     }
     await armFrameCheck(page);
-    await waitForRenderedEntry(page, next);
+    await waitForRenderedEntry(page, next, { pacer });
     return;
   }
 }
