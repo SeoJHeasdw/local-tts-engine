@@ -3,6 +3,9 @@
 ASR spacing is not evidence of a pause. A finding needs an actual quiet interval,
 speech on both sides, and a complete word mapped from the timed transcript to
 the requested text. Sentence/word boundaries and unmatched readings are excluded.
+The boundary checks cover the one kind of word gap that is equally a split: a
+pause inside a unit the pronunciation layer built (사 초) or inside the noun
+phrase around a substituted English term (있는 ‖ 에이아이).
 This is a pause detector, not a general score for naturalness or intonation.
 """
 
@@ -18,6 +21,8 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
+from .course.alignment import clean_alignment_token
+
 
 PROSODY_POLICY = "ko-intraword-pause-v3"
 MIN_INTERNAL_PAUSE_MS = 250
@@ -26,30 +31,225 @@ MIN_TIMING_PROBABILITY = 0.8
 MIN_UNASSIGNED_VOICED_MS = 80
 PAUSE_WARNING = "단어 내부 끊김 확인 필요"
 
+BOUNDARY_POLICY = "ko-cohesive-boundary-pause-v1"
+# A stop or affricate closure (사 초, 구십구 퍼센트) is quiet for up to about
+# 120 ms in these voices; the CH00 take the user heard as "사 … 초" had 180 ms.
+READING_INNER_PAUSE_MS = 150
+# Same bar as a pause inside a word. The CH00 take heard as "있는 … 에이아이" had 350 ms.
+TERM_LEAD_PAUSE_MS = 250
+# One Qwen aligner frame (12.5 Hz).
+BOUNDARY_SLACK_MS = 80
+BOUNDARY_WARNING = "낱말 사이 끊김 확인 필요"
 
-def interior_silences(audio_path: Path) -> list[dict[str, int]]:
-    """Find quiet runs; never cut or otherwise change the supplied audio."""
+
+def _quiet_frames(audio_path: Path) -> tuple[np.ndarray, float] | None:
+    """Mark each 10 ms frame quiet or voiced by the production threshold."""
     audio, rate = sf.read(audio_path, dtype="float32", always_2d=True)
     samples = np.mean(audio, axis=1, dtype=np.float32)
     frame = max(1, round(rate * 0.01))
     usable = len(samples) // frame * frame
     if not usable or not np.isfinite(samples).all():
-        return []
+        return None
     rms = np.sqrt(np.mean(samples[:usable].reshape(-1, frame) ** 2, axis=1))
-    voiced = rms >= max(5e-4, float(rms.max()) * 0.0125)
-    active = np.flatnonzero(voiced)
+    return rms < max(5e-4, float(rms.max()) * 0.0125), frame * 1000 / rate
+
+
+def interior_silences(audio_path: Path) -> list[dict[str, int]]:
+    """Find quiet runs; never cut or otherwise change the supplied audio."""
+    measured = _quiet_frames(audio_path)
+    if measured is None:
+        return []
+    quiet, frame_ms = measured
+    active = np.flatnonzero(~quiet)
     if not len(active):
         return []
-    quiet = ~voiced
     edges = np.diff(np.r_[False, quiet, False].astype(np.int8))
     result = []
     for start, end in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)):
-        start_ms, end_ms = round(start * frame * 1000 / rate), round(end * frame * 1000 / rate)
+        start_ms, end_ms = round(start * frame_ms), round(end * frame_ms)
         if start <= active[0] or end > active[-1]:
             continue
         if end_ms - start_ms >= MIN_INTERNAL_PAUSE_MS:
             result.append({"startMs": start_ms, "endMs": end_ms, "durationMs": end_ms - start_ms})
     return result
+
+
+def lead_term_readings(dictionary: list[dict[str, Any]] | None) -> list[str]:
+    """Readings the dictionary substitutes for Latin-script source terms."""
+    return [
+        str(item["to"]) for item in dictionary or []
+        if item.get("to") and re.search(r"[A-Za-z]", str(item.get("from", "")))
+    ]
+
+
+def _punctuated(character: str) -> bool:
+    return unicodedata.category(character).startswith("P")
+
+
+# Words that open a new phrase even though they end in a closed syllable, so a
+# pause after them is the speaker's (결국 ‖ 에이전트는), not a split noun phrase.
+_PHRASE_OPENERS = frozenset(
+    "하지만 그렇지만 물론 반면 대신 일단 결국 즉 그럼 지금 오늘 사실 역시 항상 이미 아직 단 한편 만약 결론 그럼에도".split()
+)
+# Particles and endings after which a Korean phrase may end (절·논항 경계).
+_PHRASE_ENDINGS = (
+    "은", "는", "을", "를", "만", "면", "뿐", "든", "처럼", "만큼", "도록", "듯", "씩", "쯤", "랑",
+)
+_DETERMINERS = frozenset(
+    "이 그 저 새 각 본 한 두 세 네 첫 옛 온 몇 어느 무슨 어떤 모든 여러 이런 그런 저런 다른 같은 전체 해당 다음 이번".split()
+)
+# Stems whose -은 form modifies a noun (같은, 많은, 남은); a noun's topic -은 is the
+# same spelling, so only these are decided.
+_ADNOMINAL_EUN_STEMS = frozenset("같 많 작 좋 높 낮 짧 좁 넓 깊 적 옳 싫 늦 남 받 맡 얻 찾 읽 믿 붙 괜찮".split())
+
+
+def _closed(syllable: str) -> bool:
+    code = ord(syllable) - 0xAC00
+    return 0 <= code < 11172 and code % 28 > 0
+
+
+def modifies_next(token: str) -> bool:
+    """Whether a Korean word is a modifier or compound head of the next noun.
+
+    A pause between 있는 and 에이아이, 고르던 and 에이전트, or 상담 and 에이전트 splits
+    one noun phrase; after 만들면, 그런데 or 경로는 a phrase may end. Only forms
+    that decide this without a morphological analyzer count: determiners,
+    -던/-의, X한, -는 after a closed syllable or 하/되/라/다, listed -은
+    adjectives, and a closed final syllable that is no particle or ending
+    (adnominal -ㄴ/-ㄹ, or a bare noun). Anything else is left undecided.
+    """
+    word = unicodedata.normalize("NFKC", token)
+    word = "".join(character for character in word if character.isalnum())
+    if not word or not all("가" <= character <= "힣" for character in word):
+        return False
+    if word in _DETERMINERS:
+        return True
+    if word in _PHRASE_OPENERS or len(word) < 2:
+        return False
+    last, before = word[-1], word[-2]
+    if word.endswith(("던", "의")) or last == "한":
+        return True
+    if last == "는":
+        return _closed(before) or before in ("하", "되", "라", "다")
+    if last == "은":
+        return word[:-1] in _ADNOMINAL_EUN_STEMS or before in _ADNOMINAL_EUN_STEMS
+    return _closed(last) and not word.endswith(_PHRASE_ENDINGS)
+
+
+def boundary_targets(
+    expected_text: str,
+    readings: list[str] | tuple[str, ...],
+    term_readings: list[str] | tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    """Word boundaries where a pause splits a unit the pronunciation layer built.
+
+    Inside a multi-word reading (사 초, 구십구 퍼센트, 에이전트 루프) any pause
+    beyond a stop closure breaks the unit. Before a substituted English term,
+    lectures paused 2.2 times as often as elsewhere, but mostly where a phrase
+    may end anyway (만들면 ‖ 에이전틱). Only a term inside a noun phrase is a
+    target: after a modifier (있는 ‖ 에이아이) or another bare term (에이아이 ‖
+    에이전트의). Punctuated boundaries are never targets. Boundary k lies between
+    tokens k and k+1, split by the same whitespace rule as the forced aligner.
+    """
+    tokens = [token for token in expected_text.split() if clean_alignment_token(token)]
+    keys = [_compact(token) for token in tokens]
+    terms = {_compact(reading) for reading in term_readings}
+
+    def open_boundary(index: int) -> bool:
+        return not _punctuated(tokens[index][-1]) and not _punctuated(tokens[index + 1][0])
+
+    def inside_noun_phrase(index: int) -> bool:
+        return modifies_next(tokens[index]) or keys[index] in terms
+
+    targets: dict[int, dict[str, Any]] = {}
+    # Longest first, so 에이아이 rather than its prefix 에이 names a boundary.
+    for reading in sorted(dict.fromkeys(str(value) for value in readings), key=len, reverse=True):
+        parts = [key for key in (_compact(part) for part in reading.split()) if key]
+        if not parts:
+            continue
+        leads = _compact(reading) in terms
+        for start in range(len(keys) - len(parts) + 1):
+            span = keys[start:start + len(parts)]
+            if span[:-1] != parts[:-1] or not span[-1].startswith(parts[-1]):
+                continue
+            for index in range(start, start + len(parts) - 1):
+                if open_boundary(index):
+                    targets.setdefault(index, {"boundary": index, "kind": "inside-reading", "reading": reading,
+                                               "minimumPauseMs": READING_INNER_PAUSE_MS})
+            if leads and start > 0 and open_boundary(start - 1) and inside_noun_phrase(start - 1):
+                targets.setdefault(start - 1, {"boundary": start - 1, "kind": "before-term", "reading": reading,
+                                               "minimumPauseMs": TERM_LEAD_PAUSE_MS})
+    return [targets[index] for index in sorted(targets)]
+
+
+def _longest_quiet(quiet: np.ndarray, frame_ms: float, start_ms: float, end_ms: float) -> dict[str, int] | None:
+    first = max(0, math.floor(start_ms / frame_ms))
+    last = min(len(quiet), math.ceil(end_ms / frame_ms))
+    best: tuple[int, int] | None = None
+    run_start = None
+    for index in range(first, last + 1):
+        if index < last and quiet[index]:
+            run_start = index if run_start is None else run_start
+            continue
+        if run_start is not None and (best is None or index - run_start > best[1] - best[0]):
+            best = (run_start, index)
+        run_start = None
+    if best is None:
+        return None
+    begin, finish = round(best[0] * frame_ms), round(best[1] * frame_ms)
+    return {"startMs": begin, "endMs": finish, "durationMs": finish - begin}
+
+
+def boundary_pause_checks(
+    expected_text: str,
+    words: list[dict[str, Any]],
+    audio_path: Path,
+    targets: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Measure silence at each target boundary between independently aligned words.
+
+    ``words`` come from the forced aligner run on ``expected_text``: one word
+    per token, clip-relative. Its 80 ms frames can place a boundary a frame
+    early or late, so the search window is widened by that much on each side.
+    A misplaced word can shorten the measured pause, never lengthen it.
+    """
+    base: dict[str, Any] = {
+        "policy": BOUNDARY_POLICY, "checks": [],
+        "targets": [{key: target[key] for key in ("boundary", "kind", "reading")} for target in targets],
+    }
+    if not targets:
+        return {**base, "status": "no-targets"}
+    if not words:
+        return {**base, "status": "alignment-unavailable"}
+    tokens = [token for token in expected_text.split() if clean_alignment_token(token)]
+    if len(words) != len(tokens):
+        return {**base, "status": "alignment-mismatch"}
+    measured = _quiet_frames(audio_path)
+    if measured is None:
+        return {**base, "status": "audio-unreadable"}
+    quiet, frame_ms = measured
+    checks = []
+    for target in targets:
+        index = target["boundary"]
+        try:
+            left_start, left_end = float(words[index]["startMs"]), float(words[index]["endMs"])
+            right_start, right_end = float(words[index + 1]["startMs"]), float(words[index + 1]["endMs"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        times = (left_start, left_end, right_start, right_end)
+        if not all(math.isfinite(value) for value in times) or not (0 <= left_start < left_end <= right_start < right_end):
+            continue
+        pause = _longest_quiet(quiet, frame_ms, left_end - BOUNDARY_SLACK_MS, right_start + BOUNDARY_SLACK_MS)
+        if pause is None or pause["durationMs"] < target["minimumPauseMs"]:
+            continue
+        checks.append({
+            "kind": target["kind"], "status": "warning", "reason": BOUNDARY_WARNING,
+            "term": f"{clean_alignment_token(tokens[index])} {clean_alignment_token(tokens[index + 1])}",
+            "reading": target["reading"], "startMs": round(left_start), "endMs": round(right_end),
+            "pauseStartMs": pause["startMs"], "pauseEndMs": pause["endMs"],
+            "pauseDurationMs": pause["durationMs"], "minimumPauseMs": target["minimumPauseMs"],
+        })
+    return {**base, "status": "checked", "checks": checks}
 
 
 def _compact(text: str) -> str:

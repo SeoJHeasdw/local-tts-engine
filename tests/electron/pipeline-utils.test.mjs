@@ -315,6 +315,20 @@ test("끊어읽기만 남으면 청크 대신 해당 단어의 영상 시각을 
   assert.equal(voiceQualityFindings(manifest)[0].startMs, 12_300);
 });
 
+test("낱말 사이 끊김만 남아도 그 두 낱말의 영상 시각을 표시한다", () => {
+  const manifest = {
+    chunks: [{ key: "a", startMs: 23_990, endMs: 34_590 }],
+    quality: { chunks: [{ chunkKey: "a", slideNumber: 2, severity: "warning", selected: {
+      passed: false, failures: [], warnings: ["낱말 사이 끊김 확인 필요"],
+      boundaryPauses: { checks: [{ term: "있는 에이아이", status: "warning", startMs: 2170, endMs: 3690 }] },
+    } }] },
+  };
+  const [finding] = voiceQualityFindings(manifest);
+  assert.equal(finding.startMs, 26_160);
+  assert.equal(finding.endMs, 27_680);
+  assert.deepEqual(finding.terms, [{ term: "있는 에이아이", status: "warning" }]);
+});
+
 test("합격·불합격만 알던 예전 기록도 읽는다", () => {
   // Older manifests had no severity, and a failure then meant "make it again".
   assert.equal(voiceFindingSeverity({ selected: { passed: false } }), "failed");

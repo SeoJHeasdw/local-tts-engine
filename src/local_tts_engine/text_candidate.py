@@ -374,6 +374,7 @@ def _make_quality_reviewer(model: Any, dictionary: list[dict[str, Any]],
             ),
             (lambda path, text: _read_local_independent_word_times(path, text, aligner_path))
             if aligner_path is not None else None,
+            dictionary=dictionary,
         )
 
     return review

@@ -40,7 +40,10 @@ from .korean_phonetics import (
 )
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
 from .pronunciation import comparison_pronunciation, declared_readings
-from .prosody import PAUSE_WARNING, confirm_pause_checks, interior_silences, pause_checks
+from .prosody import (
+    BOUNDARY_WARNING, PAUSE_WARNING, boundary_pause_checks, boundary_targets,
+    confirm_pause_checks, interior_silences, lead_term_readings, pause_checks,
+)
 from .transcript_coverage import clause_omissions, adjacent_repetitions, negation_omissions
 
 
@@ -145,6 +148,9 @@ def numeral_written_as_digits(term: str, recognized_text: str) -> bool:
 FAILURE_PENALTY = 25.0
 WARNING_PENALTY = 6.0
 TARGET_CHARACTERS_PER_SECOND = 4.2
+# Rhythm evidence: worth another seed, never a misreading, and a take that only
+# carries these still outranks one with a content warning.
+RHYTHM_WARNINGS = frozenset({PAUSE_WARNING, RESTART_WARNING, BOUNDARY_WARNING})
 
 
 def comparison_text(text: str, dictionary: list[dict[str, Any]] | None = None) -> str:
@@ -652,12 +658,16 @@ def review_candidate_prosody(
     evaluation: dict[str, Any],
     read_timings: Any,
     align_independently: Any | None = None,
+    *,
+    dictionary: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Combine independent timings and acoustic coverage before requesting a retry.
 
     Content checks keep their existing decoders and thresholds. Timing checks
     run after them and never clear a pronunciation failure. An ambiguous rhythm
     warning remains a warning even if every generation has the same rhythm.
+    ``dictionary`` names the substituted English terms whose lead-in is checked;
+    without it only pauses inside multi-word readings are.
     """
     result = dict(evaluation)
     if not evaluation["passed"]:
@@ -670,14 +680,21 @@ def review_candidate_prosody(
         duration_ms=int(evaluation["waveform"]["durationMs"]),
     )
     restart_candidates = acoustic_restarts(path)
+    targets = boundary_targets(
+        evaluation["expectedText"], evaluation.get("requiredPronunciations") or [],
+        lead_term_readings(dictionary),
+    )
     independent_words = []
     confirmed = first["checks"]
-    if confirmed or restart_candidates:
+    if (confirmed or restart_candidates or targets) and align_independently:
         # Re-decoding Whisper at another temperature repeats systematic timing
         # errors. In the live sample it assigned the end of 건 to 도구의 twice,
         # turning the legitimate gap between them into an internal-word pause.
         # A different, forced aligner must corroborate the acoustic interval.
-        independent_words = align_independently(path, evaluation["expectedText"]) if align_independently else []
+        # Whisper writes 에이아이 as AI and 사 초 as 4초, so boundary checks
+        # can only use this aligner, which reads the synthesis text itself.
+        independent_words = align_independently(path, evaluation["expectedText"])
+    if confirmed or restart_candidates:
         first = confirm_pause_checks(
             first, evaluation["expectedText"], independent_words, pauses, path,
             int(evaluation["waveform"]["durationMs"]),
@@ -695,6 +712,13 @@ def review_candidate_prosody(
         result["warnings"] = [*result["warnings"], RESTART_WARNING]
         result["passed"] = False
         result["score"] = round(float(result["score"]) + WARNING_PENALTY + len(restarts), 6)
+    boundary = boundary_pause_checks(evaluation["expectedText"], independent_words, path, targets)
+    result["boundaryPauses"] = boundary
+    if boundary["checks"]:
+        result["warnings"] = [*result["warnings"], BOUNDARY_WARNING]
+        result["passed"] = False
+        result["score"] = round(float(result["score"]) + WARNING_PENALTY
+                                + sum(check["pauseDurationMs"] for check in boundary["checks"]) / 1000, 6)
     return result
 
 
@@ -744,7 +768,7 @@ def apply_english_checks(evaluation: dict[str, Any], checks: list[dict[str, Any]
 def _candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, float, int]:
     return (
         len(candidate.get("failures", [])),
-        len([warning for warning in candidate.get("warnings", []) if warning not in {PAUSE_WARNING, RESTART_WARNING}]),
+        len([warning for warning in candidate.get("warnings", []) if warning not in RHYTHM_WARNINGS]),
         len(candidate.get("warnings", [])),
         float(candidate.get("score", float("inf"))),
         int(candidate.get("attempt", 1)),
@@ -770,7 +794,7 @@ def chunk_severity(candidates: list[dict[str, Any]], selected: dict[str, Any]) -
     all_warnings = selected.get("warnings") or []
     if not all_warnings:
         return "ok"
-    warnings = [warning for warning in all_warnings if warning not in {PAUSE_WARNING, RESTART_WARNING}]
+    warnings = [warning for warning in all_warnings if warning not in RHYTHM_WARNINGS]
     if not warnings:
         return "warning"
     evaluated = [candidate for candidate in candidates if candidate.get("recognizedText") is not None]
@@ -786,7 +810,7 @@ def chunk_severity(candidates: list[dict[str, Any]], selected: dict[str, Any]) -
 
 
 def _warning_identities(candidate: dict[str, Any]) -> set[tuple]:
-    reasons = set(candidate.get("warnings") or []) - {PAUSE_WARNING, RESTART_WARNING}
+    reasons = set(candidate.get("warnings") or []) - RHYTHM_WARNINGS
     identities: set[tuple] = set()
     explained: set[str] = set()
     for check in candidate.get("pronunciationChecks", []):

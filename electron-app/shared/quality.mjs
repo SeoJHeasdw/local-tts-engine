@@ -169,8 +169,8 @@ export function voiceQualityFindings(manifest = {}) {
       const timing = timings.get(String(chunk.chunkKey || "")) || {};
       const selected = chunk.selected || {};
       const reasons = [...(selected.failures || []), ...(selected.warnings || [])].map(String);
-      const pauses = [...(selected.prosody?.checks || []), ...(selected.restarts?.checks || [])];
-      const onlyPauses = pauses.length > 0 && reasons.every((reason) => ["단어 내부 끊김 확인 필요", "짧은 발음 반복 확인 필요"].includes(reason));
+      const pauses = [...(selected.prosody?.checks || []), ...(selected.restarts?.checks || []), ...(selected.boundaryPauses?.checks || [])];
+      const onlyPauses = pauses.length > 0 && reasons.every((reason) => ["단어 내부 끊김 확인 필요", "짧은 발음 반복 확인 필요", "낱말 사이 끊김 확인 필요"].includes(reason));
       const englishChecks = (selected.englishChecks || []).filter(check => !check.passed);
       const onlyEnglish = englishChecks.length > 0 && reasons.every(reason => reason === "영어 구절 받아쓰기 확인 필요");
       const clipStart = Number(timing.startMs || 0);

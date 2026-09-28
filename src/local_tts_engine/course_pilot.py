@@ -130,7 +130,10 @@ from .pilot import (
     snapshot_revision,
 )
 from .pronunciation import apply_pronunciation
-from .prosody import MIN_INTERNAL_PAUSE_MS, PROSODY_POLICY, WORD_EDGE_GUARD_MS
+from .prosody import (
+    BOUNDARY_POLICY, MIN_INTERNAL_PAUSE_MS, PROSODY_POLICY, READING_INNER_PAUSE_MS,
+    TERM_LEAD_PAUSE_MS, WORD_EDGE_GUARD_MS,
+)
 from .restarts import RESTART_POLICY
 from .speech_quality import (
     ASR_LICENSE,
@@ -731,6 +734,7 @@ def _synthesize_excerpt(
             evaluation,
             lambda path, temperature: read_routed_timings(quality_model, path, temperature, candidate["voiceRouting"]) if candidate.get("voiceRouting") else read_timed_words(quality_model, path, temperature),
             read_independent_word_times,
+            dictionary=pronunciation,
         )
         quality_evaluation_ms += round((time.perf_counter() - started) * 1000)
         evaluation["hash"] = candidate["hash"]
@@ -1179,6 +1183,13 @@ def _synthesize_excerpt(
                 "confirmationModel": ALIGNER_REPOSITORY,
             },
             "restartGate": {"enabled": automatic_quality, "policy": RESTART_POLICY},
+            "boundaryGate": {
+                "enabled": automatic_quality,
+                "policy": BOUNDARY_POLICY,
+                "readingInnerPauseMs": READING_INNER_PAUSE_MS,
+                "termLeadPauseMs": TERM_LEAD_PAUSE_MS,
+                "timingModel": ALIGNER_REPOSITORY,
+            },
             "lexicalGate": {
                 "enabled": automatic_quality,
                 "minimumKeyLength": MIN_LEXICAL_KEY_LENGTH,
