@@ -208,14 +208,84 @@ def _word_edits(expected: list[str], heard: list[str]) -> list[dict[str, Any]]:
     return list(reversed(edits))
 
 
+_ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
+         "fourteen fifteen sixteen seventeen eighteen nineteen").split()
+_TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
+
+
+def _cardinal(number: int) -> str:
+    if number < 20:
+        return _ONES[number]
+    if number < 100:
+        return _TENS[number // 10] + (_ONES[number % 10] if number % 10 else "")
+    if number < 1000:
+        return _ONES[number // 100] + "hundred" + (_cardinal(number % 100) if number % 100 else "")
+    for size, name in ((10 ** 9, "billion"), (10 ** 6, "million"), (1000, "thousand")):
+        if number >= size:
+            return _cardinal(number // size) + name + (_cardinal(number % size) if number % size else "")
+    raise AssertionError(number)
+
+
+def _spoken_forms(word: str) -> set[str]:
+    """Space-free spellings of how a word can sound; digits become words."""
+    if not (word.isascii() and word.isdigit()) or len(word) > 12 or word != str(int(word)):
+        return {word}
+    number = int(word)
+    forms = {_cardinal(number)}
+    if 1100 <= number <= 2099 and number % 100:
+        # Years are also read in pairs: 1999 nineteen ninety-nine, 2006 twenty oh six.
+        rest = number % 100
+        forms.add(_cardinal(number // 100) + ("oh" + _ONES[rest] if rest < 10 else _cardinal(rest)))
+    return forms
+
+
+def _same_sound(expected: list[str], heard: list[str]) -> bool:
+    def spellings(words: list[str]) -> set[str]:
+        joined = {""}
+        for word in words:
+            joined = {prefix + form for prefix in joined for form in _spoken_forms(word)}
+        return joined
+    return bool(expected or heard) and bool(spellings(expected) & spellings(heard))
+
+
+def _spelling_runs(edits: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Split edits into real ones and runs that only spell the same sound differently.
+
+    Whisper writes ``ten`` as ``10``, ``3`` as ``three`` and ``WebSphere`` as
+    ``Web Sphere``. Each of those is an edit between spellings, and on a long
+    English passage they failed correct takes on every seed. A run of adjacent
+    edits is excused only when both sides join to the same spoken string, so
+    ``we'll``/``well`` and ``one``/``two`` stay edits.
+    """
+    runs: list[list[dict[str, Any]]] = []
+    following = None
+    for edit in edits:
+        position = (edit["expectedWordIndex"], edit["recognizedWordIndex"])
+        if runs and position == following:
+            runs[-1].append(edit)
+        else:
+            runs.append([edit])
+        following = (position[0] + (edit["kind"] != "insertion"),
+                     position[1] + (edit["kind"] != "deletion"))
+    real, variants = [], []
+    for run in runs:
+        expected = [edit["expectedWord"] for edit in run if edit["kind"] != "insertion"]
+        heard = [edit["recognizedWord"] for edit in run if edit["kind"] != "deletion"]
+        if _same_sound(expected, heard):
+            variants.append({"expected": " ".join(expected), "recognized": " ".join(heard)})
+        else:
+            real.extend(run)
+    return real, variants
+
+
 def english_reading_check(expected: str, recognized: str, **timing) -> dict[str, Any]:
     """Record lexical differences; this cannot evaluate accent or naturalness."""
     expected_words, heard_words = english_words(expected), english_words(recognized)
-    edits = _word_edits(expected_words, heard_words)
+    edits, variants = _spelling_runs(_word_edits(expected_words, heard_words))
     return {"expectedText": expected, "recognizedText": recognized,
             "passed": bool(expected_words) and not edits,
             "expectedWords": expected_words, "recognizedWords": heard_words,
-            "wordEdits": edits, "editCount": len(edits),
+            "wordEdits": edits, "editCount": len(edits), "spellingVariants": variants,
             "wordErrorRate": round(len(edits) / max(1, len(expected_words)), 6),
             **timing}
 

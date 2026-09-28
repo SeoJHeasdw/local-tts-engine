@@ -18,7 +18,7 @@ from typing import Any, Callable
 import numpy as np
 import soundfile as sf
 
-from .course.settings import ALIGNER_REPOSITORY, LOCAL_QUALITY_ASR_PATH, STEP_GAP_MS
+from .course.settings import ALIGNER_REPOSITORY, EDGE_PAD_MS, LOCAL_QUALITY_ASR_PATH
 from .course.serialization import stable_digest
 from .course.final_track import inspect_final_track
 from .course.candidates import CandidateAudioError as CourseCandidateAudioError
@@ -71,6 +71,13 @@ MAX_TEXT_CHARS = 20_000
 TARGET_CHUNK_CHARS = 220
 MAX_CHUNK_CHARS = 300
 MAX_UNBROKEN_CHARS = 800
+# The model leaves about this much silence between sentences inside one chunk
+# (2026-09-28: English 0.45–0.63s, mean 0.51; Korean mean 0.42). A fixed 200ms
+# gap made every chunk seam, paragraph changes included, shorter than an
+# ordinary sentence break. Each trimmed chunk keeps EDGE_PAD_MS of its own
+# room tone at either end, which is part of the pause the listener hears.
+SENTENCE_PAUSE_MS = {"English": 500, "Korean": 420}
+PARAGRAPH_PAUSE_MS = 800
 _QUOTE_PAIRS = {'"': '"', "“": "”", "‘": "’", "「": "」", "『": "』"}
 _SENTENCE_END = frozenset(".!?。！？")
 _CLOSING_QUOTE = frozenset('"”’」』')
@@ -185,42 +192,60 @@ def _split_long_unit(text: str, dictionary: list[dict[str, Any]]) -> list[str]:
     return result
 
 
+def _paragraphs(text: str, dictionary: list[dict[str, Any]]) -> list[str]:
+    """Split at line breaks, except inside a quote or protected reading."""
+    protected = _protected_characters(text, dictionary)
+    parts, start = [], 0
+    for index, character in enumerate(text):
+        if character == "\n" and not protected[index]:
+            parts.append(text[start:index])
+            start = index + 1
+    parts.append(text[start:])
+    return [part.strip() for part in parts if part.strip()]
+
+
 def plan_text_chunks(source_text: str, dictionary: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Split only at speech-safe boundaries, then derive each pronunciation."""
-    units = [part for sentence in _split_at_punctuation(source_text, dictionary, clauses=False)
-             for part in _split_long_unit(sentence, dictionary)]
-    if not units:
+    """Split only at speech-safe boundaries, then derive each pronunciation.
+
+    A chunk never spans a line break, so the paragraph pause lands where the
+    writer put it instead of being read as one more sentence break.
+    """
+    groups: list[tuple[list[str], bool]] = []
+    for paragraph in _paragraphs(source_text, dictionary):
+        units = [part for sentence in _split_at_punctuation(paragraph, dictionary, clauses=False)
+                 for part in _split_long_unit(sentence, dictionary)]
+        current: list[str] = []
+        for unit in units:
+            combined = " ".join([*current, unit])
+            if current and len(combined) > TARGET_CHUNK_CHARS and (
+                len(" ".join(current)) >= 80 or len(combined) > MAX_CHUNK_CHARS
+            ):
+                groups.append((current, False))
+                current = []
+            current.append(unit)
+        if current:
+            groups.append((current, True))
+    if not groups:
         raise ValueError("읽을 문장이 없습니다.")
-    groups: list[list[str]] = []
-    current: list[str] = []
-    for unit in units:
-        combined = " ".join([*current, unit])
-        if current and len(combined) > TARGET_CHUNK_CHARS and (
-            len(" ".join(current)) >= 80 or len(combined) > MAX_CHUNK_CHARS
-        ):
-            groups.append(current)
-            current = []
-        current.append(unit)
-    if current:
-        groups.append(current)
     chunks = []
     whole_english = is_english_sentence(source_text)
-    for group in groups:
+    for group, paragraph_end in groups:
         source = " ".join(group)
         if whole_english:
             # The pronunciation layer protects an entire English passage from
             # Korean dictionary replacements. A short trailing chunk such as
             # "Tool." is still English even though it has fewer than the three
             # words needed to identify a standalone English passage.
-            chunks.append({
+            chunk = {
                 "sourceText": source, "ttsText": source, "changed": False,
                 "dictionaryMatches": [], "naturalnessChecks": [],
                 "naturalnessWarnings": [], "normalizedNumbers": [],
                 "requiredPronunciations": [], "unresolvedAscii": [],
                 "unresolvedNumbers": [],
-            })
+            }
         else:
-            chunks.append(pronunciation_preflight(source, dictionary))
+            chunk = pronunciation_preflight(source, dictionary)
+        chunks.append({**chunk, "paragraphEnd": paragraph_end})
     if " ".join(" ".join(chunk["sourceText"] for chunk in chunks).split()) != " ".join(source_text.split()):
         raise RuntimeError("청크 분할 중 읽을 텍스트가 달라졌습니다.")
     expected_reading = " ".join(apply_pronunciation(source_text, dictionary).split())
@@ -472,6 +497,8 @@ def generate_candidate(
                 if quality_model is not None else None)
     refine_closures = (closure_refiner(reference_path, lambda path, text: _read_local_independent_word_times(
         path, text, aligner_path)) if aligner_path is not None else None)
+    sentence_gap_ms = SENTENCE_PAUSE_MS["English" if is_english_sentence(source_text) else "Korean"] - 2 * EDGE_PAD_MS
+    paragraph_gap_ms = PARAGRAPH_PAUSE_MS - 2 * EDGE_PAD_MS
     chunk_dir = output_path.with_name(f"{output_path.stem}-chunks")
     chunk_dir.mkdir(parents=True, exist_ok=True)
     generation_ms = 0
@@ -531,8 +558,10 @@ def generate_candidate(
             sample_rate = rate
         elif rate != sample_rate:
             raise RuntimeError("음성 청크의 샘플레이트가 서로 다릅니다.")
+        gap_ms = 0
         if pieces:
-            gap = np.zeros(round(STEP_GAP_MS * rate / 1000), dtype=np.float32)
+            gap_ms = paragraph_gap_ms if chunks[index - 1]["paragraphEnd"] else sentence_gap_ms
+            gap = np.zeros(round(gap_ms * rate / 1000), dtype=np.float32)
             pieces.append(gap)
             cursor += len(gap)
         start_sample = cursor
@@ -559,7 +588,7 @@ def generate_candidate(
             "startMs": round(start_sample * 1000 / rate), "endMs": round(cursor * 1000 / rate),
             "startSample": start_sample, "endSample": cursor,
             "selectedAudioPath": selected["audioPath"],
-            "gapBeforeMs": STEP_GAP_MS if index else 0,
+            "gapBeforeMs": gap_ms, "paragraphEnd": chunk["paragraphEnd"],
             "selectedAttempt": selected["attempt"], "selectedSeed": selected["seed"],
             "requiredPronunciations": chunk.get("requiredPronunciations", []),
             "unresolvedTokens": unresolved,
@@ -586,7 +615,8 @@ def generate_candidate(
         "trimmedTailMs": sum(value["trimmedTailMs"] for value in selected_cleanups),
         "shortenedSilenceCount": sum(value["shortenedSilenceCount"] for value in selected_cleanups),
         "shortenedSilenceMs": sum(value["shortenedSilenceMs"] for value in selected_cleanups),
-        "chunkGapMs": STEP_GAP_MS,
+        "chunkGapMs": sentence_gap_ms,
+        "paragraphGapMs": paragraph_gap_ms,
     }
     voice_routing = ({**route_identity, "sampleRate": sample_rate, "segments": route_segments}
                      if route_identity else None)

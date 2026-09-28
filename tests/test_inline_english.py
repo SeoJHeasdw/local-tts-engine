@@ -52,6 +52,18 @@ def test_multiword_inline_term_does_not_switch_voice_or_break_an_english_quote()
     assert apply_pronunciation('custom_permission_denied_code입니다.', dictionary) == 'custom_permission_denied_code입니다.'
 
 
+def test_a_longer_ordinary_entry_keeps_its_reading_over_an_inline_part():
+    dictionary = [inline('Claude', '클로드'), {'from': 'Claude Opus 5', 'to': '클로드 오퍼스 파이브'},
+                  {'from': 'Multi-Agent', 'to': '멀티 에이전트'}, inline('Agent', '에이전트')]
+    source = 'Claude Opus 5와 Claude, Multi-Agent와 Agent를 씁니다.'
+    assert apply_pronunciation(source, dictionary) == '클로드 오퍼스 파이브와 Claude, 멀티 에이전트와 Agent를 씁니다.'
+    report = pronunciation_preflight(source, dictionary)
+    assert sorted(report['requiredPronunciations']) == ['Agent', 'Claude', '멀티 에이전트', '클로드 오퍼스 파이브']
+    assert comparison_pronunciation(source, dictionary) == '클로드 오퍼스 파이브와 클로드, 멀티 에이전트와 에이전트를 씁니다.'
+    # Without a longer match the inline form applies as before.
+    assert apply_pronunciation('Claude와 Agent', dictionary) == 'Claude와 Agent'
+
+
 def test_inline_comparison_uses_syllables_but_keeps_a_missing_term_detectable(tmp_path):
     dictionary = production_pronunciation()
     source = '다음 판단에 넣을 새로운 Observation입니다.'
@@ -77,7 +89,20 @@ def test_user_selection_preserves_approved_terms_and_leaves_deferred_terms_in_ha
     dictionary = production_pronunciation()
     approved = {'Observation', 'Anthropic', 'permissiondenied', 'permission_denied', 'permission denied',
                 'Artificial Analysis', 'Intelligence Index', 'Boris Cherny', 'Y Combinator', 'RICE'}
-    assert {d['from'] for d in dictionary if d.get('inline')} == approved
+    inline_terms = {d['from'] for d in dictionary if d.get('inline')}
+    assert approved <= inline_terms
+    # 2026-09-28: terms read correctly as English on every seed joined them,
+    # but never one the user kept in Hangul. Attention alone is English now;
+    # the rejected phrase Attention Budget still wins as the longer entry.
+    assert not inline_terms & {'Authentication', 'Authorization', 'Attention Budget', 'knowledge cutoff'}
+    # 2026-09-29 listening: Agent sounded like 에이잰트, Copilot like 코파일로트,
+    # Context Snapshot like 스냅숏, so these stay in Hangul.
+    assert not inline_terms & {'Agent', 'Agent Loop', 'Agent to Agent', 'CEO Agent', 'Context Snapshot', 'Copilot'}
+    assert {'Agent Runtime', 'Claude Code', 'Large Language Model', 'eval'} <= inline_terms
+    # Text voice reads only this local dictionary, so the Hangul decision is kept here too.
+    assert apply_pronunciation('Agent를 씁니다.', dictionary) == '에이전트를 씁니다.'
+    # A term differing only in case keeps its own reading.
+    assert apply_pronunciation('RUN 단계와 Run, eval과 Eval', dictionary) == '런 단계와 Run, eval과 이밸'
     text = apply_pronunciation('Authentication과 Authorization, Attention Budget과 knowledge cutoff입니다.', dictionary)
     assert text == '어센티케이션과 어서라이제이션, 어텐션 버짓과 널리지 컷오프입니다.'
     approved_text = 'Anthropic의 Artificial Analysis Intelligence Index와 Boris Cherny, Y Combinator입니다.'

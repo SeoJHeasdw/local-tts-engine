@@ -268,6 +268,35 @@ def test_only_a_term_inside_a_noun_phrase_has_its_lead_in_checked(text, expected
     assert bool([t for t in targets if t["kind"] == "before-term"]) is expected
 
 
+def test_english_boundary_after_a_phrase_opener_is_a_target():
+    text = "Bob waits for a person to approve it, and then it's the team's turn to log in."
+    targets = boundary_targets(text, [])
+    assert [(t["boundary"], t["reading"]) for t in targets] == [
+        (2, "for"), (3, "a"), (5, "to"), (8, "and"), (11, "the"), (14, "to"),
+    ]
+    assert {t["kind"] for t in targets} == {"after-english-opener"}
+    # Punctuation ends the phrase; it's is a clause, not the possessive its.
+    assert boundary_targets("It waits for approval, and. It's done.", []) == [
+        {"boundary": 2, "kind": "after-english-opener", "reading": "for", "minimumPauseMs": 250},
+    ]
+    # Korean text is untouched.
+    assert boundary_targets(TERM_TEXT, TERM_READINGS) == []
+
+
+@pytest.mark.parametrize(("gap", "flagged"), [(400, True), (200, False)])
+def test_a_pause_after_to_is_measured_like_a_term_lead_in(tmp_path, gap, flagged):
+    # Measured in a long English take: "a person to ‖ approve it" held 400 ms.
+    path = audio_with_pause(tmp_path / "to.wav", 1.0, 1.0 + gap / 1000, seconds=2.4)
+    text = "a person to approve it"
+    words = [word("a", 0, 200), word("person", 200, 700), word("to", 700, 1000),
+             word("approve", 1000 + gap, 1600 + gap), word("it", 1600 + gap, 1800 + gap)]
+    checks = boundary_pause_checks(text, words, path, boundary_targets(text, []))["checks"]
+    assert bool(checks) == flagged
+    if flagged:
+        assert checks[0]["term"] == "to approve" and checks[0]["kind"] == "after-english-opener"
+        assert checks[0]["reason"] == BOUNDARY_WARNING
+
+
 def test_modifier_forms_that_need_a_morphological_analyzer_stay_undecided():
     # -는 after an open syllable may be a topic particle (경로는) or a verb (가는).
     assert not modifies_next("가는") and not modifies_next("경로는")

@@ -126,6 +126,24 @@ def test_short_tail_of_english_passage_keeps_english_voice_and_spelling() -> Non
     assert speech_segments(chunks[-1]["ttsText"], dictionary)[0]["language"] == "English"
 
 
+def test_chunk_never_spans_a_paragraph_but_keeps_a_quoted_line_break() -> None:
+    source = ("짧은 제목\n" + "첫 문단의 문장입니다. " * 3 + "\n" + "둘째 문단입니다.\n"
+              + '인용은 "First line\nsecond line." 그대로 둡니다.')
+
+    chunks = plan_text_chunks(source, [])
+
+    assert [chunk["sourceText"] for chunk in chunks] == [
+        "짧은 제목",
+        "첫 문단의 문장입니다. 첫 문단의 문장입니다. 첫 문단의 문장입니다.",
+        "둘째 문단입니다.",
+        '인용은 "First line\nsecond line." 그대로 둡니다.',
+    ]
+    assert all(chunk["paragraphEnd"] for chunk in chunks)
+    long_paragraph = plan_text_chunks("문장입니다. " * 60, [])
+    assert len(long_paragraph) > 1
+    assert [chunk["paragraphEnd"] for chunk in long_paragraph] == [False] * (len(long_paragraph) - 1) + [True]
+
+
 def test_unbreakable_span_reports_input_error_instead_of_cutting_it() -> None:
     with pytest.raises(ValueError, match="경계"):
         plan_text_chunks("A" * 801, [])
@@ -270,8 +288,22 @@ def test_full_text_candidate_assembles_real_sample_gaps_and_truthful_metadata(
     assert metadata["chunks"][0]["candidates"][0]["status"] == "generation-failed"
     assert all(chunk["selectedAttempt"] == 1 for chunk in metadata["chunks"][1:])
     assert all(chunk["quality"] is None for chunk in metadata["chunks"])
-    assert metadata["chunks"][1]["startMs"] - metadata["chunks"][0]["endMs"] == 200
-    assert metadata["durationMs"] == 1000 * len(metadata["chunks"]) + 200 * (len(metadata["chunks"]) - 1)
+    # Korean sentence pause 420ms, of which each trimmed edge already keeps 65ms.
+    assert metadata["chunks"][1]["startMs"] - metadata["chunks"][0]["endMs"] == 290
+    assert metadata["durationMs"] == 1000 * len(metadata["chunks"]) + 290 * (len(metadata["chunks"]) - 1)
+
+    text.write_text("First paragraph ends here.\nThe second one starts now.", encoding="utf-8")
+    paragraphs = generate_candidate(
+        model_key="qwen3-tts", text_path=text, reference_path=tmp_path / "reference.wav",
+        reference_text_path=reference_text, output_path=tmp_path / "paragraphs.wav",
+        metadata_path=tmp_path / "paragraphs.json", seed=42,
+    )
+    assert [chunk["sourceText"] for chunk in paragraphs["chunks"]] == [
+        "First paragraph ends here.", "The second one starts now.",
+    ]
+    assert paragraphs["chunks"][1]["gapBeforeMs"] == 670
+    assert paragraphs["chunks"][1]["startMs"] - paragraphs["chunks"][0]["endMs"] == 670
+    assert paragraphs["cleanup"]["chunkGapMs"] == 370
 
     monkeypatch.setattr(target, "inspect_final_track", lambda *_args: {
         "status": "failed", "issues": [{"code": "missing-speech"}],

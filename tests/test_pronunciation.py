@@ -76,7 +76,10 @@ def test_production_dictionary_covers_every_term_the_user_reported() -> None:
     from local_tts_engine.course_pilot import LOCAL_PRONUNCIATION_PATH
 
     dictionary = json.loads(Path(LOCAL_PRONUNCIATION_PATH).read_text(encoding="utf-8"))
-    rules = {item["from"]: item["to"] for item in dictionary}
+    # A term now spoken as English keeps the reported reading as the one the
+    # independent reader must hear (2026-09-28).
+    rules = {item["from"]: item["comparisonReading"] if item.get("inline") else item["to"]
+             for item in dictionary}
     assert rules["Runtime"] == "런타임"
     assert rules["Context"] == "컨텍스트"
     assert rules["RAG"] == "래그"
@@ -99,8 +102,11 @@ def test_production_dictionary_covers_every_term_the_user_reported() -> None:
     assert rules["HTTP"] == "에이치티티피"
     assert rules["API"] == "에이피아이"
 
-    reading = apply_pronunciation("IBM과 Meta는 Qwen3.6-27B를 씁니다.", dictionary)
-    assert reading == "아이비엠과 메타는 큐웬삼점육 이십칠비를 씁니다."
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    source = "IBM과 Meta는 Qwen3.6-27B를 씁니다."
+    assert apply_pronunciation(source, dictionary) == "IBM과 Meta는 큐웬삼점육 이십칠비를 씁니다."
+    assert comparison_pronunciation(source, dictionary) == "아이비엠과 메타는 큐웬삼점육 이십칠비를 씁니다."
 
 
 def test_model_name_joins_the_version_and_keeps_one_space_before_the_size() -> None:
@@ -224,9 +230,9 @@ def test_ch02_risky_number_and_identifier_corpus_has_explicit_readings() -> None
     report = pronunciation_preflight(source, dictionary)
 
     assert report["ttsText"] == (
-        "컨텍스트는 삼분의 일이고, 세 살짜리와 상담 마흔 건을 봅니다. "
+        "Context는 삼분의 일이고, 세 살짜리와 상담 마흔 건을 봅니다. "
         "한 턴, 두 턴, 세 턴째에 사 토큰과 오점육이 초를 기록합니다. "
-        "주문 에이 이공사일, 에이치티티피 이백, 에이피아이, "
+        "주문 에이 이공사일, HTTP 이백, API, "
         "지피티 포와 지피티 포오도 확인합니다."
     )
     assert report["naturalnessWarnings"] == []

@@ -307,14 +307,27 @@ def _protect_literal_spans(
         kept.append(output)
         output = chr(PROTECTED_PLACEHOLDER_START + len(kept) - 1)
     # Keep complete English prose intact before protecting an inline term.
+    # A longer ordinary entry still wins, as it would without the inline form:
+    # Claude spoken as English must not turn Claude Opus 5 into Claude 오퍼스 파이브.
+    ordinary = [item for item in dictionary if not item.get("literal")]
     for item in dictionary:
         if not item.get("inline"):
             continue
         replacement = str(item["to"])
-        pattern = _dictionary_pattern(item)
-        if matched is not None and pattern.search(output):
+        covered = [match.span() for other in ordinary if len(str(other["from"])) > len(str(item["from"]))
+                   for match in _dictionary_pattern(other).finditer(output)]
+        swapped = False
+
+        def swap_unless_covered(match: re.Match[str]) -> str:
+            nonlocal swapped
+            if any(start <= match.start() and match.end() <= end for start, end in covered):
+                return match.group(0)
+            swapped = True
+            return swap(match)
+
+        output = _dictionary_pattern(item).sub(swap_unless_covered, output)
+        if matched is not None and swapped:
             matched.append({"from": str(item["from"]), "to": replacement})
-        output = pattern.sub(swap, output)
     return output, kept
 
 

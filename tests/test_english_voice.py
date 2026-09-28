@@ -138,6 +138,32 @@ def test_english_check_records_missing_repeated_and_replaced_words_in_order():
     assert replaced['editCount'] == 2 and replaced['wordErrorRate'] == round(2 / 6, 6)
 
 
+@pytest.mark.parametrize(("expected", "recognized"), [
+    # Seen on every seed of a long English narration (2026-09-28).
+    ("It runs on traditional WebSphere.", "It runs on traditional web sphere."),
+    ("It has grown for more than ten years.", "It has grown for more than 10 years."),
+    ("The first build fails with 3 errors.", "The first build fails with three errors."),
+    ("This time, all 42 tests pass.", "This time, all forty-two tests pass."),
+    ("It shipped in 2006.", "It shipped in twenty oh six."),
+])
+def test_english_check_records_spelling_only_differences_without_failing(expected, recognized):
+    check = english_reading_check(expected, recognized)
+    assert check['passed'] and check['editCount'] == 0
+    assert check['spellingVariants']
+
+
+@pytest.mark.parametrize(("expected", "recognized"), [
+    ("All 42 tests pass.", "All 43 tests pass."),
+    ("It fails with 3 errors.", "It fails with thirty errors."),
+    ("We'll ship it.", "Well ship it."),
+    ("It runs on WebSphere.", "It runs on web spear."),
+])
+def test_english_spelling_tolerance_keeps_real_word_errors(expected, recognized):
+    check = english_reading_check(expected, recognized)
+    assert not check['passed'] and check['editCount'] >= 1
+    assert not check['spellingVariants']
+
+
 def test_english_check_normalizes_only_typography_and_preserves_evidence():
     check = english_reading_check('“We’ll use a tool.”', "WE'LL USE A TOOL!", startMs=120, durationMs=900)
     assert check['passed'] and check['editCount'] == 0

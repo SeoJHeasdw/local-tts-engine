@@ -5,7 +5,8 @@ speech on both sides, and a complete word mapped from the timed transcript to
 the requested text. Sentence/word boundaries and unmatched readings are excluded.
 The boundary checks cover the one kind of word gap that is equally a split: a
 pause inside a unit the pronunciation layer built (사 초) or inside the noun
-phrase around a substituted English term (있는 ‖ 에이아이).
+phrase around a substituted English term (있는 ‖ 에이아이), and in English
+the gap right after a word that opens a phrase (to ‖ approve).
 This is a pause detector, not a general score for naturalness or intonation.
 """
 
@@ -31,12 +32,20 @@ MIN_TIMING_PROBABILITY = 0.8
 MIN_UNASSIGNED_VOICED_MS = 80
 PAUSE_WARNING = "단어 내부 끊김 확인 필요"
 
-BOUNDARY_POLICY = "ko-cohesive-boundary-pause-v1"
+BOUNDARY_POLICY = "cohesive-boundary-pause-v2"
 # A stop or affricate closure (사 초, 구십구 퍼센트) is quiet for up to about
 # 120 ms in these voices; the CH00 take the user heard as "사 … 초" had 180 ms.
 READING_INNER_PAUSE_MS = 150
 # Same bar as a pause inside a word. The CH00 take heard as "있는 … 에이아이" had 350 ms.
 TERM_LEAD_PAUSE_MS = 250
+# English words a fluent speaker does not pause after: they open the phrase
+# that follows (to ‖ approve, the ‖ database). A long English take had 400 ms
+# in "a person to ‖ approve it" (2026-09-28). Words that can end a phrase are
+# left out: particles (log in, turn on), object pronouns (her), demonstratives
+# (that), auxiliaries and "but", which a narrator may hold for effect.
+ENGLISH_PHRASE_OPENERS = frozenset(
+    "a an the to of for with from into onto at by than and or my your our their its".split()
+)
 # One Qwen aligner frame (12.5 Hz).
 BOUNDARY_SLACK_MS = 80
 BOUNDARY_WARNING = "낱말 사이 끊김 확인 필요"
@@ -148,8 +157,10 @@ def boundary_targets(
     lectures paused 2.2 times as often as elsewhere, but mostly where a phrase
     may end anyway (만들면 ‖ 에이전틱). Only a term inside a noun phrase is a
     target: after a modifier (있는 ‖ 에이아이) or another bare term (에이아이 ‖
-    에이전트의). Punctuated boundaries are never targets. Boundary k lies between
-    tokens k and k+1, split by the same whitespace rule as the forced aligner.
+    에이전트의). In English, a boundary right after a phrase opener (to ‖
+    approve, the ‖ database) is a target. Punctuated boundaries are never
+    targets. Boundary k lies between tokens k and k+1, split by the same
+    whitespace rule as the forced aligner.
     """
     tokens = [token for token in expected_text.split() if clean_alignment_token(token)]
     keys = [_compact(token) for token in tokens]
@@ -179,6 +190,12 @@ def boundary_targets(
             if leads and start > 0 and open_boundary(start - 1) and inside_noun_phrase(start - 1):
                 targets.setdefault(start - 1, {"boundary": start - 1, "kind": "before-term", "reading": reading,
                                                "minimumPauseMs": TERM_LEAD_PAUSE_MS})
+    for index, token in enumerate(tokens[:-1]):
+        # Keep the apostrophe: it's is a clause, its opens a noun phrase.
+        word = clean_alignment_token(unicodedata.normalize("NFKC", token).replace("’", "'")).casefold()
+        if word in ENGLISH_PHRASE_OPENERS and open_boundary(index):
+            targets.setdefault(index, {"boundary": index, "kind": "after-english-opener", "reading": word,
+                                       "minimumPauseMs": TERM_LEAD_PAUSE_MS})
     return [targets[index] for index in sorted(targets)]
 
 

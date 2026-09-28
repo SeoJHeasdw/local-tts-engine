@@ -64,15 +64,15 @@ def test_bad_manifest_is_visible_and_does_not_hide_good_records(tmp_path):
 
 def test_current_source_samples_are_stable_and_keep_original_caption_text(studio):
     project = studio(slides={"ch00": ["test"]}, scripts={"ch00": (
-        '## test\n### 0\nAPI 3개를 확인합니다. "Do my Bots share one computer?"\n'
-    )}, dictionary=[{"from": "API", "to": "에이피아이"}])
+        '## test\n### 0\nSDK 3개를 확인합니다. "Do my Bots share one computer?"\n'
+    )}, dictionary=[{"from": "SDK", "to": "에스디케이"}])
     first = audit.source_inventory(project.root, 2)
     second = audit.source_inventory(project.root, 2)
     assert first == second
     assert first["byChapter"]["ch00"]["english-sentence"] == 1
     sample = first["samples"]["ch00/english-sentence"][0]
-    assert "API 3개" in sample["sourceText"]
-    assert "에이피아이" in sample["ttsText"]
+    assert "SDK 3개" in sample["sourceText"]
+    assert "에스디케이" in sample["ttsText"]
     assert "numbers-identifiers" in sample["strata"]
 
 

@@ -259,11 +259,11 @@ def test_course_entries_uses_canonical_order_and_dictionary(tmp_path: Path) -> N
         '      id: "slide-a"\n      id: "slide-b"\n', encoding="utf-8"
     )
     (scripts / "ch00.md").write_text(
-        "## slide-a\n### 0\nMCP 시작\n## slide-b\n### 0\n끝\n",
+        "## slide-a\n### 0\nSDK 시작\n## slide-b\n### 0\n끝\n",
         encoding="utf-8",
     )
     (narration / "pronunciation.ko.json").write_text(
-        json.dumps([{"from": "MCP", "to": "엠씨피"}]), encoding="utf-8"
+        json.dumps([{"from": "SDK", "to": "에스디케이"}]), encoding="utf-8"
     )
 
     entries = course_entries(tmp_path, "ch00")
@@ -272,7 +272,7 @@ def test_course_entries_uses_canonical_order_and_dictionary(tmp_path: Path) -> N
         "ch00--slide-a--0",
         "ch00--slide-b--0",
     ]
-    assert entries[0].tts_text == "엠씨피 시작"
+    assert entries[0].tts_text == "에스디케이 시작"
 
 
 def test_course_entries_expands_a_forced_pause_inside_one_step(tmp_path: Path) -> None:

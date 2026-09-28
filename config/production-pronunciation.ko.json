@@ -9,7 +9,10 @@
   },
   {
     "from": "Context",
-    "to": "컨텍스트"
+    "to": "Context",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "컨텍스트"
   },
   {
     "from": "RAG",
@@ -17,11 +20,17 @@
   },
   {
     "from": "IBM",
-    "to": "아이비엠"
+    "to": "IBM",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "아이비엠"
   },
   {
     "from": "Meta",
-    "to": "메타"
+    "to": "Meta",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "메타"
   },
   {
     "from": "GPT-4o",
@@ -61,11 +70,17 @@
   },
   {
     "from": "HTTP",
-    "to": "에이치티티피"
+    "to": "HTTP",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이치티티피"
   },
   {
     "from": "API",
-    "to": "에이피아이"
+    "to": "API",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이피아이"
   },
   {
     "from": "FAQ",
@@ -73,19 +88,31 @@
   },
   {
     "from": "AI",
-    "to": "에이아이"
+    "to": "AI",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이아이"
   },
   {
     "from": "UI",
-    "to": "유아이"
+    "to": "UI",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "유아이"
   },
   {
     "from": "UX",
-    "to": "유엑스"
+    "to": "UX",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "유엑스"
   },
   {
     "from": "ID",
-    "to": "아이디"
+    "to": "ID",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "아이디"
   },
   {
     "from": "똑같이",
@@ -129,7 +156,10 @@
   },
   {
     "from": "Single Agent",
-    "to": "싱글 에이전트"
+    "to": "Single Agent",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "싱글 에이전트"
   },
   {
     "from": "Agent Loop",
@@ -137,11 +167,17 @@
   },
   {
     "from": "Agent Network",
-    "to": "에이전트 네트워크"
+    "to": "Agent Network",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이전트 네트워크"
   },
   {
     "from": "Agent Runtime",
-    "to": "에이전트 런타임"
+    "to": "Agent Runtime",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이전트 런타임"
   },
   {
     "from": "Agent Skills",
@@ -149,7 +185,10 @@
   },
   {
     "from": "Main Agent",
-    "to": "메인 에이전트"
+    "to": "Main Agent",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "메인 에이전트"
   },
   {
     "from": "Lead Agent",
@@ -157,15 +196,24 @@
   },
   {
     "from": "Tool Calling",
-    "to": "툴 콜링"
+    "to": "Tool Calling",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "툴 콜링"
   },
   {
     "from": "Tool Registry",
-    "to": "툴 레지스트리"
+    "to": "Tool Registry",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "툴 레지스트리"
   },
   {
     "from": "Tool Call",
-    "to": "툴 콜"
+    "to": "Tool Call",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "툴 콜"
   },
   {
     "from": "Action Boundary",
@@ -173,7 +221,10 @@
   },
   {
     "from": "Context Window",
-    "to": "컨텍스트 윈도우"
+    "to": "Context Window",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "컨텍스트 윈도우"
   },
   {
     "from": "Context Snapshot",
@@ -181,7 +232,10 @@
   },
   {
     "from": "Context Engineering",
-    "to": "컨텍스트 엔지니어링"
+    "to": "Context Engineering",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "컨텍스트 엔지니어링"
   },
   {
     "from": "Attention Budget",
@@ -203,11 +257,17 @@
   },
   {
     "from": "Large Language Model",
-    "to": "라지 랭귀지 모델"
+    "to": "Large Language Model",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "라지 랭귀지 모델"
   },
   {
     "from": "Augmented LLM",
-    "to": "오그멘티드 엘엘엠"
+    "to": "Augmented LLM",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "오그멘티드 엘엘엠"
   },
   {
     "from": "Agentic RAG",
@@ -219,7 +279,10 @@
   },
   {
     "from": "Orchestrator–Workers",
-    "to": "오케스트레이터 워커스"
+    "to": "Orchestrator–Workers",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "오케스트레이터 워커스"
   },
   {
     "from": "Evaluator–Optimizer",
@@ -227,11 +290,17 @@
   },
   {
     "from": "Linux Foundation",
-    "to": "리눅스 파운데이션"
+    "to": "Linux Foundation",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "리눅스 파운데이션"
   },
   {
     "from": "Claude Code",
-    "to": "클로드 코드"
+    "to": "Claude Code",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "클로드 코드"
   },
   {
     "from": "Claude Opus 5",
@@ -266,7 +335,10 @@
   },
   {
     "from": "pre-training",
-    "to": "프리 트레이닝"
+    "to": "pre-training",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "프리 트레이닝"
   },
   {
     "from": "Guardrails",
@@ -278,15 +350,24 @@
   },
   {
     "from": "Instructions",
-    "to": "인스트럭션스"
+    "to": "Instructions",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "인스트럭션스"
   },
   {
     "from": "Handoff",
-    "to": "핸드오프"
+    "to": "Handoff",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "핸드오프"
   },
   {
     "from": "Orchestrator",
-    "to": "오케스트레이터"
+    "to": "Orchestrator",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "오케스트레이터"
   },
   {
     "from": "Checkpoint",
@@ -294,7 +375,10 @@
   },
   {
     "from": "Compaction",
-    "to": "컴팩션"
+    "to": "Compaction",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "컴팩션"
   },
   {
     "from": "Evaluator",
@@ -302,7 +386,10 @@
   },
   {
     "from": "Optimizer",
-    "to": "옵티마이저"
+    "to": "Optimizer",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "옵티마이저"
   },
   {
     "from": "Escalate",
@@ -310,7 +397,10 @@
   },
   {
     "from": "Registry",
-    "to": "레지스트리"
+    "to": "Registry",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "레지스트리"
   },
   {
     "from": "Snapshot",
@@ -322,7 +412,10 @@
   },
   {
     "from": "Attention",
-    "to": "어텐션"
+    "to": "Attention",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "어텐션"
   },
   {
     "from": "Boundary",
@@ -334,11 +427,17 @@
   },
   {
     "from": "Chaining",
-    "to": "체이닝"
+    "to": "Chaining",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "체이닝"
   },
   {
     "from": "Routing",
-    "to": "라우팅"
+    "to": "Routing",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "라우팅"
   },
   {
     "from": "Harness",
@@ -346,27 +445,45 @@
   },
   {
     "from": "Manager",
-    "to": "매니저"
+    "to": "Manager",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "매니저"
   },
   {
     "from": "Grader",
-    "to": "그레이더"
+    "to": "Grader",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "그레이더"
   },
   {
     "from": "Calling",
-    "to": "콜링"
+    "to": "Calling",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "콜링"
   },
   {
     "from": "Workers",
-    "to": "워커스"
+    "to": "Workers",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "워커스"
   },
   {
     "from": "Worker",
-    "to": "워커"
+    "to": "Worker",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "워커"
   },
   {
     "from": "Parent",
-    "to": "페어런트"
+    "to": "Parent",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "페어런트"
   },
   {
     "from": "Budget",
@@ -374,7 +491,10 @@
   },
   {
     "from": "Router",
-    "to": "라우터"
+    "to": "Router",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "라우터"
   },
   {
     "from": "Schema",
@@ -382,15 +502,24 @@
   },
   {
     "from": "Single",
-    "to": "싱글"
+    "to": "Single",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "싱글"
   },
   {
     "from": "Memory",
-    "to": "메모리"
+    "to": "Memory",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "메모리"
   },
   {
     "from": "Action",
-    "to": "액션"
+    "to": "Action",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "액션"
   },
   {
     "from": "Retry",
@@ -398,55 +527,94 @@
   },
   {
     "from": "Trace",
-    "to": "트레이스"
+    "to": "Trace",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "트레이스"
   },
   {
     "from": "State",
-    "to": "스테이트"
+    "to": "State",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "스테이트"
   },
   {
     "from": "Model",
-    "to": "모델"
+    "to": "Model",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "모델"
   },
   {
     "from": "Multi",
-    "to": "멀티"
+    "to": "Multi",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "멀티"
   },
   {
     "from": "Skill",
-    "to": "스킬"
+    "to": "Skill",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "스킬"
   },
   {
     "from": "Goal",
-    "to": "골"
+    "to": "Goal",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "골"
   },
   {
     "from": "Loop",
-    "to": "루프"
+    "to": "Loop",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "루프"
   },
   {
     "from": "Tool",
-    "to": "툴"
+    "to": "Tool",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "툴"
   },
   {
     "from": "Span",
-    "to": "스팬"
+    "to": "Span",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "스팬"
   },
   {
     "from": "Main",
-    "to": "메인"
+    "to": "Main",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "메인"
   },
   {
     "from": "Lead",
-    "to": "리드"
+    "to": "Lead",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "리드"
   },
   {
     "from": "Call",
-    "to": "콜"
+    "to": "Call",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "콜"
   },
   {
     "from": "Code",
-    "to": "코드"
+    "to": "Code",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "코드"
   },
   {
     "from": "Bots",
@@ -458,7 +626,11 @@
   },
   {
     "from": "Run",
-    "to": "런"
+    "to": "Run",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "런",
+    "caseSensitive": true
   },
   {
     "from": "Eval",
@@ -466,7 +638,11 @@
   },
   {
     "from": "eval",
-    "to": "이밸"
+    "to": "eval",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "이밸",
+    "caseSensitive": true
   },
   {
     "from": "Scoped",
@@ -482,15 +658,24 @@
   },
   {
     "from": "Retrieval",
-    "to": "리트리벌"
+    "to": "Retrieval",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "리트리벌"
   },
   {
     "from": "Generation",
-    "to": "제너레이션"
+    "to": "Generation",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "제너레이션"
   },
   {
     "from": "Language",
-    "to": "랭귀지"
+    "to": "Language",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "랭귀지"
   },
   {
     "from": "Large",
@@ -498,23 +683,38 @@
   },
   {
     "from": "Index",
-    "to": "인덱스"
+    "to": "Index",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "인덱스"
   },
   {
     "from": "Window",
-    "to": "윈도우"
+    "to": "Window",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "윈도우"
   },
   {
     "from": "Intelligence",
-    "to": "인텔리전스"
+    "to": "Intelligence",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "인텔리전스"
   },
   {
     "from": "Artificial",
-    "to": "아티피셜"
+    "to": "Artificial",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "아티피셜"
   },
   {
     "from": "Analysis",
-    "to": "애널리시스"
+    "to": "Analysis",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "애널리시스"
   },
   {
     "from": "Authentication",
@@ -530,7 +730,10 @@
   },
   {
     "from": "Injection",
-    "to": "인젝션"
+    "to": "Injection",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "인젝션"
   },
   {
     "from": "Observation",
@@ -541,19 +744,31 @@
   },
   {
     "from": "Permission",
-    "to": "퍼미션"
+    "to": "Permission",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "퍼미션"
   },
   {
     "from": "Foundation",
-    "to": "파운데이션"
+    "to": "Foundation",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "파운데이션"
   },
   {
     "from": "Research",
-    "to": "리서치"
+    "to": "Research",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "리서치"
   },
   {
     "from": "Network",
-    "to": "네트워크"
+    "to": "Network",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "네트워크"
   },
   {
     "from": "Copilot",
@@ -565,7 +780,10 @@
   },
   {
     "from": "Linux",
-    "to": "리눅스"
+    "to": "Linux",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "리눅스"
   },
   {
     "from": "Llama",
@@ -581,23 +799,38 @@
   },
   {
     "from": "Claude",
-    "to": "클로드"
+    "to": "Claude",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "클로드"
   },
   {
     "from": "Grok",
-    "to": "그록"
+    "to": "Grok",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "그록"
   },
   {
     "from": "Opus",
-    "to": "오퍼스"
+    "to": "Opus",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "오퍼스"
   },
   {
     "from": "iOS",
-    "to": "아이오에스"
+    "to": "iOS",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "아이오에스"
   },
   {
     "from": "Make",
-    "to": "메이크"
+    "to": "Make",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "메이크"
   },
   {
     "from": "Inbox",
@@ -605,15 +838,24 @@
   },
   {
     "from": "Outbound",
-    "to": "아웃바운드"
+    "to": "Outbound",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "아웃바운드"
   },
   {
     "from": "Account",
-    "to": "어카운트"
+    "to": "Account",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "어카운트"
   },
   {
     "from": "Expense",
-    "to": "익스펜스"
+    "to": "Expense",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "익스펜스"
   },
   {
     "from": "Talent",
@@ -621,7 +863,10 @@
   },
   {
     "from": "Scout",
-    "to": "스카우트"
+    "to": "Scout",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "스카우트"
   },
   {
     "from": "Sales",
@@ -629,7 +874,10 @@
   },
   {
     "from": "Chief",
-    "to": "치프"
+    "to": "Chief",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "치프"
   },
   {
     "from": "refundorder",
@@ -688,19 +936,31 @@
   },
   {
     "from": "VIP",
-    "to": "브이아이피"
+    "to": "VIP",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "브이아이피"
   },
   {
     "from": "DB",
-    "to": "디비"
+    "to": "DB",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "디비"
   },
   {
     "from": "ACP",
-    "to": "에이씨피"
+    "to": "ACP",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이씨피"
   },
   {
     "from": "ARS",
-    "to": "에이알에스"
+    "to": "ARS",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이알에스"
   },
   {
     "from": "RICE",
@@ -712,7 +972,10 @@
   },
   {
     "from": "YC",
-    "to": "와이씨"
+    "to": "YC",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "와이씨"
   },
   {
     "from": "N개",
@@ -820,7 +1083,10 @@
   },
   {
     "from": "AI Engineer Code Summit",
-    "to": "에이아이 엔지니어 코드 서밋"
+    "to": "AI Engineer Code Summit",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이아이 엔지니어 코드 서밋"
   },
   {
     "from": "Yes.",
@@ -837,7 +1103,10 @@
   },
   {
     "from": "Model Context Protocol",
-    "to": "모델 컨텍스트 프로토콜"
+    "to": "Model Context Protocol",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "모델 컨텍스트 프로토콜"
   },
   {
     "from": "Candidate Filtering",
@@ -853,19 +1122,31 @@
   },
   {
     "from": "Tool Selection",
-    "to": "툴 셀렉션"
+    "to": "Tool Selection",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "툴 셀렉션"
   },
   {
     "from": "Worker Brief",
-    "to": "워커 브리프"
+    "to": "Worker Brief",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "워커 브리프"
   },
   {
     "from": "MCP Server",
-    "to": "엠씨피 서버"
+    "to": "MCP Server",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "엠씨피 서버"
   },
   {
     "from": "Agent Card",
-    "to": "에이전트 카드"
+    "to": "Agent Card",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이전트 카드"
   },
   {
     "from": "CEO Agent",
@@ -877,11 +1158,17 @@
   },
   {
     "from": "Connector",
-    "to": "커넥터"
+    "to": "Connector",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "커넥터"
   },
   {
     "from": "Transport",
-    "to": "트랜스포트"
+    "to": "Transport",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "트랜스포트"
   },
   {
     "from": "Trajectory",
@@ -897,7 +1184,10 @@
   },
   {
     "from": "Selection",
-    "to": "셀렉션"
+    "to": "Selection",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "셀렉션"
   },
   {
     "from": "Baseline",
@@ -905,7 +1195,10 @@
   },
   {
     "from": "Protocol",
-    "to": "프로토콜"
+    "to": "Protocol",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "프로토콜"
   },
   {
     "from": "Approval",
@@ -917,15 +1210,24 @@
   },
   {
     "from": "Artifact",
-    "to": "아티팩트"
+    "to": "Artifact",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "아티팩트"
   },
   {
     "from": "Client",
-    "to": "클라이언트"
+    "to": "Client",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "클라이언트"
   },
   {
     "from": "Message",
-    "to": "메시지"
+    "to": "Message",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "메시지"
   },
   {
     "from": "Plugin",
@@ -933,7 +1235,10 @@
   },
   {
     "from": "Server",
-    "to": "서버"
+    "to": "Server",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "서버"
   },
   {
     "from": "Prompt",
@@ -941,55 +1246,94 @@
   },
   {
     "from": "Audit",
-    "to": "오디트"
+    "to": "Audit",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "오디트"
   },
   {
     "from": "Brief",
-    "to": "브리프"
+    "to": "Brief",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "브리프"
   },
   {
     "from": "Host",
-    "to": "호스트"
+    "to": "Host",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "호스트"
   },
   {
     "from": "Task",
-    "to": "태스크"
+    "to": "Task",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "태스크"
   },
   {
     "from": "Card",
-    "to": "카드"
+    "to": "Card",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "카드"
   },
   {
     "from": "SaaS",
-    "to": "사스"
+    "to": "SaaS",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "사스"
   },
   {
     "from": "USB",
-    "to": "유에스비"
+    "to": "USB",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "유에스비"
   },
   {
     "from": "CRM",
-    "to": "씨알엠"
+    "to": "CRM",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "씨알엠"
   },
   {
     "from": "ERP",
-    "to": "이알피"
+    "to": "ERP",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "이알피"
   },
   {
     "from": "CEO",
-    "to": "씨이오"
+    "to": "CEO",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "씨이오"
   },
   {
     "from": "QA",
-    "to": "큐에이"
+    "to": "QA",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "큐에이"
   },
   {
     "from": "CS",
-    "to": "씨에스"
+    "to": "CS",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "씨에스"
   },
   {
     "from": "PC",
-    "to": "피씨"
+    "to": "PC",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "피씨"
   },
   {
     "from": "A",
@@ -1050,5 +1394,58 @@
     "literal": true,
     "inline": true,
     "comparisonReading": "앤스로픽"
+  },
+  {
+    "from": "Agent Builder",
+    "to": "Agent Builder",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "에이전트 빌더"
+  },
+  {
+    "from": "LLM",
+    "to": "LLM",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "엘엘엠"
+  },
+  {
+    "from": "MCP",
+    "to": "MCP",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "엠씨피"
+  },
+  {
+    "from": "OpenAI",
+    "to": "OpenAI",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "오픈에이아이"
+  },
+  {
+    "from": "RLHF",
+    "to": "RLHF",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "알엘에이치에프"
+  },
+  {
+    "from": "ReAct",
+    "to": "ReAct",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "리액트"
+  },
+  {
+    "from": "Workflow",
+    "to": "Workflow",
+    "literal": true,
+    "inline": true,
+    "comparisonReading": "워크플로"
+  },
+  {
+    "from": "Agent",
+    "to": "에이전트"
   }
 ]
