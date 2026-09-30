@@ -16,16 +16,15 @@
   (`fwidth`로 너비 보정 또는 두껍게). 측정은 [VIDEO-QUALITY](VIDEO-QUALITY.md#한-칸씩-찍기의-측정-2026-09-28).
 - **앱 데모 구도 수정본 시청:** `output/edits/2026-09-22/rice-first-run-framing-v2/`. 확인 항목은
   `output/reviews/2026-09-22/app-demo-audit/구도 편집 사용법.md`에 있다.
-- **Bob Level 3 제출 영상 — v2 청취:** 첫 판(`IBM Bob Level 3 - 서제호.mp4`, 8분 6초)에서 사용자가 영어 낱말
-  발음을 지적해, 엔진에 대문자 영단어 표기 정리와 영어 낱말 받아쓰기로 후보 고르기를 넣고
-  ([QUALITY](QUALITY.md#생성과-독립-판독)) 영어가 많은 8장면을 새 엔진으로 다시 만든 `… v2.mp4`(8분 4초)가
-  `output/edits/2026-09-30/bob-level3-final/`에 있다. 두 판을 들어 비교한다: README 2:36(understand),
-  MIGRATION.md 6:06(document), 그 밖에 다시 만든 곳 0:21·0:48·2:23·3:09·4:26·6:24. 목소리는 자동 검사
-  기준으로 골랐고 청취 전이다. 새 판에서도 영어 낱말의 상당수가 받아쓰기에 한글로 적혀(판독 신호가 닿는
-  범위가 제한적) 개선 폭은 들어서 판단해야 한다. 다시 찍거나 고칠 때: 장면 목소리는 `npm run demo -- voice
-  <폴더> --scene <id>`, 굽기는 `render <폴더> --quality standard`, 잇기는 `bob-level3-final/parts.txt`로
-  `ffmpeg -f concat -safe 0 -c copy`. 촬영은 [APP-DEMO-DESIGN](APP-DEMO-DESIGN.md#8-bob-사람이-띄운-앱에-붙는다-2026-09-30)과
-  `/Users/jaehoseo/Desktop/vswrk/bob/level3-demo/`(시나리오·장표·연습 저장소)에 있다.
+- **Bob Level 3 제출 영상 — 제출본은 v2 권장(사용자 확정 전):** `output/edits/2026-09-30/bob-level3-final/IBM Bob Level 3 - 서제호 v2.mp4`
+  (8분 4초). 첫 판과 블라인드 청취에서 v2 4 · 첫 판 2 · 비슷함 2였고, README(2:46)·MIGRATION(6:06)은
+  표기 규칙으로 확실히 고쳐졌다(`output/reviews/2026-09-30/english-ab/결과.md`). 다시 찍거나 고칠 때: 장면 목소리는
+  `npm run demo -- voice <폴더> --scene <id>`, 굽기는 `render <폴더> --quality standard`, 잇기는
+  `bob-level3-final/parts.txt`로 `ffmpeg -f concat -safe 0 -c copy`. 촬영은
+  [APP-DEMO-DESIGN](APP-DEMO-DESIGN.md#8-bob-사람이-띄운-앱에-붙는다-2026-09-30)과 `/Users/jaehoseo/Desktop/vswrk/bob/level3-demo/`에 있다.
+- **영어 낱말 판정의 다음 개선:** 받아쓰기가 영어 낱말을 한글로 적으면(맞게 읽은 "트래디셔널 웹스피어"도)
+  지금 판정은 "영어로 안 들림"으로 본다. v2와 첫 판의 받아쓰기 수치가 같았던 이유다. 한글 표기가 그
+  영어 낱말의 올바른 읽기인지 가려야 후보 선별이 제 몫을 한다.
 - **(선택) `봇이` 뭉개짐 개선:** 강의에서 넘어갈 수준이다. 6후보 비교 계획이
   `output/reviews/2026-09-24/speech-automation-audit/final-handoff/sample03-evidence/plan.json`에 있다.
 
@@ -43,7 +42,7 @@
 | 영어 긴 내레이션 점검 (Bob 영상 말투 표본) | `output/reviews/2026-09-28/english-long-narration/` |
 | 영어 대문자 표기 점검 (README·MIGRATION.md·POM) | `output/reviews/2026-09-30/english-spelling/` |
 | 문장 안 영어 용어 121개 전환 (청취 선택 완료) | `output/reviews/2026-09-28/mixed-english-terms/` — 되돌리기는 `apply.py --revert` |
-| Bob Level 3 제출 영상 첫 판·v2 (목소리는 자동 검사로 고름, 청취 전) | `output/edits/2026-09-30/bob-level3-final/` — 장면별 원본은 같은 날짜의 `bob-level3-*` |
+| Bob Level 3 제출 영상 첫 판·v2 (v2 블라인드 청취 우세, 제출 확정 전) | `output/edits/2026-09-30/bob-level3-final/` — 장면별 원본은 같은 날짜의 `bob-level3-*` |
 
 후속 편집은 최신 수정본의 PCM·타임라인·자막에서 시작한다. 원래 manifest 음성으로 돌아가면
 이미 고친 부분을 덮는다. 예: CH02 L04의 193.295–203.055초는 사용자가 고른 `앤쓰로픽` 후보다.
