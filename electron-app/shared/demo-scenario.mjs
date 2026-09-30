@@ -4,8 +4,11 @@
 // 시나리오는 "앱을 아는 유일한 파일"이다. 촬영 엔진은 앱 이름을 모른다. 그래서
 // 여기서 거르지 못한 오타는 앱을 띄우고 수십 초를 찍은 뒤에야 드러난다.
 import { cameraMode } from "./demo-camera.mjs";
-const APP_KINDS = ["electron", "web"];
-const TARGET_KEYS = ["role", "name", "exact", "placeholder", "text", "label"];
+const APP_KINDS = ["electron", "web", "attach"];
+const TARGET_KEYS = ["role", "name", "exact", "placeholder", "text", "label", "frame", "selector"];
+// frame 대상은 Playwright 없이 DOM으로 찾으므로 label(연결된 <label> 추적)은 받지 않는다.
+const FRAME_KINDS = ["selector", "role", "placeholder", "text"];
+const MAX_FRAME_HOPS = 4;
 const DEFAULT_STEP_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 30 * 60_000;
 const MAX_PAUSE_MS = 60_000;
@@ -32,6 +35,10 @@ function optionalTimeout(value, where, fallback) {
 
 // 대상은 두 가지로 적는다. 문자열은 선택자, 객체는 getBy*다. 객체를 둘 이상의
 // getBy*로 해석할 수 있으면 어느 쪽을 쓸지 읽는 사람이 알 수 없으므로 거절한다.
+//
+// `frame`은 대상이 들어 있는 iframe을 바깥부터 차례로 가리키는 선택자 목록이다.
+// Playwright가 프레임으로 잡지 못하는 문서(다른 프로세스 iframe 안의 iframe — VSCode
+// 계열 앱의 webview)가 있어 그 대상은 DOM으로 찾고 실제 마우스로 누른다.
 export function normalizeTarget(target, where) {
   if (typeof target === "string") {
     if (!target.trim()) fail(where, "선택자가 비어 있습니다.");
@@ -42,6 +49,19 @@ export function normalizeTarget(target, where) {
   }
   const unknown = Object.keys(target).filter(key => !TARGET_KEYS.includes(key));
   if (unknown.length) fail(where, `대상에 알 수 없는 항목이 있습니다: ${unknown.join(", ")}`);
+  if (target.frame !== undefined) {
+    const { frame, ...rest } = target;
+    if (!Array.isArray(frame) || !frame.length || frame.length > MAX_FRAME_HOPS
+      || !frame.every(selector => typeof selector === "string" && selector.trim())) {
+      fail(where, `frame은 iframe 선택자 1~${MAX_FRAME_HOPS}개의 배열이어야 합니다.`);
+    }
+    const inner = rest.selector !== undefined && Object.keys(rest).length === 1
+      ? { kind: "selector", selector: requireText(rest.selector, where, "selector") }
+      : normalizeTarget(rest, where);
+    if (!FRAME_KINDS.includes(inner.kind)) fail(where, `frame 대상은 ${FRAME_KINDS.join("·")}로만 찾습니다.`);
+    return { ...inner, frame: [...frame] };
+  }
+  if (target.selector !== undefined) fail(where, "selector 항목은 frame과 함께만 씁니다. 선택자는 문자열로 적어 주세요.");
   if (target.exact !== undefined && typeof target.exact !== "boolean") {
     fail(where, "exact는 true·false여야 합니다.");
   }
@@ -126,7 +146,11 @@ function normalizeScene(scene, index, seen) {
   if (seen.has(id)) fail(where, `id "${id}"가 중복됐습니다.`);
   seen.add(id);
   if (!Array.isArray(scene.steps) || !scene.steps.length) fail(`${where}(${id})`, "steps가 비어 있습니다.");
-  const textFrom = scene.textFrom === undefined ? "main" : requireText(scene.textFrom, `${where}(${id})`, "textFrom");
+  // 문자열은 선택자 그대로 둔다. frame 안의 글은 대상 객체로 적는다.
+  const textFrom = scene.textFrom === undefined ? "main"
+    : typeof scene.textFrom === "object" && scene.textFrom !== null && !Array.isArray(scene.textFrom)
+      ? normalizeTarget(scene.textFrom, `${where}(${id}) textFrom`)
+      : requireText(scene.textFrom, `${where}(${id})`, "textFrom");
   // 앱이 이 장면을 실제보다 느리게 그린다면(데모 모드의 애니메이션 시간 배율) 그
   // 사실은 앱만 안다. 편집이 되돌릴 수 있게 시나리오가 적는다. 1은 실제 속도다.
   const timeScale = scene.timeScale === undefined ? 1 : Number(scene.timeScale);
@@ -193,6 +217,14 @@ function normalizeApp(app) {
     normalized.executable = requireText(app.executable, where, "executable");
     normalized.args = app.args === undefined ? [] : command(app.args);
     normalized.window = app.window === undefined ? null : requireText(app.window, where, "window");
+  } else if (kind === "attach") {
+    // 사람이 띄워 둔 앱에 붙는다(로그인·계정이 있는 앱은 새 프로필로 띄울 수 없다).
+    // 원격 디버깅 포트는 그 기계의 모든 권한이므로 이 기계 안의 주소만 받는다.
+    normalized.cdp = requireText(app.cdp, where, "cdp");
+    if (!/^http:\/\/(127\.0\.0\.1|localhost):\d{2,5}\/?$/.test(normalized.cdp)) {
+      fail(where, "cdp는 http://127.0.0.1:<포트> 모양이어야 합니다.");
+    }
+    normalized.window = app.window === undefined ? null : requireText(app.window, where, "window");
   } else {
     normalized.url = requireText(app.url ?? app.window, where, "url");
   }
@@ -237,6 +269,12 @@ export function normalizeScenario(raw) {
     viewport: normalizeViewport(raw.viewport),
     scenes,
   };
+  // 사람이 띄운 창의 스크린캐스트는 배율 에뮬레이션을 무시하고 CSS 크기로 온다
+  // (2026-09-30 IBM Bob 측정: 1600×900 창에 배율 2를 줘도 1600×900). 원하는 해상도의
+  // 창(예: 1920×1080 전체 화면)을 배율 1로 찍는다.
+  if (scenario.app.kind === "attach" && scenario.viewport.scale !== 1) {
+    fail("viewport", "붙는 앱은 scale 1만 받습니다. 창을 찍을 해상도 크기로 맞춰 주세요.");
+  }
   // 대상 대기 외에 타이핑·커서·스크롤의 실제 연출 시간도 포함한다. 2천 자 타이핑이나
   // ⅛ 속도 장면이 15초짜리 걸음으로 계산되면 녹화 상한에서 뒤가 잘린다.
   scenario.budgetMs = scenes.reduce((sum, scene) => sum

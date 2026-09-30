@@ -7,7 +7,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { TYPE_DELAY_MS, stepBudgetMs } from "../../shared/demo-scenario.mjs";
 import { frameForBox } from "../../shared/demo-camera.mjs";
-import { TAP_MS, glideCursor, installCursorOverlay, moveCursor, prepareTap, lastTap } from "./cursor-overlay.mjs";
+import { TAP_MS, drawTap, glideCursor, installCursorOverlay, moveCursor, prepareTap, lastTap, removeCursorOverlay } from "./cursor-overlay.mjs";
+import { probeFrameTarget, waitFrameTarget } from "./frame-target.mjs";
 import { waitForServer } from "./site.mjs";
 import { abortable, demoDelay as sleep, startDemoCommand } from "./demo-runtime.mjs";
 
@@ -75,9 +76,10 @@ export function locate(page, target) {
 }
 
 export function describeTarget(target) {
-  if (target.kind === "selector") return target.selector;
-  if (target.kind === "role") return `${target.role}${target.name ? ` "${target.name}"` : ""}`;
-  return `${target.kind}="${target.value}"`;
+  const inside = target.frame ? `${target.frame.join(" › ")} › ` : "";
+  if (target.kind === "selector") return inside + target.selector;
+  if (target.kind === "role") return `${inside}${target.role}${target.name ? ` "${target.name}"` : ""}`;
+  return `${inside}${target.kind}="${target.value}"`;
 }
 
 /**
@@ -96,7 +98,7 @@ export async function launchDemoApp(scenario, { workDir, onLog = () => {}, signa
   const cleanups = [];
   const lifetime = new AbortController();
   const running = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
-  let closing = null, closed = false, readyTimer = null;
+  let closing = null, closed = false, readyTimer = null, detach = null;
   const own = cleanup => {
     if (closed) void cleanup().catch(() => {});
     else cleanups.push(cleanup);
@@ -194,6 +196,26 @@ export async function launchDemoApp(scenario, { workDir, onLog = () => {}, signa
           window.setIgnoreMouseEvents(true);
         }
       }));
+    } else if (app.kind === "attach") {
+      // 사람이 띄워 둔 앱이다. connectOverCDP의 close는 연결만 끊고 앱은 그대로 둔다.
+      // 실제 마우스를 막지 않는다 — 승인처럼 사람이 그 창에서 누를 일이 있다.
+      // 정리는 한꺼번에 돌므로, 앱에 남긴 것을 걷는 일(detach)을 연결을 끊기 전에 끝낸다.
+      const browser = await wait(chromium.connectOverCDP(app.cdp, { timeout: app.ready.timeoutMs })
+        .then(browser => { own(async () => { await detach?.(); await browser.close(); }); return browser; }));
+      const pages = browser.contexts().flatMap(context => context.pages());
+      page = pages.find(candidate => !app.window || candidate.url().startsWith(app.window)) || null;
+      if (!page) {
+        throw new Error(`붙을 창을 찾지 못했습니다${app.window ? ` (${app.window})` : ""}. `
+          + `열린 창: ${JSON.stringify(pages.map(candidate => candidate.url()))}`);
+      }
+      listen(page);
+      // 창과 다른 크기로 에뮬레이션하면 실제 창에는 잘리거나 밀린 화면이 보여 사람이
+      // 누를 자리가 어긋난다. 크기는 창에 맞추고 배율만 정한다.
+      const [width, height] = await wait(page.evaluate(() => [innerWidth, innerHeight]));
+      if (width !== scenario.viewport.width || height !== scenario.viewport.height) {
+        throw new Error(`붙은 창의 화면은 ${width}×${height}인데 시나리오 viewport는 `
+          + `${scenario.viewport.width}×${scenario.viewport.height}입니다. 창 크기를 맞춰 주세요.`);
+      }
     } else {
       // headless라 실제 마우스가 닿지 않는다. 덱 촬영과 같은 렌더 경로다.
       const browser = await wait(chromium.launch({ headless: true, args: ["--enable-gpu", "--use-gl=angle", "--use-angle=metal"] })
@@ -230,6 +252,15 @@ export async function launchDemoApp(scenario, { workDir, onLog = () => {}, signa
       width: scenario.viewport.width, height: scenario.viewport.height,
       deviceScaleFactor: scenario.viewport.scale, mobile: false,
     }));
+    if (app.kind === "attach") {
+      // 붙은 앱은 촬영 뒤에도 사람이 쓴다. 에뮬레이션과 커서를 거두고 연결을 끊는다.
+      // 앱이 멈춰 있어도 촬영 결과를 붙잡지 않게 정리마다 상한을 둔다.
+      const bounded = task => Promise.race([task.catch(() => {}), new Promise(resolve => setTimeout(resolve, 3000))]);
+      detach = async () => {
+        await bounded(session.send("Emulation.clearDeviceMetricsOverride"));
+        await bounded(removeCursorOverlay(page));
+      };
+    }
     await wait(installCursorOverlay(page));
     await wait(page.evaluate(() => document.fonts?.ready));
     await sleep(600, running);
@@ -239,6 +270,70 @@ export async function launchDemoApp(scenario, { workDir, onLog = () => {}, signa
     await close();
     throw error;
   }
+}
+
+/**
+ * frame 대상의 걸음. locator 걸음과 같은 기록을 남긴다.
+ *
+ * Playwright의 click 검사를 쓸 수 없으므로 같은 약속을 직접 지킨다. 커서가 가는 사이
+ * 대상이 옮겨졌을 수 있어 누르기 직전에 다시 찾고, 그 자리를 누른다. 돌려주는 값은
+ * 커서가 끝난 자리다.
+ */
+async function runFrameStep(page, step, { motion, cursor, random, record, viewport, signal }) {
+  const { verb, target, timeoutMs } = step;
+  const wait = state => waitFrameTarget(page, target, { state, timeoutMs, signal });
+  if (verb === "waitFor") { await wait("visible"); return null; }
+  if (verb === "waitGone") { await wait("hidden"); return null; }
+  const round = box => ({ x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.w), h: Math.round(box.h) });
+  const centre = box => ({ x: Math.round(box.x + box.w / 2), y: Math.round(box.y + box.h / 2) });
+  if (verb === "focus") {
+    const { box } = await wait("stable");
+    record.box = box;
+    record.padding = step.padding;
+    record.maxZoom = step.maxZoom;
+    frameForBox(record.box, viewport, step);
+    return null;
+  }
+  const pressing = verb === "click" || verb === "type";
+  let { box } = await wait(pressing ? "actionable" : "stable");
+  let point = centre(box);
+  await glideCursor(page, cursor, point, motion.glideMs);
+  if (verb === "hover") {
+    record.box = round(box);
+    record.point = point;
+    await sleep(motion.hoverMs, signal);
+    return point;
+  }
+  if (verb === "scroll") {
+    record.box = round(box);
+    record.point = point;
+    for (let done = 0; done < Math.abs(step.delta); done += 120) {
+      await page.mouse.wheel(0, Math.sign(step.delta) * Math.min(120, Math.abs(step.delta) - done));
+      await sleep(motion.scrollStepMs, signal);
+    }
+    return point;
+  }
+  ({ box } = await wait("actionable"));
+  const settled = centre(box);
+  if (settled.x !== point.x || settled.y !== point.y) {
+    await glideCursor(page, point, settled, Math.round(motion.glideMs / 2));
+    point = settled;
+  }
+  record.box = round(box);
+  record.point = point;
+  await drawTap(page, point, motion.tapMs);
+  await page.mouse.click(point.x, point.y, { delay: motion.clickHoldMs + Math.round(random() * motion.clickJitterMs) });
+  if (verb === "type") {
+    const focused = await probeFrameTarget(page, target);
+    if (!focused.editable || !focused.focused) throw new Error("입력할 대상에 포커스가 가지 않았습니다.");
+    await sleep(motion.typeLeadMs, signal);
+    for (const char of step.text) {
+      signal?.throwIfAborted();
+      await page.keyboard.type(char);
+      await sleep(motion.typeDelayMs.min + random() * (motion.typeDelayMs.max - motion.typeDelayMs.min), signal);
+    }
+  }
+  return point;
 }
 
 async function boxOf(locator, target, timeoutMs) {
@@ -274,7 +369,14 @@ export async function runScenes(page, scenario, { clock, onEvent = () => {}, sig
     const steps = [];
     let screenText = null;
     const rememberText = async () => {
-      const source = page.locator(scene.textFrom).first();
+      if (scene.textFrom.frame) {
+        const probe = await abortable(probeFrameTarget(page, scene.textFrom).catch(() => null), signal);
+        const text = probe?.count === 1 ? probe.text.replace(/\n{3,}/g, "\n\n").trim() : "";
+        if (text) screenText = text;
+        return;
+      }
+      const source = typeof scene.textFrom === "string"
+        ? page.locator(scene.textFrom).first() : locate(page, scene.textFrom).first();
       if (!await abortable(source.isVisible().catch(() => false), signal)) return;
       const text = await abortable(source.innerText({ timeout: 2000 })
         .then(text => text.replace(/\n{3,}/g, "\n\n").trim()).catch(() => null), signal);
@@ -301,6 +403,10 @@ export async function runScenes(page, scenario, { clock, onEvent = () => {}, sig
           await sleep(step.ms, running);
         } else if (step.verb === "overview") {
           // 편집 구도만 바꾼다. 실제 앱·마우스·포커스는 움직이지 않는다.
+        } else if (step.target?.frame) {
+          const moved = await act(() => runFrameStep(page, step, { motion, cursor, random, record,
+            viewport: scenario.viewport, signal: running }));
+          if (moved) cursor = moved;
         } else if (step.verb === "focus") {
           const target = locate(page, step.target);
           await act(() => target.waitFor({ state: "visible", timeout: step.timeoutMs }));

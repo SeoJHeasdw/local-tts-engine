@@ -12,6 +12,7 @@ function overlaySource() {
     const install = () => {
       if (!document.body || document.getElementById("app-demo-cursor")) return;
       const style = document.createElement("style");
+      style.id = "app-demo-cursor-style";
       style.textContent = `
         #app-demo-cursor {
           position: fixed; left: 0; top: 0; width: 0; height: 0;
@@ -40,16 +41,21 @@ function overlaySource() {
       layer.id = "app-demo-cursor";
       layer.setAttribute("aria-hidden", "true");
       // macOS 화살표를 닮은 모양. 흰 테두리가 어두운 화면에서도 보이게 한다.
-      layer.innerHTML = `
-        <div class="ring"></div>
-        <svg class="point" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg">
-          <path d="M6 3.2 L6 22.4 L10.8 17.8 L13.8 24.6 L17.2 23.1 L14.2 16.4 L20.8 16.1 Z"
-                fill="#101216" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"/>
-        </svg>`;
+      // innerHTML을 쓰지 않는다 — VSCode 계열은 Trusted Types로 막는다(2026-09-30 IBM Bob).
+      const ring = document.createElement("div");
+      ring.className = "ring";
+      const svg = "http://www.w3.org/2000/svg";
+      const point = document.createElementNS(svg, "svg");
+      point.setAttribute("class", "point");
+      point.setAttribute("viewBox", "0 0 28 28");
+      const arrow = document.createElementNS(svg, "path");
+      for (const [name, value] of Object.entries({
+        d: "M6 3.2 L6 22.4 L10.8 17.8 L13.8 24.6 L17.2 23.1 L14.2 16.4 L20.8 16.1 Z",
+        fill: "#101216", stroke: "#ffffff", "stroke-width": "1.6", "stroke-linejoin": "round",
+      })) arrow.setAttribute(name, value);
+      point.append(arrow);
+      layer.append(ring, point);
       document.body.appendChild(layer);
-
-      const point = layer.querySelector(".point");
-      const ring = layer.querySelector(".ring");
       let at = "translate(-9999px, -9999px)";
       window.__appDemoCursor = {
         drawn: 0,
@@ -128,6 +134,32 @@ export async function prepareTap(page, ms = TAP_MS) {
     window.__appDemoCursor.tapMs = value;
     window.__appDemoCursor.lastClick = null;
   }, ms);
+}
+
+/**
+ * 누른 자리를 직접 알린다.
+ *
+ * iframe 안을 누르면 pointerdown이 이 문서에 오지 않아 클릭 표시가 뜨지 않는다.
+ * frame 대상을 누를 때는 누르기 직전에 이것으로 표시를 그린다.
+ */
+export async function drawTap(page, point, ms = TAP_MS) {
+  await page.evaluate(([x, y, span]) => {
+    const cursor = window.__appDemoCursor;
+    if (!cursor) return;
+    cursor.place(x, y);
+    cursor.tap(span);
+    cursor.lastClick = { x, y };
+  }, [point.x, point.y, ms]).catch(() => {});
+}
+
+/** 붙기만 한 앱은 우리 것이 아니다. 촬영이 끝나면 그린 커서를 걷는다. */
+export async function removeCursorOverlay(page) {
+  await page.evaluate(() => {
+    window.__appDemoCursor?.dispose?.();
+    delete window.__appDemoCursor;
+    document.getElementById("app-demo-cursor")?.remove();
+    document.getElementById("app-demo-cursor-style")?.remove();
+  }).catch(() => {});
 }
 
 export async function lastTap(page) {

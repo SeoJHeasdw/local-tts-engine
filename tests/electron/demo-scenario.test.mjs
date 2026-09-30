@@ -120,3 +120,32 @@ test('장면의 timeScale은 0보다 크고 1 이하만 받는다', () => {
     assert.throws(() => normalizeScenario(broken), /timeScale/);
   }
 });
+
+// 로그인·계정이 있는 앱(IBM Bob)은 새 프로필로 띄울 수 없어 사람이 띄운 창에 붙는다.
+test('붙는 앱은 이 기계의 원격 디버깅 주소만 받는다', () => {
+  const attach = { ...base, viewport: { width: 1920, height: 1080, scale: 1 } };
+  const value = normalizeScenario({ ...attach, app: { kind: 'attach', cdp: 'http://127.0.0.1:9333', window: 'vscode-file://' } });
+  assert.equal(value.app.cdp, 'http://127.0.0.1:9333');
+  assert.equal(value.app.window, 'vscode-file://');
+  assert.throws(() => normalizeScenario({ ...attach, app: { kind: 'attach' } }), /cdp/);
+  assert.throws(() => normalizeScenario({ ...attach, app: { kind: 'attach', cdp: 'http://10.0.0.5:9333' } }), /127\.0\.0\.1/);
+  assert.throws(() => normalizeScenario({ ...attach, app: { kind: 'attach', cdp: 'ws://127.0.0.1:9333' } }), /127\.0\.0\.1/);
+  // 사람이 띄운 창의 스크린캐스트는 배율 에뮬레이션을 무시한다.
+  assert.throws(() => normalizeScenario({ ...base, app: { kind: 'attach', cdp: 'http://127.0.0.1:9333' } }), /scale 1/);
+});
+
+test('frame 대상은 iframe 선택자 목록과 선택자·role·placeholder·text 하나로 적는다', () => {
+  const frame = ['iframe.webview', '#active-frame'];
+  assert.deepEqual(normalizeTarget({ frame, role: 'button', name: '거부', exact: true }, 'x'),
+    { kind: 'role', role: 'button', name: '거부', exact: true, frame });
+  assert.deepEqual(normalizeTarget({ frame, selector: '[contenteditable="true"]' }, 'x'),
+    { kind: 'selector', selector: '[contenteditable="true"]', frame });
+  assert.throws(() => normalizeTarget({ frame: [], text: '승인' }, 'x'), /frame은/);
+  assert.throws(() => normalizeTarget({ frame: ['a', ''], text: '승인' }, 'x'), /frame은/);
+  assert.throws(() => normalizeTarget({ frame, label: '이름' }, 'x'), /frame 대상은/);
+  assert.throws(() => normalizeTarget({ selector: '.a' }, 'x'), /frame과 함께만/);
+  const scene = normalizeScenario({ ...base, scenes: [{ id: 'bob', textFrom: { frame, selector: 'body' },
+    steps: [{ waitGone: { frame, role: 'button', name: '처리 중지', exact: true }, timeoutMs: 600000 }] }] }).scenes[0];
+  assert.deepEqual(scene.textFrom, { kind: 'selector', selector: 'body', frame }, '화면 글도 frame 안에서 읽는다');
+  assert.equal(scene.steps[0].target.frame.length, 2);
+});

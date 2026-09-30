@@ -10,6 +10,7 @@ import { losslessRecordArgs, readScenario, recordAppDemo, stitchScenes } from '.
 import { describeTarget, launchDemoApp, runScenes, sceneMotion } from '../../electron-app/main/capture/app-page.mjs';
 import { normalizeScenario } from '../../electron-app/shared/demo-scenario.mjs';
 import { glideCursor, installCursorOverlay, moveCursor } from '../../electron-app/main/capture/cursor-overlay.mjs';
+import net from 'node:net';
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -299,4 +300,102 @@ test('지정 영역 구도를 실제 촬영 기록에 남기고 전체 화면으
   assert.ok(scene.steps[0].box.w > 0 && scene.steps[0].box.h > 0);
   assert.equal(scene.steps[0].padding, 16);
   assert.equal(scene.steps[0].maxZoom, 1.4);
+});
+
+// VSCode 계열 webview: 바깥 iframe 안의 같은 출처 iframe. CDP로 붙으면 Playwright가
+// 안쪽을 프레임으로 잡지 못해(2026-09-30 IBM Bob) DOM으로 찾고 실제 마우스로 누른다.
+const NESTED = `<style>body{margin:0}iframe{border:0}</style><main>바깥</main>
+  <iframe id="outer" style="position:absolute;left:100px;top:60px;width:400px;height:260px"></iframe>`;
+const FRAME = ['#outer', '#inner'];
+
+async function nestedApp(t) {
+  const { base, file } = await workspace(t);
+  const app = await launchDemoApp(readScenario(file, path.join(base, 'work')), { workDir: path.join(base, 'work') });
+  await app.page.setContent(NESTED);
+  // 같은 출처 about:blank iframe을 두 겹 만든다. srcdoc을 겹치면 따옴표가 한 겹씩 풀린다.
+  await app.page.evaluate(() => {
+    const outer = document.querySelector('#outer').contentDocument;
+    outer.body.style.margin = '0';
+    const frame = outer.createElement('iframe');
+    frame.id = 'inner';
+    frame.style.cssText = 'border:0;position:absolute;left:20px;top:30px;width:360px;height:200px';
+    outer.body.append(frame);
+    frame.contentDocument.body.innerHTML = '<div id="box" contenteditable="true" style="height:40px"></div>'
+      + '<button style="margin-top:20px">보내기</button><button hidden>보내기</button><p id="busy">작업 중</p>';
+  });
+  await installCursorOverlay(app.page);
+  const inner = fn => app.page.evaluate(`(${fn})(document.querySelector('#outer').contentDocument.querySelector('#inner').contentDocument)`);
+  return { app, inner };
+}
+
+test('Playwright가 못 잡는 iframe 안의 입력·버튼을 실제 좌표로 누르고 친다', { timeout: 120000 }, async t => {
+  const { app, inner } = await nestedApp(t);
+  try {
+    await inner(d => { window.parent.parent.clicks = 0; d.querySelector('button').onclick = () => window.parent.parent.clicks++;
+      setTimeout(() => d.querySelector('#busy').remove(), 800); });
+    const input = fixtureScenario();
+    input.scenes = [{ id: 'bob', textFrom: { frame: FRAME, selector: 'body' }, steps: [
+      { type: { frame: FRAME, selector: '#box' }, text: '계획을 세워 줘' },
+      { click: { frame: FRAME, role: 'button', name: '보내기', exact: true } },
+      { waitGone: { frame: FRAME, text: '작업 중' }, timeoutMs: 5000 },
+    ] }];
+    const started = performance.now();
+    const [scene] = await runScenes(app.page, normalizeScenario(input), { clock: () => performance.now() - started });
+    assert.equal(await inner(d => d.querySelector('#box').innerText), '계획을 세워 줘');
+    assert.equal(await app.page.evaluate(() => window.clicks), 1, '숨은 같은 이름 버튼은 세지 않고 보이는 하나만 누른다');
+    const click = scene.steps[1];
+    assert.ok(click.point.x > 120 && click.point.y > 90, `iframe 두 겹의 위치를 더한 페이지 좌표다: ${JSON.stringify(click.point)}`);
+    assert.deepEqual(await app.page.evaluate(() => window.__appDemoCursor.lastClick), click.point, '클릭 표시가 누른 자리에 뜬다');
+    assert.match(scene.screenText, /보내기/, '장면 글도 안쪽 문서에서 읽는다');
+    assert.equal(describeTarget(normalizeScenario(input).scenes[0].steps[1].target), '#outer › #inner › button "보내기"');
+  } finally { await app.close(); }
+});
+
+test('iframe 안에서도 여럿과 일치하거나 가려진 대상은 누르지 않는다', { timeout: 120000 }, async t => {
+  const { app, inner } = await nestedApp(t);
+  try {
+    await inner(d => { window.parent.parent.clicks = 0; d.body.insertAdjacentHTML('beforeend', '<button>보내기</button>');
+      for (const b of d.querySelectorAll('button')) b.onclick = () => window.parent.parent.clicks++; });
+    const input = fixtureScenario();
+    input.scenes = [{ id: 'ambiguous', steps: [{ click: { frame: FRAME, role: 'button', name: '보내기' } }] }];
+    await assert.rejects(runScenes(app.page, normalizeScenario(input), { clock: () => 0 }), /임의로 누르지 않습니다/);
+    await inner(d => { d.querySelectorAll('button')[2].remove();
+      d.body.insertAdjacentHTML('beforeend', '<div style="position:fixed;inset:0;background:#000"></div>'); });
+    input.scenes = [{ id: 'covered', steps: [{ click: { frame: FRAME, role: 'button', name: '보내기' }, timeoutMs: 800 }] }];
+    await assert.rejects(runScenes(app.page, normalizeScenario(input), { clock: () => 0 }), /가려짐/);
+    assert.equal(await app.page.evaluate(() => window.clicks), 0);
+  } finally { await app.close(); }
+});
+
+async function freePort() {
+  const server = net.createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  await new Promise(resolve => server.close(resolve));
+  return port;
+}
+
+test('붙은 앱은 촬영이 끝나도 살아 있고 커서·에뮬레이션을 남기지 않는다', { timeout: 120000 }, async t => {
+  const { chromium } = await import('playwright');
+  const port = await freePort();
+  const owner = await chromium.launch({ headless: true, args: [`--remote-debugging-port=${port}`] });
+  t.after(() => owner.close());
+  const page = await owner.newPage({ viewport: { width: 800, height: 450 } });
+  await page.goto('data:text/html;charset=utf-8,<main>사람이 띄운 앱</main>');
+  const scenario = { ...fixtureScenario(), app: { kind: 'attach', cdp: `http://127.0.0.1:${port}`, window: 'data:' },
+    viewport: { width: 800, height: 450, scale: 1 } };
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'demo-attach-'));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const app = await launchDemoApp(normalizeScenario(scenario), { workDir: base });
+  assert.equal(await app.page.evaluate(() => document.querySelector('main').innerText), '사람이 띄운 앱');
+  assert.ok(await app.page.evaluate(() => !!document.getElementById('app-demo-cursor')));
+  await app.close();
+  assert.ok(owner.isConnected() && !page.isClosed(), '연결만 끊고 앱은 닫지 않는다');
+  assert.equal(await page.evaluate(() => !!document.getElementById('app-demo-cursor')
+    || !!document.getElementById('app-demo-cursor-style')), false, '그린 커서를 걷는다');
+
+  // 창과 다른 크기로 에뮬레이션하면 사람이 누를 자리가 어긋난다.
+  const mismatched = { ...scenario, viewport: { width: 640, height: 360, scale: 1 } };
+  await assert.rejects(launchDemoApp(normalizeScenario(mismatched), { workDir: base }), /창 크기를 맞춰/);
+  assert.ok(owner.isConnected() && !page.isClosed());
 });

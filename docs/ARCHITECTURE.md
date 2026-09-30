@@ -184,7 +184,8 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 | `shared/demo-scenario.mjs` | 시나리오 검증·정규화: 동사·선택자·자리표시자·제한 시간. 순수 |
 | `shared/demo-plan.mjs` | scenes.json + 내레이션 길이 → 편집 계획. 순수 |
 | `shared/demo-camera.mjs` | 지정 영역·여백을 포함하는 구도, 장면 경계·대상 거리를 고려한 확대 전환. 순수 |
-| `main/capture/app-page.mjs` | 앱 띄우기(electron·web), 준비·서버·ready 대기, 에뮬레이션, 동사 실행, 장면 기록 |
+| `main/capture/app-page.mjs` | 앱 띄우기(electron·web)·붙기(attach), 준비·서버·ready 대기, 에뮬레이션, 동사 실행, 장면 기록 |
+| `main/capture/frame-target.mjs` | Playwright가 못 잡는 iframe 안 대상을 DOM으로 찾기: 유일·안정·활성·가림 판정, 페이지 좌표 |
 | `main/capture/demo-runtime.mjs` | 촬영 중단 신호·중단 가능한 대기, 준비 명령·서버의 프로세스 그룹 수명 |
 | `main/capture/cursor-overlay.mjs` | 페이지에 넣는 커서·클릭 표시. 실제 마우스 사건을 따라 그린다 |
 | `main/capture/record-app.mjs` | `record` 한 번: 작업 폴더·무손실 녹화·scenes.json |
@@ -198,6 +199,11 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 | `renderer/controllers/demo-polish.mjs` | 다듬기의 앱 데모 작업면: 완성본·화질 비교·자막 겹침·시간 막대, 장면 대본·확정, 후보를 영상에 맞춰 듣고 고르기, 후보 만들기·굽기 |
 | `renderer/controllers/demo-camera.mjs` | 원본 사진에서 드래그하는 구도 편집, 즉시 사진 미리보기와 저장·렌더 연결 |
 
+`app.kind: "attach"`는 사람이 원격 디버깅 포트로 띄운 창에 붙는다(`cdp`는 이 기계 주소만,
+`window`는 창 URL 앞부분). 실제 마우스를 막지 않고, 창 크기와 viewport가 다르면 멈추며
+`scale`은 1만 받는다. 끝나면 에뮬레이션과 커서를 걷은 뒤 연결만 끊는다 — 정리는 한꺼번에
+돌므로 걷는 일을 연결 끊기 앞에 묶었다. 근거는 [APP-DEMO-DESIGN](APP-DEMO-DESIGN.md#8-bob-사람이-띄운-앱에-붙는다-2026-09-30).
+
 **앱을 아는 것은 시나리오 파일뿐이다.** 촬영 엔진은 앱 이름을 모른다. 덱 고유의 조작이
 `deck-page.mjs`에 모이듯 앱 고유의 사정은 시나리오에 모인다. 시나리오는 그 앱의 저장소가
 가진다(`demo/scenarios/<이름>.json`). 이 저장소에는 시나리오를 두지 않는다 — 앱이 바뀌면
@@ -205,7 +211,10 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 
 시나리오의 동사는 `click`·`type`·`press`·`hover`·`scroll`·`waitFor`·`waitGone`·`pause`·`focus`·`overview`다.
 대상은 선택자 문자열이거나 `{ role, name, exact }`·`{ placeholder }`·`{ text }`·`{ label }`
-중 하나다. 글자로 찾는 버튼은 `exact: true`로 둔다("승인"이 "승인하고 적용"에 걸리지 않게).
+중 하나다. Playwright가 프레임으로 잡지 못하는 iframe 안은 `frame`(바깥부터 iframe 선택자 목록)을
+더해 적는다(`{ frame, role, name }`·`{ frame, selector }` 등, `label` 제외). 이 대상은
+`capture/frame-target.mjs`가 DOM으로 찾아 페이지 좌표를 내고 실제 마우스·키보드로 조작한다.
+장면의 `textFrom`도 같은 대상 객체로 적을 수 있다. 글자로 찾는 버튼은 `exact: true`로 둔다("승인"이 "승인하고 적용"에 걸리지 않게).
 `{scenario}`는 시나리오 파일 폴더, `{work}`는 이번 촬영의 작업 폴더이며 끝나면 지운다.
 장면의 대본은 시나리오에 두지 않는다 — 찍은 뒤 `script.json`에 쓴다.
 
