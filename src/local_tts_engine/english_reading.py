@@ -27,8 +27,8 @@ from .korean_phonetics import (
     CODAS, HANGUL_START, NUCLEI, ONSETS, _count_non_overlapping, phonetic_key, spell_latin_letters,
 )
 
-# BSD 계열 라이선스(docs/DECISIONS.md). 없으면 한글 읽기 판정을 하지 않는다.
-CMUDICT_PATH = Path(__file__).parents[2] / "artifacts/models/cmudict/cmudict.dict"
+# cmusphinx/cmudict 7479086. BSD 계열 라이선스는 같은 폴더의 LICENSE(docs/DECISIONS.md).
+CMUDICT_PATH = Path(__file__).parent / "data/cmudict/cmudict.dict"
 # 발음이 여럿인 낱말·합성어는 이만큼의 읽기까지만 본다.
 MAX_READINGS = 8
 # 사전에 없는 낱말의 흔한 어미. 어간(또는 어간+e)의 발음에 붙인다(scoped, orchestrator).

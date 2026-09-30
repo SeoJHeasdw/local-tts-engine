@@ -192,23 +192,6 @@ class Studio:
         return json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
 
 
-@pytest.fixture(autouse=True)
-def pronouncing_dictionary(monkeypatch: pytest.MonkeyPatch):
-    """A few CMU entries, so English-reading checks agree on every machine.
-
-    The full dictionary lives under ignored ``artifacts/`` and may be absent.
-    """
-    from local_tts_engine import english_reading
-
-    monkeypatch.setattr(english_reading, "CMUDICT_PATH",
-                        Path(__file__).parent / "fixtures" / "cmudict-sample.dict")
-    english_reading._cmudict.cache_clear()
-    english_reading.reading_lattices.cache_clear()
-    yield
-    english_reading._cmudict.cache_clear()
-    english_reading.reading_lattices.cache_clear()
-
-
 @pytest.fixture
 def studio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Build a lecture project wired to fake models.

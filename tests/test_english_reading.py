@@ -65,8 +65,15 @@ def test_every_reading_found_is_counted_once() -> None:
     assert reading_match("Bob", "밥은 README를 읽고 밥을 먹습니다") == (0.0, 2)
 
 
-def test_no_dictionary_means_no_hangul_judgment(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    monkeypatch.setattr(english_reading, "CMUDICT_PATH", tmp_path / "missing.dict")
+@pytest.fixture
+def fresh_dictionary():
     english_reading._cmudict.cache_clear()
     english_reading.reading_lattices.cache_clear()
+    yield
+    english_reading._cmudict.cache_clear()
+    english_reading.reading_lattices.cache_clear()
+
+
+def test_no_dictionary_means_no_hangul_judgment(monkeypatch: pytest.MonkeyPatch, tmp_path, fresh_dictionary) -> None:
+    monkeypatch.setattr(english_reading, "CMUDICT_PATH", tmp_path / "missing.dict")
     assert reading_match("traditional", "트래디셔널") is None
