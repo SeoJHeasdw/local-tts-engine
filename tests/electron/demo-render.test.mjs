@@ -96,6 +96,32 @@ test('실제 ffmpeg 확대의 사각형이 계획과 맞고 전환 도중에도 
   }
 });
 
+test('키프레임이 수백 개여도 ffmpeg가 확대 식을 읽고 계획과 같은 값을 낸다', async () => {
+  // 차례로 겹친 if는 구간이 백 개를 넘으면 ffmpeg가 읽지 못했다(2026-09-30).
+  const view = { width: 640, height: 360, scale: 1 };
+  const boxes = [{ x: 20, y: 20, w: 200, h: 120 }, { x: 400, y: 200, w: 200, h: 120 }];
+  const steps = Array.from({ length: 80 }, (_, i) => ({ verb: i % 3 === 2 ? 'overview' : 'focus',
+    startMs: 200 + i * 2500, endMs: 200 + i * 2500, box: boxes[i % 2], padding: 8, maxZoom: 2 }));
+  const plan = buildEditPlan({ schemaVersion: 1, viewport: view, scenes: [
+    { id: 'long', startMs: 0, endMs: 200_000, steps }] });
+  assert.ok(plan.zoom.length > 150, `키프레임 ${plan.zoom.length}개`);
+  const indices = [0, 1210, 3000, 4610];
+  const select = indices.map(i => `eq(n\\,${i})`).join('+');
+  const { stdout } = await exec('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i',
+    'color=c=black:s=640x360:r=25:d=200,drawbox=x=20:y=20:w=200:h=120:color=white:t=fill',
+    '-vf', `${zoomFilter(plan, view)},select='${select}'`, '-fps_mode', 'passthrough', '-pix_fmt', 'gray', '-f', 'rawvideo', '-'],
+  { encoding: 'buffer', maxBuffer: 8 * 1024 * 1024 });
+  assert.equal(stdout.length, indices.length * 640 * 360);
+  for (const [index, frame] of indices.entries()) {
+    const { z, cx } = zoomAt(plan, frame * 40);
+    // 흰 상자의 왼쪽 끝이 계획한 사각형 위치와 맞는다.
+    const row = stdout.subarray(index * 640 * 360 + 180 * 640, index * 640 * 360 + 181 * 640);
+    const expectedLeft = Math.max(0, Math.round((20 - cx) * z + 320));
+    const left = row.findIndex(value => value > 200);
+    if (left >= 0) assert.ok(Math.abs(left - expectedLeft) <= 3, `프레임 ${frame}: ${left} · 계획 ${expectedLeft}`);
+  }
+});
+
 test('확대가 없으면 크기만 맞춘다', () => {
   const plan = buildEditPlan(recorded([{ id: 'a', startMs: 0, endMs: 2000, steps: [] }]));
   assert.equal(zoomFilter(plan, profile), 'scale=2560:1440:flags=lanczos');

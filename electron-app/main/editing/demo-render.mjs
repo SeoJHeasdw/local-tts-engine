@@ -41,6 +41,21 @@ function run(executable, args) {
 }
 
 /**
+ * 구간별 식을 고르는 식. `pieces`는 `until`이 커지는 순서이고, 변수가 처음으로 `until`보다
+ * 작은 구간의 식을, 어느 것도 아니면 `tail`을 낸다. ffmpeg 식은 괄호 중첩에 한도가 있어
+ * `if`를 차례로 겹치면 구간이 백 개를 넘을 때 식을 읽지 못한다(2026-09-30, 키프레임 약 150개).
+ * 이분 탐색 모양으로 겹쳐 깊이를 log₂n으로 둔다. 값은 차례로 겹친 식과 같다.
+ */
+function piecewiseExpression(variable, pieces, tail) {
+  const pick = (lo, hi) => {
+    if (lo === hi) return lo < pieces.length ? pieces[lo].expr : tail;
+    const mid = (lo + hi) >> 1;
+    return `if(lt(${variable},${pieces[mid].until}),${pick(lo, mid)},${pick(mid + 1, hi)})`;
+  };
+  return pick(0, pieces.length);
+}
+
+/**
  * 시간축을 접는 식. 원본 프레임 번호 N을 완성 영상 프레임 번호로 옮긴다.
  *
  * 멈출 자리에서는 다음 구간의 시작으로 건너뛴다. 그 사이를 `fps`가 마지막 화면으로
@@ -55,14 +70,10 @@ export function timeWarpExpression(plan) {
     const from = frame(segment.srcStartMs);
     const to = frame(segment.srcEndMs);
     const start = out;
-    pieces.push({ to, expr: `${start}+(N-${from})*${segment.outFrames}/${to - from}` });
+    pieces.push({ until: to, expr: `${start}+(N-${from})*${segment.outFrames}/${to - from}` });
     out += segment.outFrames + frame(segment.holdMs);
   }
-  const last = pieces.at(-1);
-  return pieces.slice(0, -1).reduceRight(
-    (rest, piece) => `if(lt(N,${piece.to}),${piece.expr},${rest})`,
-    last.expr,
-  );
+  return piecewiseExpression("N", pieces.slice(0, -1), pieces.at(-1).expr);
 }
 
 // 키프레임 사이를 코사인으로 잇는 식. shared/demo-plan.mjs의 zoomAt과 같은 값을 낸다.
@@ -78,9 +89,8 @@ function keyframeExpression(keys, pick, fps) {
     if (a === b || span <= 0) return { until: at(next.atMs), expr: String(b) };
     return { until: at(next.atMs), expr: `${a}+${b - a}*(1-cos(PI*(on-${from})/${span}))/2` };
   });
-  const tail = String(pick(keys.at(-1)));
-  const body = spans.reduceRight((rest, span) => `if(lt(on,${span.until}),${span.expr},${rest})`, tail);
-  return `if(lt(on,${at(keys[0].atMs)}),${pick(keys[0])},${body})`;
+  return piecewiseExpression("on", [{ until: at(keys[0].atMs), expr: String(pick(keys[0])) }, ...spans],
+    String(pick(keys.at(-1))));
 }
 
 /**
