@@ -1447,5 +1447,14 @@
   {
     "from": "Agent",
     "to": "에이전트"
+  },
+  {
+    "from": "Technology Expert Labs",
+    "to": "테크놀로지 엑스퍼트 랩스"
+  },
+  {
+    "from": "Bob",
+    "to": "밥",
+    "caseSensitive": true
   }
 ]

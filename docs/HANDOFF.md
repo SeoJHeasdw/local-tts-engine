@@ -16,12 +16,20 @@
   (`fwidth`로 너비 보정 또는 두껍게). 측정은 [VIDEO-QUALITY](VIDEO-QUALITY.md#한-칸씩-찍기의-측정-2026-09-28).
 - **앱 데모 구도 수정본 시청:** `output/edits/2026-09-22/rice-first-run-framing-v2/`. 확인 항목은
   `output/reviews/2026-09-22/app-demo-audit/구도 편집 사용법.md`에 있다.
-- **Bob Level 3 제출 영상 — 제출본은 v4로 확정:** `output/edits/2026-09-30/bob-level3-final/IBM Bob Level 3 - 서제호 v4.mp4`
-  (8분 4초, 자막 구움). 음성은 청취 승인한 v3 그대로이고 화면만 영상 연출로 바꿨다(영상형 덱, 오프닝·Bob 화면
-  진입의 3D, 바뀌는 곳을 따라가는 확대). 방식은 [APP-DEMO-DESIGN](APP-DEMO-DESIGN.md#10-정지감-줄이기-bob-v4-2026-09-30).
+- **Bob Level 3 제출 영상 — 제출본 v5 확정, 영상 작업 끝:** `output/edits/2026-09-30/bob-level3-final/IBM Bob Level 3 - 서제호 v5.mp4`
+  (8분 9초, 자막 구움). 화면은 영상형 덱, 오프닝·Bob 화면 진입의 3D, 바뀌는 곳을 따라가는 확대이고, 음성은 사전의
+  `Bob` → 밥, `Technology Expert Labs` → 테크놀로지 엑스퍼트 랩스로 `Bob`이 든 10개 장면을 새로 만든 것이다(나머지는
+  v3 음성). 결과 폴더 이름은 `bob-level3-v4-*`이지만 지금 선택과 굽기는 v5다. 방식은
+  [APP-DEMO-DESIGN](APP-DEMO-DESIGN.md#10-정지감-줄이기-bob-v4-2026-09-30).
   다시 고칠 때: 덱은 `bob/level3-demo/deck/motion.html` → `demo/motion-capture.mjs <원래 결과> <새 결과>`, Bob 화면은
   `demo/direct-camera.py`, 굽기는 `npm run demo -- render <폴더> --quality standard --burn-captions`, 잇기는
   `bob-level3-final/parts-v4.txt`로 `ffmpeg -f concat -safe 0 -c copy`. 첫 판·v2·v3도 같은 폴더에 있다.
+- **다음: 한국어 문장 속 영어 낱말 한 번 더:** 사용자가 제출 수준은 충분하지만 한글+영어 조합을 다음에 다시 보자고
+  했다. 남은 약점은 받아쓰기가 영어 철자로 적으면 소리를 못 가린다는 것('봅'·'래브스'가 `Bob`·`Lab's`로 적혔다)과
+  아래 발음 오차율 문제다. Bob 영상의 `javax`(제치셔틀·ZX)·`PoX`(팍스·PUCS)도 흔들렸다.
+- **다음: 발음 오차율도 영어 용어의 한글 읽기를 인정하게:** 받아쓰기가 영어 용어를 한글로 적으면(`Proof of
+  Experience` → 프루프 오브 익스피리언스) 발음 오차율이 부풀어 멀쩡한 후보가 '받아쓰기 불일치'로 실패한다
+  (Bob v5 next-steps 0.15 대 영어로 적힌 후보 0.056). 오차율 비교에도 `english_reading`의 한글 읽기를 쓴다.
 - **다음: 영상 연출 도구를 엔진 기능으로:** 사용자가 이런 제출·데모 영상을 여러 번 만들 예정이다. 지금은 Bob 폴더의
   전용 스크립트라, 다음 영상 전에 (1) 한 칸씩 찍는 영상형 덱 캡처, (2) 바뀌는 곳을 따라가는 카메라 연출,
   (3) 3D 장면 틀(Blender)을 앱 데모 엔진으로 옮긴다.
@@ -43,7 +51,7 @@
 | 영어 대문자 표기 점검 (README·MIGRATION.md·POM) | `output/reviews/2026-09-30/english-spelling/` |
 | 문장 안 영어 용어 121개 전환 (청취 선택 완료) | `output/reviews/2026-09-28/mixed-english-terms/` — 되돌리기는 `apply.py --revert` |
 | 영어 낱말 한글 받아쓰기 판정 측정 (552회 표본·Bob 8장면) | `output/reviews/2026-09-30/english-hangul/` |
-| Bob Level 3 제출 영상 첫 판·v2·v3·v4 (제출본 v4 확정) | `output/edits/2026-09-30/bob-level3-final/` — 장면별 원본은 같은 날짜의 `bob-level3-*`, v3 재선택 스크립트는 `bob-level3-v3/` |
+| Bob Level 3 제출 영상 첫 판·v2·v3·v4·v5 (제출본 v5) | `output/edits/2026-09-30/bob-level3-final/` — 장면별 원본은 같은 날짜의 `bob-level3-*`, v3 재선택 스크립트는 `bob-level3-v3/` |
 
 후속 편집은 최신 수정본의 PCM·타임라인·자막에서 시작한다. 원래 manifest 음성으로 돌아가면
 이미 고친 부분을 덮는다. 예: CH02 L04의 193.295–203.055초는 사용자가 고른 `앤쓰로픽` 후보다.
