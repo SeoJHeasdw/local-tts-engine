@@ -624,7 +624,7 @@ def test_the_digit_match_does_not_straddle_a_longer_number() -> None:
     assert numeral_written_as_digits("열", "10장을 봅니다") is True
 
 
-def test_english_words_inside_korean_are_checked_by_their_english_spelling() -> None:
+def test_english_words_inside_korean_are_heard_in_english_or_as_a_hangul_reading() -> None:
     from local_tts_engine.speech_quality import english_word_checks
 
     checks = english_word_checks(
@@ -632,12 +632,29 @@ def test_english_words_inside_korean_are_checked_by_their_english_spelling() -> 
         "법은 readme와 PAM 파일 migration.md com.polaris.x와 웹스피어를 봅니다",
     )
     assert [(check["word"], check["heard"]) for check in checks] == [
-        ("Bob", False), ("Readme", True), ("pom", False), ("Migration", True), ("WebSphere", False),
+        ("Bob", False), ("Readme", True), ("pom", False), ("Migration", True), ("WebSphere", True),
     ], "파일 이름은 이름만 보고, 코드 식별자는 보지 않는다"
+    assert checks[-1]["hangulDistance"] == 0 and "hangulDistance" not in checks[1]
     # 사전이 따로 검사하는 용어는 여기서 다시 보지 않는다.
     dictionary = [{"from": "Anthropic", "to": "Anthropic", "literal": True, "inline": True,
                    "comparisonReading": "앤트로픽"}]
     assert english_word_checks("Anthropic 발표입니다", "앤트로픽 발표입니다", dictionary) == []
+
+
+def test_a_hangul_reading_the_korean_text_already_says_is_not_evidence() -> None:
+    from local_tts_engine.speech_quality import english_word_checks
+
+    expected = "Bob은 pom 파일을 읽고 밥을 먹습니다."
+    assert english_word_checks(expected, "밥은 펌 파일을 읽고 밥을 먹습니다")[0]["heard"] is True
+    assert english_word_checks(expected, "VOP은 펌 파일을 읽고 밥을 먹습니다")[0]["heard"] is False, (
+        "본문의 밥은 Bob이 아니다")
+
+
+def test_english_the_transcript_glued_or_split_is_still_english() -> None:
+    from local_tts_engine.speech_quality import english_word_checks
+
+    checks = english_word_checks("Open Liberty와 Java 이십일, 그리고 WebSphere", "OpenLiberty와 Java21, 그리고 web sphere")
+    assert all(check["heard"] for check in checks), checks
 
 
 def test_english_evidence_only_breaks_ties_the_korean_checks_leave() -> None:

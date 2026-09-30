@@ -40,6 +40,7 @@ from .korean_phonetics import (
     pronunciation_distance,
 )
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
+from .english_reading import reading_match
 from .pronunciation import _dictionary_pattern, comparison_pronunciation, declared_readings, merge_pronunciation_dictionaries
 from .prosody import (
     BOUNDARY_WARNING, PAUSE_WARNING, boundary_pause_checks, boundary_targets,
@@ -146,10 +147,12 @@ def numeral_written_as_digits(term: str, recognized_text: str) -> bool:
     return re.search(rf"(?<!\d){re.escape(digits)}(?!\d)", recognized_text) is not None
 
 
-# 한국어 문장 속 영어 낱말(사전이 따로 지정하지 않은 것)을 받아쓰기가 영어 철자로
-# 적었는가. 맞게 읽고도 한글로 적히는 일이 많아(2026-09-28 용어 184개·552회: 영어로
-# 적힌 것 93.7% 정답, 한글로 적힌 것 57.4%) 경고로 쓰지 않는다. 후보 순위와 재시도
-# 여부에만 쓴다 — 같은 552회에서 세 후보 중 이것으로 고르면 69.0% → 73.4%였다.
+# 한국어 문장 속 영어 낱말(사전이 따로 지정하지 않은 것)이 받아쓰기에 들렸는가. 영어
+# 철자로 적혔거나, 한글로 적혔으면 그 낱말의 미국식 발음을 한글로 옮긴 읽기 중 하나와
+# 자모까지 같아야 한다(.english_reading). 영어 철자만 보던 판정은 맞게 읽고 한글로 적힌
+# 것을 못 봤다(2026-09-28 용어 184개·552회에서 '안 들림'의 57.1%가 정답). 한글 읽기까지
+# 보면 '들림' 92.3%·'안 들림' 5.4%가 정답이다. 경고로 쓰지 않고 후보 순위와 재시도에만
+# 쓴다 — 같은 552회에서 세 후보 중 이것으로 고르면 69.0% → 75.5%(상한 78.3%)였다.
 # 낱말·파일 이름·식별자를 한 덩어리로 잡은 뒤 가른다. `MIGRATION.md`는 이름만 보고,
 # `com.polaris.x`·`src/main`·`snake_case`는 코드라 보지 않는다.
 LATIN_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_'’./-]*[A-Za-z][A-Za-z0-9_'’./-]*")
@@ -166,7 +169,11 @@ def english_word_checks(
     dictionary: list[dict[str, Any]] | None = None,
     speech_parts: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Say which English words inside Korean speech the reader wrote back in English.
+    """Say which English words inside Korean speech the reader heard.
+
+    A word is heard when the transcript spells it in English, or writes one of
+    its Hangul readings jamo for jamo (``hangulDistance`` 0) more often than
+    the Korean around it already does — 밥을 먹습니다 says 밥 without any Bob.
 
     Dictionary terms already carry their own required-pronunciation check, and
     English sentences routed to the English voice carry ``englishChecks``; both
@@ -178,7 +185,11 @@ def english_word_checks(
     covered: list[tuple[int, int]] = []
     for item in merge_pronunciation_dictionaries(dictionary or []):
         covered.extend(match.span() for match in _dictionary_pattern(item).finditer(korean_text))
-    heard_words = re.findall(r"[a-z0-9]+", re.sub(r"['’]", "", recognized_text.lower()))
+    context = LATIN_TOKEN_PATTERN.sub(" ", comparison_pronunciation(korean_text, dictionary or []))
+    # 받아쓰기는 붙여 쓰기도(OpenLiberty, Java21) 띄어 쓰기도(web sphere) 한다.
+    spoken = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", re.sub(r"['’]", "", recognized_text))
+    words = re.findall(r"[a-z]+", spoken.lower())
+    heard_words = words + [first + second for first, second in zip(words, words[1:])]
     checks: list[dict[str, Any]] = []
     seen: set[str] = set()
     for match in LATIN_TOKEN_PATTERN.finditer(korean_text):
@@ -199,7 +210,12 @@ def english_word_checks(
                         default=0.0)
             # 짧은 낱말은 한 글자 차이가 다른 낱말이다(pom/pam).
             needed = 1.0 if len(word) <= 4 else ENGLISH_WORD_MATCH_RATIO
-            checks.append({"word": part, "heard": ratio >= needed, "ratio": round(ratio, 3)})
+            check: dict[str, Any] = {"word": part, "heard": ratio >= needed, "ratio": round(ratio, 3)}
+            match = None if check["heard"] else reading_match(part, recognized_text)
+            if match is not None:
+                check["hangulDistance"] = round(match[0], 3)
+                check["heard"] = match[1] > reading_match(part, context)[1]
+            checks.append(check)
     return checks
 
 

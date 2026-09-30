@@ -95,6 +95,8 @@ async function buildReport() {
     adapter: settings.adapterId === "none" || ready(readiness.adapter),
     voiceModel: ready(readiness.models[selectedModel]),
     qualityModel: ready(readiness.quality),
+    // 한국어 문장 속 영어 낱말의 한글 받아쓰기를 판정한다. 없으면 영어 철자만 본다.
+    pronouncingDictionary: await exists(path.join(PROJECT_ROOT, "artifacts/models/cmudict/cmudict.dict")),
     aligner: ready(readiness.aligner),
     courseConfig: await exists(path.join(deckRoot, "narration.config.json")),
     courseScripts: await exists(path.join(deckRoot, "script/course")),
@@ -110,13 +112,14 @@ async function buildReport() {
   };
   const capabilities = {
     textVoice: checks.appleSilicon && checks.trainPython && checks.ffprobe
-      && checks.referenceAudio && checks.referenceText && checks.adapter && checks.voiceModel && checks.qualityModel,
+      && checks.referenceAudio && checks.referenceText && checks.adapter && checks.voiceModel && checks.qualityModel
+      && checks.pronouncingDictionary,
     editing: checks.ffmpeg && checks.ffprobe,
     screenRecording: checks.node && checks.ffmpeg && checks.ffprobe && checks.recordRunner && checks.screenCapture,
     courseVideo: checks.appleSilicon && checks.basePython && checks.trainPython
       && checks.node && checks.ffmpeg && checks.ffprobe && checks.referenceAudio
       && checks.referenceText && checks.adapter && checks.voiceModel && checks.courseConfig
-      && checks.qualityModel && checks.aligner && checks.courseScripts && checks.captionRunner && checks.captureRunner
+      && checks.qualityModel && checks.pronouncingDictionary && checks.aligner && checks.courseScripts && checks.captionRunner && checks.captureRunner
       && checks.productionRunner && checks.sourceCompiler,
   };
   const basePythonOutput = executableOutput(tools.basePython);
@@ -165,6 +168,7 @@ function printReport(report) {
     adapter: "선택한 음성 어댑터",
     voiceModel: "선택한 음성 모델 로컬 파일",
     qualityModel: "Whisper 자동 음성 검수 모델",
+    pronouncingDictionary: "영어 발음 사전 (CMU)",
     aligner: "단어 시각 정렬 모델",
     courseConfig: "강의 설정",
     courseScripts: "강의 대본",

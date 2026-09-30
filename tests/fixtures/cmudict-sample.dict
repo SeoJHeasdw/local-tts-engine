@@ -1,0 +1,61 @@
+;;; Sample of the CMU Pronouncing Dictionary (github.com/cmusphinx/cmudict @ 7479086) for tests.
+;;; Copyright (C) 1993-2015 Carnegie Mellon University. All rights reserved.
+;;; 
+;;; Redistribution and use in source and binary forms, with or without
+;;; modification, are permitted provided that the following conditions
+;;; are met:
+;;; 
+;;; 1. Redistributions of source code must retain the above copyright
+;;;    notice, this list of conditions and the following disclaimer.
+;;;    The contents of this file are deemed to be source code.
+;;; 
+;;; 2. Redistributions in binary form must reproduce the above copyright
+;;;    notice, this list of conditions and the following disclaimer in
+;;;    the documentation and/or other materials provided with the
+;;;    distribution.
+;;; 
+;;; This work was supported in part by funding from the Defense Advanced
+;;; Research Projects Agency, the Office of Naval Research and the National
+;;; Science Foundation of the United States of America, and by member
+;;; companies of the Carnegie Mellon Sphinx Speech Consortium. We acknowledge
+;;; the contributions of many volunteers to the expansion and improvement of
+;;; this dictionary.
+;;; 
+;;; THIS SOFTWARE IS PROVIDED BY CARNEGIE MELLON UNIVERSITY ``AS IS'' AND
+;;; ANY EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+;;; THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+;;; PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL CARNEGIE MELLON UNIVERSITY
+;;; NOR ITS EMPLOYEES BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+;;; SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+;;; LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+;;; DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+;;; THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+;;; (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+;;; OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+agent EY1 JH AH0 N T
+agents EY1 JH AH0 N T S
+boat B OW1 T
+bob B AA1 B
+bot B AO1 T
+calling K AO1 L IH0 NG
+context K AA1 N T EH0 K S T
+hand HH AE1 N D
+hub HH AH1 B
+jakarta JH AH0 K AA1 R T AH0
+java JH AA1 V AH0
+liberty L IH1 B ER0 T IY2
+me M IY1
+memory M EH1 M ER0 IY0
+migration M AY0 G R EY1 SH AH0 N
+off AO1 F
+open OW1 P AH0 N
+orchestrate AO1 R K IH0 S T R EY2 T
+plan P L AE1 N
+policy P AA1 L AH0 S IY0
+pom P AO1 M
+read R EH1 D
+read(2) R IY1 D
+sphere S F IH1 R
+success S AH0 K S EH1 S
+traditional T R AH0 D IH1 SH AH0 N AH0 L
+web W EH1 B
