@@ -64,6 +64,7 @@ from .speech_quality import (
     read_timed_words,
     review_candidate_prosody,
     review_transcriptions,
+    take_settled,
 )
 
 
@@ -305,7 +306,7 @@ def resolve_text_chunk_take(
         if evaluation is not None:
             evaluations.append(evaluation)
         attempts.append({**candidate, "status": "generated", "quality": evaluation})
-        if evaluation is None or evaluation["passed"]:
+        if evaluation is None or take_settled(evaluation, attempt):
             break
     if not valid:
         raise RuntimeError(f"텍스트 청크 {index + 1}의 모든 후보가 오디오 생성에 실패했습니다.")

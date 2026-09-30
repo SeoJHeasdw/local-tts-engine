@@ -153,6 +153,7 @@ from .speech_quality import (
     asr_reading_windows,
     better_evaluation,
     choose_best_candidate,
+    take_settled,
     chunk_severity,
     evaluate_candidate,
     quality_summary,
@@ -393,7 +394,9 @@ def resolve_chunk_take(
     Every chunk is read back, but a chunk that reads correctly on the first seed
     stops there.  Retries are therefore paid for only where something is
     actually wrong, which is what makes it affordable to check the whole lecture
-    rather than only the lines with risky words in them.
+    rather than only the lines with risky words in them. The one exception is a
+    chunk whose English words did not come back in English: it spends up to
+    ``ENGLISH_WORD_ATTEMPTS`` takes so selection has something to choose from.
 
     ``review`` of ``None`` disables content reading. A broken waveform can
     still consume another seed from the same attempt budget.
@@ -425,7 +428,7 @@ def resolve_chunk_take(
         evaluations.append(review(chunk, candidates[-1]))
         if parts:
             evaluations[-1]["recovery"] = {"strategy": COVERAGE_POLICY, "parts": parts}
-        if evaluations[-1]["passed"]:
+        if take_settled(evaluations[-1], attempt):
             break
 
     if not candidates:

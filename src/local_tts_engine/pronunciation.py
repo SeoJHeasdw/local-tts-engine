@@ -15,6 +15,8 @@ produces "Do my 봇츠 share one computer?", which is neither language.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from .korean_naturalness import (
@@ -397,6 +399,41 @@ def _restore_comparison_identifier_separators(
     return output
 
 
+# 대문자로만 쓴 보통 영단어는 낱말로 읽히지 않는다. 2026-09-30 어댑터 0.60·시드 3개:
+# README 0/3 → Readme 3/3, MIGRATION.md 불안정 → Migration.md 3/3. 짧은 약어는 반대로
+# 대문자가 낫다(POM 3/3, Pom 1/3). 그래서 다섯 글자 이상이면서 영어 낱말이거나 두
+# 낱말의 합성(read+me)일 때만 첫 글자만 대문자로 바꾼다. 근거는
+# output/reviews/2026-09-30/english-spelling/.
+CAPITALIZED_WORD_PATTERN = re.compile(r"(?<![A-Za-z0-9_])[A-Z]{5,}(?![A-Za-z0-9_])")
+# macOS 기본 영어 낱말 목록(web2). 없으면 아무것도 바꾸지 않는다.
+ENGLISH_WORD_LIST = Path("/usr/share/dict/words")
+
+
+@lru_cache(maxsize=1)
+def _english_words() -> frozenset[str]:
+    try:
+        return frozenset(line.strip().lower() for line in ENGLISH_WORD_LIST.read_text().splitlines()
+                         if line.strip())
+    except OSError:
+        return frozenset()
+
+
+def _is_spoken_word(word: str) -> bool:
+    words = _english_words()
+    return word in words or any(
+        word[:cut] in words and word[cut:] in words for cut in range(2, len(word) - 1)
+    )
+
+
+def speak_capitalized_words(text: str) -> str:
+    """Write an all-capitals ordinary word so the voice reads it as a word."""
+    return CAPITALIZED_WORD_PATTERN.sub(
+        lambda match: match.group(0).capitalize() if _is_spoken_word(match.group(0).lower())
+        else match.group(0),
+        text,
+    )
+
+
 def _apply_dictionary(
     text: str,
     dictionary: list[dict[str, Any]],
@@ -421,6 +458,8 @@ def _apply_dictionary(
         if item.get("literal"):
             continue
         output = _dictionary_pattern(item).sub(str(item["to"]), output)
+    # 사전의 결정(보호된 영어·대소문자 구분 항목)이 먼저이고, 남은 대문자 낱말만 고친다.
+    output = speak_capitalized_words(output)
     if not comparison:
         output = _protect_unstructured_identifiers(output, protected)
     output = str(korean_naturalness_preflight(output)["text"])

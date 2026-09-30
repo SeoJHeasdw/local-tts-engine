@@ -536,3 +536,25 @@ def test_asr_identifier_normalization_keeps_dictionary_case_policy() -> None:
     dictionary = [{"from": "A-2041", "to": "에이 이공사일", "caseSensitive": True}]
     assert comparison_pronunciation("주문 A2041", dictionary) == "주문 에이 이공사일"
     assert comparison_pronunciation("주문 a2041", dictionary) == "주문 a2041"
+
+
+# 2026-09-30 어댑터 0.60·시드 3개: README 0/3 → Readme 3/3, MIGRATION.md 불안정 →
+# Migration.md 3/3, POM 3/3 → Pom 1/3. 목소리가 아니라 철자가 낱말을 망가뜨렸다.
+def test_an_all_capitals_ordinary_word_is_written_so_it_reads_as_a_word() -> None:
+    assert apply_pronunciation("Bob은 README와 설정 파일을 읽습니다.", []) == "Bob은 Readme와 설정 파일을 읽습니다."
+    assert apply_pronunciation("변경을 MIGRATION.md로 정리합니다.", []) == "변경을 Migration.md로 정리합니다."
+    assert apply_pronunciation("CHANGELOG와 LICENSE를 봅니다.", []) == "Changelog와 License를 봅니다."
+
+
+def test_acronyms_english_prose_and_dictionary_spellings_keep_their_capitals() -> None:
+    # 짧은 약어·낱말이 아닌 대문자열은 글자로 읽는 편이 낫다.
+    assert apply_pronunciation("POM 파일과 IBM, HTTPS, NVIDIA를 씁니다.", []) == (
+        "POM 파일과 IBM, HTTPS, NVIDIA를 씁니다."
+    )
+    # 영어 문장은 영어 목소리가 제 철자로 읽는다.
+    assert apply_pronunciation("The README explains every SETUP step.", []) == (
+        "The README explains every SETUP step."
+    )
+    # 사전의 결정이 먼저다.
+    dictionary = [{"from": "MIGRATION", "to": "마이그레이션", "caseSensitive": True}]
+    assert apply_pronunciation("MIGRATION 문서", dictionary) == "마이그레이션 문서"

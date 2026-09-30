@@ -350,3 +350,21 @@ def test_independent_alignment_uses_only_the_prechecked_local_path(
 
     assert seen == [path]
     assert words == [{"text": "안녕", "startMs": 100, "endMs": 400}]
+
+
+def test_text_voice_spends_takes_on_english_that_came_back_in_hangul() -> None:
+    made: list[int] = []
+
+    def synthesize(_chunk, attempt, seed):
+        made.append(attempt)
+        return {"audioPath": f"take-{attempt}.wav", "sampleRate": 24_000}
+
+    def review(_chunk, candidate):
+        heard = candidate["attempt"] == 2
+        return {"attempt": candidate["attempt"], "passed": True, "failures": [], "warnings": [],
+                "score": 1.0, "englishWordChecks": [{"word": "Liberty", "heard": heard, "ratio": 1.0 if heard else 0.5}]}
+
+    take = resolve_text_chunk_take({"ttsText": "Liberty 서버"}, 0, 7, 4, synthesize, review)
+    assert made == [1, 2]
+    assert take["selected"]["attempt"] == 2
+    assert take["severity"] == "ok"

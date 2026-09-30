@@ -215,3 +215,30 @@ def test_shared_input_errors_are_not_retried() -> None:
     with pytest.raises(ValueError, match="참조 음성 입력 오류"):
         resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=reader([]))
     assert attempts == [1]
+
+
+UNHEARD = [{"word": "WebSphere", "heard": False, "ratio": 0.4}]
+HEARD = [{"word": "WebSphere", "heard": True, "ratio": 1.0}]
+
+
+def test_english_that_came_back_in_hangul_buys_more_takes_to_choose_from() -> None:
+    synthesize = synthesizer()
+    review = reader([{"englishWordChecks": UNHEARD}, {"englishWordChecks": UNHEARD},
+                     {"englishWordChecks": HEARD}])
+    result = resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=review)
+
+    assert synthesize.made == [1, 2, 3]
+    assert result["selected"]["attempt"] == 3
+    assert result["severity"] == "ok", "영어 증거는 경고가 아니다"
+
+
+def test_english_retries_stop_at_three_and_heard_english_stops_at_once() -> None:
+    synthesize = synthesizer()
+    review = reader([{"englishWordChecks": UNHEARD}] * 4)
+    resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize, review=review)
+    assert synthesize.made == [1, 2, 3]
+
+    synthesize = synthesizer()
+    resolve_chunk_take(chunk(), attempt_limit=4, synthesize=synthesize,
+                       review=reader([{"englishWordChecks": HEARD}]))
+    assert synthesize.made == [1]

@@ -622,3 +622,31 @@ def test_the_digit_match_does_not_straddle_a_longer_number() -> None:
     # 열 denotes 10, and a reading that says 100 must not satisfy it.
     assert numeral_written_as_digits("열", "열 장이 아니라 100장입니다") is False
     assert numeral_written_as_digits("열", "10장을 봅니다") is True
+
+
+def test_english_words_inside_korean_are_checked_by_their_english_spelling() -> None:
+    from local_tts_engine.speech_quality import english_word_checks
+
+    checks = english_word_checks(
+        "Bob은 Readme와 pom 파일, Migration.md, com.polaris.x와 WebSphere를 봅니다.",
+        "법은 readme와 PAM 파일 migration.md com.polaris.x와 웹스피어를 봅니다",
+    )
+    assert [(check["word"], check["heard"]) for check in checks] == [
+        ("Bob", False), ("Readme", True), ("pom", False), ("Migration", True), ("WebSphere", False),
+    ], "파일 이름은 이름만 보고, 코드 식별자는 보지 않는다"
+    # 사전이 따로 검사하는 용어는 여기서 다시 보지 않는다.
+    dictionary = [{"from": "Anthropic", "to": "Anthropic", "literal": True, "inline": True,
+                   "comparisonReading": "앤트로픽"}]
+    assert english_word_checks("Anthropic 발표입니다", "앤트로픽 발표입니다", dictionary) == []
+
+
+def test_english_evidence_only_breaks_ties_the_korean_checks_leave() -> None:
+    from local_tts_engine.speech_quality import choose_best_candidate
+
+    unheard = {"attempt": 1, "failures": [], "warnings": [], "score": 1.0,
+               "englishWordChecks": [{"word": "WebSphere", "heard": False, "ratio": 0.4}]}
+    heard = {"attempt": 2, "failures": [], "warnings": [], "score": 2.0,
+             "englishWordChecks": [{"word": "WebSphere", "heard": True, "ratio": 1.0}]}
+    assert choose_best_candidate([unheard, heard])["attempt"] == 2
+    korean_warning = {**heard, "attempt": 3, "warnings": ["단어 발음 확인 필요"]}
+    assert choose_best_candidate([unheard, korean_warning])["attempt"] == 1, "한국어가 먼저다"

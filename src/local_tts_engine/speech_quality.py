@@ -21,6 +21,7 @@ of being told the production failed.
 
 from __future__ import annotations
 
+import difflib
 import re
 import math
 import tempfile
@@ -39,7 +40,7 @@ from .korean_phonetics import (
     pronunciation_distance,
 )
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
-from .pronunciation import comparison_pronunciation, declared_readings
+from .pronunciation import _dictionary_pattern, comparison_pronunciation, declared_readings, merge_pronunciation_dictionaries
 from .prosody import (
     BOUNDARY_WARNING, PAUSE_WARNING, boundary_pause_checks, boundary_targets,
     confirm_pause_checks, interior_silences, lead_term_readings, pause_checks,
@@ -143,6 +144,74 @@ def numeral_written_as_digits(term: str, recognized_text: str) -> bool:
     if digits is None:
         return False
     return re.search(rf"(?<!\d){re.escape(digits)}(?!\d)", recognized_text) is not None
+
+
+# 한국어 문장 속 영어 낱말(사전이 따로 지정하지 않은 것)을 받아쓰기가 영어 철자로
+# 적었는가. 맞게 읽고도 한글로 적히는 일이 많아(2026-09-28 용어 184개·552회: 영어로
+# 적힌 것 93.7% 정답, 한글로 적힌 것 57.4%) 경고로 쓰지 않는다. 후보 순위와 재시도
+# 여부에만 쓴다 — 같은 552회에서 세 후보 중 이것으로 고르면 69.0% → 73.4%였다.
+# 낱말·파일 이름·식별자를 한 덩어리로 잡은 뒤 가른다. `MIGRATION.md`는 이름만 보고,
+# `com.polaris.x`·`src/main`·`snake_case`는 코드라 보지 않는다.
+LATIN_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_'’./-]*[A-Za-z][A-Za-z0-9_'’./-]*")
+FILE_NAME_PATTERN = re.compile(r"([A-Za-z][A-Za-z'’-]*)\.[A-Za-z]{1,4}")
+MIN_ENGLISH_WORD_LETTERS = 3
+ENGLISH_WORD_MATCH_RATIO = 0.85
+# 영어 낱말이 영어로 들리지 않은 청크는 한국어가 통과했어도 이만큼까지 시도한다.
+ENGLISH_WORD_ATTEMPTS = 3
+
+
+def english_word_checks(
+    expected_text: str,
+    recognized_text: str,
+    dictionary: list[dict[str, Any]] | None = None,
+    speech_parts: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Say which English words inside Korean speech the reader wrote back in English.
+
+    Dictionary terms already carry their own required-pronunciation check, and
+    English sentences routed to the English voice carry ``englishChecks``; both
+    are left to those. Words shorter than three letters are acronyms or
+    particles the reader spells either way.
+    """
+    korean_text = (" ".join(part["text"] for part in speech_parts if part["language"] != "English")
+                   if speech_parts else expected_text)
+    covered: list[tuple[int, int]] = []
+    for item in merge_pronunciation_dictionaries(dictionary or []):
+        covered.extend(match.span() for match in _dictionary_pattern(item).finditer(korean_text))
+    heard_words = re.findall(r"[a-z0-9]+", re.sub(r"['’]", "", recognized_text.lower()))
+    checks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in LATIN_TOKEN_PATTERN.finditer(korean_text):
+        token = match.group(0).strip(".-'’")
+        file_name = FILE_NAME_PATTERN.fullmatch(token)
+        if file_name:
+            token = file_name.group(1)
+        elif re.search(r"[0-9_./]", token):
+            continue
+        if any(start < match.end() and match.start() < end for start, end in covered):
+            continue
+        for part in filter(None, token.split("-")):
+            word = re.sub(r"['’]", "", part).lower()
+            if len(word) < MIN_ENGLISH_WORD_LETTERS or word in seen:
+                continue
+            seen.add(word)
+            ratio = max((difflib.SequenceMatcher(None, word, heard).ratio() for heard in heard_words),
+                        default=0.0)
+            # 짧은 낱말은 한 글자 차이가 다른 낱말이다(pom/pam).
+            needed = 1.0 if len(word) <= 4 else ENGLISH_WORD_MATCH_RATIO
+            checks.append({"word": part, "heard": ratio >= needed, "ratio": round(ratio, 3)})
+    return checks
+
+
+def english_words_unheard(candidate: dict[str, Any]) -> int:
+    return sum(not check["heard"] for check in candidate.get("englishWordChecks", []))
+
+
+def take_settled(evaluation: dict[str, Any], attempt: int) -> bool:
+    """Whether another seed is still worth paying for after this take."""
+    if not evaluation["passed"]:
+        return False
+    return not english_words_unheard(evaluation) or attempt >= ENGLISH_WORD_ATTEMPTS
 
 
 FAILURE_PENALTY = 25.0
@@ -581,6 +650,7 @@ def evaluate_candidate(
         elif check["status"] == "warning" and reason not in warnings:
             warnings.append(reason)
     unheard = [check["term"] for check in checks if check["status"] != "ok"]
+    english_words = english_word_checks(expected_text, recognized_text, dictionary, speech_parts)
     # Pronunciation fidelity dominates; a warning nudges seed selection without
     # ever being enough on its own to call the production broken.
     score = (
@@ -599,6 +669,7 @@ def evaluate_candidate(
         "requiredPronunciations": list(required_pronunciations),
         "pronunciationChecks": checks,
         "lexicalChecks": lexical_checks,
+        "englishWordChecks": english_words,
         "contentChecks": content_checks,
         "missingPronunciations": unheard,
         "characterErrorRate": round(cer, 6),
@@ -768,10 +839,12 @@ def apply_english_checks(evaluation: dict[str, Any], checks: list[dict[str, Any]
     return result
 
 
-def _candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, float, int]:
+def _candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, int, float, int]:
+    # 한국어 판정이 먼저다. 영어 낱말은 한국어가 같은 후보끼리만 가른다.
     return (
         len(candidate.get("failures", [])),
         len([warning for warning in candidate.get("warnings", []) if warning not in RHYTHM_WARNINGS]),
+        english_words_unheard(candidate),
         len(candidate.get("warnings", [])),
         float(candidate.get("score", float("inf"))),
         int(candidate.get("attempt", 1)),

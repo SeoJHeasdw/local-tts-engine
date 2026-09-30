@@ -1,6 +1,6 @@
 # 현재 상태
 
-갱신: 2026-09-28. 지금 남은 일과 결과 위치만 둔다. 지난 경위는 git 기록에 있다.
+갱신: 2026-09-30. 지금 남은 일과 결과 위치만 둔다. 지난 경위는 git 기록에 있다.
 
 ## 남은 일
 
@@ -16,10 +16,17 @@
   (`fwidth`로 너비 보정 또는 두껍게). 측정은 [VIDEO-QUALITY](VIDEO-QUALITY.md#한-칸씩-찍기의-측정-2026-09-28).
 - **앱 데모 구도 수정본 시청:** `output/edits/2026-09-22/rice-first-run-framing-v2/`. 확인 항목은
   `output/reviews/2026-09-22/app-demo-audit/구도 편집 사용법.md`에 있다.
-- **Bob Level 3 제출 영상:** 화면 녹화 → 다듬기로 만든다. 자동 촬영은 보류다
-  ([APP-DEMO-DESIGN](APP-DEMO-DESIGN.md#8-bob으로-넘어갈-때-2026-09-21-보류)). 초안은 Delegate 단계,
-  가상 고객 한빛리테일, 약 18분 30초, 1-app Java Modernization PoX CTA다. 다듬기의 구간 음성
-  교체는 한 번에 120초까지라 긴 내레이션은 나눠 넣는다.
+- **Bob Level 3 제출 영상 — 영어 개선판 마무리:** 첫 완성본(8분 6초)은 `bob-level3-final/`에 있고
+  사용자가 영어 낱말 발음을 지적했다. 엔진에 대문자 영단어 표기 정리와 영어 낱말 받아쓰기로 후보
+  고르기를 넣고([QUALITY](QUALITY.md#생성과-독립-판독)), 영어가 많은 8장면(Bob 편 legacy-code·understand·plan·
+  delegate·document·migration-doc, 여는 장표 client·pain)을 후보 1개로 다시 만들었다. 남은 순서:
+  ① 두 `script.json`의 해당 장면 `voice.candidates`가 새 후보로 바뀌었는지 확인하고
+  `python3 /Users/jaehoseo/Desktop/vswrk/bob/level3-demo/demo/pick-voices.py <결과 폴더>...`로 고른다(자동 검사 기준, 청취 아님)
+  ② `npm run demo -- render <폴더> --quality standard --no-open`으로 Bob 편·여는 장표를 다시 굽는다
+  ③ `bob-level3-final/parts.txt`로 `ffmpeg -f concat -safe 0 -i parts.txt -c copy`해 `IBM Bob Level 3 - 서제호 v2.mp4`를 만든다
+  ④ 사용자가 첫 판과 들어 비교한다. 촬영 방법(Bob을 `--remote-debugging-port=9333`으로 띄워 붙기, 승인은 사람이
+  클릭)은 [APP-DEMO-DESIGN](APP-DEMO-DESIGN.md#8-bob-사람이-띄운-앱에-붙는다-2026-09-30)과
+  `/Users/jaehoseo/Desktop/vswrk/bob/level3-demo/`(시나리오·장표·연습 저장소)에 있다.
 - **(선택) `봇이` 뭉개짐 개선:** 강의에서 넘어갈 수준이다. 6후보 비교 계획이
   `output/reviews/2026-09-24/speech-automation-audit/final-handoff/sample03-evidence/plan.json`에 있다.
 
@@ -35,7 +42,9 @@
 | RICE 데모 | `output/edits/2026-09-20/rice-core-flow/`, `output/edits/2026-09-21/rice-first-run/` |
 | RICE 첫 실행 구도 수정본 | `output/edits/2026-09-22/rice-first-run-framing-v2/` |
 | 영어 긴 내레이션 점검 (Bob 영상 말투 표본) | `output/reviews/2026-09-28/english-long-narration/` |
+| 영어 대문자 표기 점검 (README·MIGRATION.md·POM) | `output/reviews/2026-09-30/english-spelling/` |
 | 문장 안 영어 용어 121개 전환 (청취 선택 완료) | `output/reviews/2026-09-28/mixed-english-terms/` — 되돌리기는 `apply.py --revert` |
+| Bob Level 3 제출 영상 첫 판 (목소리는 자동 검사로 고름, 영어 발음 지적받음) | `output/edits/2026-09-30/bob-level3-final/` — 장면별 원본은 같은 날짜의 `bob-level3-*` |
 
 후속 편집은 최신 수정본의 PCM·타임라인·자막에서 시작한다. 원래 manifest 음성으로 돌아가면
 이미 고친 부분을 덮는다. 예: CH02 L04의 193.295–203.055초는 사용자가 고른 `앤쓰로픽` 후보다.
