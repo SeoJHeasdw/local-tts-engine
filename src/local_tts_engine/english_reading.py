@@ -31,8 +31,10 @@ from .korean_phonetics import (
 CMUDICT_PATH = Path(__file__).parent / "data/cmudict/cmudict.dict"
 # 발음이 여럿인 낱말·합성어는 이만큼의 읽기까지만 본다.
 MAX_READINGS = 8
-# 사전에 없는 낱말의 흔한 어미. 어간(또는 어간+e)의 발음에 붙인다(scoped, orchestrator).
+# 사전에 없는 낱말의 흔한 어미. 어간(또는 어간+e)의 발음에 붙인다(scoped, orchestrator,
+# retryable, serverless).
 SUFFIXES = (
+    ("able", ("AH0", "B", "AH0", "L")), ("less", ("L", "AH0", "S")),
     ("ing", ("IH0", "NG")), ("ers", ("ER0", "Z")), ("ors", ("ER0", "Z")), ("er", ("ER0",)),
     ("or", ("ER0",)), ("ed", ("D",)), ("es", ("IH0", "Z")), ("s", ("Z",)), ("ly", ("L", "IY0")),
 )
@@ -82,6 +84,16 @@ LONG_AO_SPELLING = re.compile(r"au|aw|al|ough")
 STOPS = frozenset({"P", "T", "K", "B", "D", "G"})
 # [kw]·[gw]·[hw]는 한 음절(쿼·과·화)이다. 다른 자음 뒤 w는 따로 적는다(트위스트).
 W_CLUSTER_ONSETS = frozenset({"K", "G", "HH"})
+VOWEL_LETTERS = re.compile(r"[aeiouy]+")
+
+
+def _vowel_letters(spelling: str, count: int) -> list[str] | None:
+    """The letters that spell each of ``count`` vowel sounds, or None when they do not line up."""
+    groups = VOWEL_LETTERS.findall(spelling.lower())
+    if len(groups) == count + 1 and groups[-1] == "e":
+        # 어말 묵음 e(module·archive).
+        groups.pop()
+    return groups if len(groups) == count else None
 
 
 def _glide(nucleus: str, table: dict[str, str]) -> str:
@@ -108,7 +120,10 @@ def reading_lattice(phonemes: list[str], spelling: str = "") -> list[tuple[str, 
     short = SHORT_VOWELS if LONG_AO_SPELLING.search(spelling.lower()) else SHORT_VOWELS | {"AO"}
     symbols = [re.sub(r"\d", "", phoneme) for phoneme in phonemes]
     stresses = [re.sub(r"\D", "", phoneme) for phoneme in phonemes]
-    monosyllable = sum(symbol in VOWELS for symbol in symbols) == 1
+    vowel_count = sum(symbol in VOWELS for symbol in symbols)
+    monosyllable = vowel_count == 1
+    letters = _vowel_letters(spelling, vowel_count)
+    vowel_index = 0
     segments: list[tuple[str, ...]] = []
     onset = ""
     glide: str | None = None
@@ -120,8 +135,12 @@ def reading_lattice(phonemes: list[str], spelling: str = "") -> list[tuple[str, 
         after = symbols[index + 2] if index + 2 < len(symbols) else None
         if symbol in VOWELS:
             nuclei = _vowel_alternatives(symbol, stresses[index], glide)
-            if symbol == "AA" and monosyllable:
-                # 한 음절 낱말은 미국식 ㅏ만 인정한다(Bob은 밥, 봅이 아니다).
+            written = letters[vowel_index] if letters else spelling.lower()
+            vowel_index += 1
+            # 한 음절 낱말은 미국식 ㅏ만 인정한다(Bob은 밥, 봅이 아니다). 여러 음절 낱말의 ㅗ는
+            # 철자가 o일 때의 관용 표기다. 철자 a는 ㅏ다(Jarvis는 자비스, 조비스가 아니다).
+            # [w] 뒤는 철자 a도 워로 적는다(워치·월렛).
+            if symbol == "AA" and (monosyllable or (spelling and glide != "W" and "o" not in written)):
                 nuclei = tuple(nucleus for nucleus in nuclei if not nucleus.startswith(("ㅗ", "ㅛ")))
             if symbol == "AA" and following in {"N", "M"}:
                 nuclei += ("ㅓ",)
@@ -243,6 +262,80 @@ def reading_lattices(word: str) -> tuple[list[tuple[str, ...]], ...]:
         lattices += _compounds([_piece_lattices(lowered[:cut]), _piece_lattices(lowered[cut:])])
     unique = {repr(lattice): lattice for lattice in lattices if lattice}
     return tuple(list(unique.values())[:MAX_READINGS])
+
+
+# 합성어의 두 글자 조각은 전치사만 낱말로 본다(plug·in, in·box, pop·up). re·de·co는 접두사다.
+COMPOUND_PARTICLES = frozenset({"in", "on", "up"})
+MIN_COMPOUND_LETTERS = 5
+
+
+def _bare(pronunciation: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(re.sub(r"\d", "", phoneme) for phoneme in pronunciation)
+
+
+def _keeps_its_vowel(phonemes: tuple[str, ...]) -> bool:
+    """Whether a stretch of a word has a vowel said in full, not reduced to a schwa."""
+    return any(phoneme[-1] in "12" or (phoneme[-1] == "0" and phoneme[:-1] not in REDUCED_VOWELS)
+               for phoneme in phonemes)
+
+
+def _sounds_like_two_words(whole: list[tuple[str, ...]], head: str, tail: str) -> bool:
+    """Whether a pronunciation of the word is ``head`` then ``tail``, each said as a word.
+
+    Both halves keep a full vowel (check·point, time·line). A half reduced to
+    a schwa is an ending or part of a name (Jack·son, New·ton, sup·port). A
+    particle is the exception: the dictionary reduces it (plug·in).
+    """
+    dictionary = _cmudict()
+    for pronunciation in whole:
+        for first in {_bare(value) for value in dictionary[head]}:
+            cut = len(first)
+            if not any(first + _bare(value) == _bare(pronunciation) for value in dictionary[tail]):
+                continue
+            if _keeps_its_vowel(pronunciation[:cut]) and (
+                    _keeps_its_vowel(pronunciation[cut:]) or tail in COMPOUND_PARTICLES):
+                return True
+    return False
+
+
+def compound_parts(word: str, is_word=None) -> tuple[str, str] | None:
+    """Split a compound written as one word into its two words, or None.
+
+    A word the dictionary knows is a compound when it is said as its two parts
+    one after the other (check·point, plug·in) — car·pet and tar·get are not.
+    A word the dictionary lacks (runtime, webhook) is one when both parts are
+    dictionary words that ``is_word`` also accepts. An ending is not a word
+    (test·ing, retry·able), and a word that splits two different ways
+    (han·doff, hand·off) is left alone.
+    """
+    lowered = word.lower()
+    if len(lowered) < MIN_COMPOUND_LETTERS or not lowered.isalpha() or not lowered.isascii():
+        return None
+    dictionary = _cmudict()
+    whole = _pronunciations(lowered)
+    endings = {suffix for suffix, _ in SUFFIXES}
+    cuts: list[int] = []
+    for cut in range(2, len(lowered) - 1):
+        head, tail = lowered[:cut], lowered[cut:]
+        if head not in dictionary or tail not in dictionary or tail in endings:
+            continue
+        short = [part for part in (head, tail) if len(part) < 3]
+        if any(part not in COMPOUND_PARTICLES for part in short):
+            continue
+        if whole:
+            if _sounds_like_two_words(whole, head, tail):
+                cuts.append(cut)
+        elif not short and (is_word is None or (is_word(head) and is_word(tail))):
+            cuts.append(cut)
+    # time·stamp와 times·tamp는 같은 소리다. 앞 낱말의 복수형으로 가른 쪽을 버린다.
+    cuts = [cut for cut in cuts if not (lowered[cut - 1] == "s" and cut - 1 in cuts)]
+    if len(cuts) == 1:
+        return word[:cuts[0]], word[cuts[0]:]
+    if not cuts and not whole and lowered.endswith("s"):
+        # 낱말 목록에는 복수형이 드물다(webhooks → web hooks).
+        singular = compound_parts(word[:-1], is_word)
+        return (singular[0], singular[1] + word[-1]) if singular else None
+    return None
 
 
 def _scan(lattice: list[tuple[str, ...]], text_key: str) -> tuple[float, int, list[int]]:

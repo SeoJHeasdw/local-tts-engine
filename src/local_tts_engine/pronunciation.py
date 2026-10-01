@@ -19,6 +19,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .english_reading import compound_parts
 from .korean_naturalness import (
     KOREAN_COUNTER_BOUNDARY,
     MIXED_IDENTIFIER_PATTERN,
@@ -399,6 +400,36 @@ def _restore_comparison_identifier_separators(
     return output
 
 
+CAMEL_TERM_PATTERN = re.compile(r"[A-Z][a-z]+(?:[A-Z][a-z]+)+")
+
+
+def _join_comparison_camel_terms(text: str, dictionary: list[dict[str, Any]]) -> str:
+    """Recognize an approved CamelCase term when ASR writes its words apart.
+
+    Whisper writes ``Git Hub``, ``git-hub`` or ``Git 허브`` for the approved
+    ``GitHub`` (깃 허브); left apart, the letters are compared against the
+    term's Hangul reading and a correct take fails. Only the term's own
+    capitals mark where it may be split, and a word may come back in Hangul
+    only as the reading's own word. This helper never runs on synthesis input.
+    """
+    output = text
+    for item in dictionary:
+        source = str(item["from"])
+        if not CAMEL_TERM_PATTERN.fullmatch(source):
+            continue
+        words = [re.escape(part) for part in re.findall(r"[A-Z][a-z]+", source)]
+        readings = str(item["to"]).split()
+        if len(readings) == len(words) and all(re.fullmatch(r"[가-힣]+", reading) for reading in readings):
+            words = [f"(?:{word}|{reading})" for word, reading in zip(words, readings)]
+        output = re.sub(
+            rf"(?<![A-Za-z0-9_가-힣])(?<![A-Za-z0-9_]-){'[ -]?'.join(words)}(?![A-Za-z0-9_])(-(?=[A-Za-z0-9]))?",
+            lambda match: source + (" " if match.group(1) else ""),
+            output,
+            flags=re.IGNORECASE,
+        )
+    return output
+
+
 # 대문자로만 쓴 보통 영단어는 낱말로 읽히지 않는다. 2026-09-30 어댑터 0.60·시드 3개:
 # README 0/3 → Readme 3/3, MIGRATION.md 불안정 → Migration.md 3/3. 짧은 약어는 반대로
 # 대문자가 낫다(POM 3/3, Pom 1/3). 그래서 다섯 글자 이상이면서 영어 낱말이거나 두
@@ -434,6 +465,62 @@ def speak_capitalized_words(text: str) -> str:
     )
 
 
+# 한 낱말로 붙여 쓴 합성어는 시드를 바꿔도 같은 식으로 틀린다(Runtime → 룬타임). 2026-10-01
+# 어댑터 0.60·시드 3개에서 두 낱말로 띄어 쓰니 8개가 0/24 → 18/24였고 사용자가 청취로 골랐다.
+# 근거는 output/reviews/2026-10-01/english-spelling-compounds/. 파일 이름·식별자·붙임표로
+# 이은 말은 건드리지 않는다.
+COMPOUND_WORD_PATTERN = re.compile(r"(?<![A-Za-z0-9_'’./-])[A-Za-z]{5,}(?![A-Za-z0-9_'’/-]|\.[A-Za-z0-9])")
+
+
+# 옛 사전에 있는 보통 낱말은 접두사와 뿌리로도 갈린다(for·mat, pro·file, con·tract). 그런 낱말은
+# 두 조각이 모두 이만큼 길 때만 가른다(feed·back, over·view).
+MIN_ORDINARY_COMPOUND_PART = 4
+WORD_ENDINGS = ("ing", "ed", "es", "s", "er", "ers", "ly")
+
+
+def _is_ordinary_word(word: str) -> bool:
+    """Whether the macOS word list has the word or the word it is inflected from."""
+    words = _english_words()
+    if word in words:
+        return True
+    for ending in WORD_ENDINGS:
+        stem = word[: -len(ending)]
+        if word.endswith(ending) and len(stem) >= 3 and (
+                stem in words or stem + "e" in words or (stem[-1] == stem[-2] and stem[:-1] in words)):
+            return True
+    return False
+
+
+@lru_cache(maxsize=4096)
+def _compound_spelling(word: str) -> str:
+    words = _english_words()
+    if not words:
+        return word
+    parts = compound_parts(word, lambda part: part in words)
+    if not parts or (_is_ordinary_word(word.lower())
+                     and min(len(part) for part in parts) < MIN_ORDINARY_COMPOUND_PART):
+        return word
+    return " ".join(parts)
+
+
+def speak_compound_words(text: str) -> str:
+    """Write a compound the voice misreads as one word as its two words (Runtime → Run time)."""
+    return COMPOUND_WORD_PATTERN.sub(lambda match: _compound_spelling(match.group(0)), text)
+
+
+SPLIT_COMPOUND_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_'’./-])([A-Za-z]{2,}) (?=([A-Za-z]{2,})(?![A-Za-z0-9_'’/-]|\.[A-Za-z0-9]))")
+
+
+def join_compound_words(text: str) -> str:
+    """Undo :func:`speak_compound_words`, so a check reads the compound as the one word it is."""
+    return SPLIT_COMPOUND_PATTERN.sub(
+        lambda match: match.group(1) if _compound_spelling(match.group(1) + match.group(2))
+        == f"{match.group(1)} {match.group(2)}" else match.group(0),
+        text,
+    )
+
+
 def _apply_dictionary(
     text: str,
     dictionary: list[dict[str, Any]],
@@ -454,6 +541,7 @@ def _apply_dictionary(
     output, protected = _protect_literal_spans(text, merged)
     if comparison:
         output = _restore_comparison_identifier_separators(output, merged)
+        output = _join_comparison_camel_terms(output, merged)
     for item in merged:
         if item.get("literal"):
             continue
@@ -469,7 +557,9 @@ def _apply_dictionary(
 def apply_pronunciation(text: str, dictionary: list[dict[str, Any]]) -> str:
     """Apply structural normalization and token-aware pronunciation replacements."""
     output, protected = _apply_dictionary(text, dictionary)
-    output = _restore_literal_spans(read_remaining_numbers(output), protected)
+    # 사전의 결정과 영어 문장은 보호된 채로 지나간다. 미등록 용어 목록과 받아쓰기 비교문은
+    # 원래 낱말을 보도록 목소리에 보내는 글에서만 띄어 쓴다.
+    output = _restore_literal_spans(speak_compound_words(read_remaining_numbers(output)), protected)
     return re.sub(r"[ \t]+", " ", output).strip()
 
 

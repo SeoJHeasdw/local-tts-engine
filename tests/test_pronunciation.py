@@ -543,7 +543,60 @@ def test_asr_identifier_normalization_keeps_dictionary_case_policy() -> None:
 def test_an_all_capitals_ordinary_word_is_written_so_it_reads_as_a_word() -> None:
     assert apply_pronunciation("Bob은 README와 설정 파일을 읽습니다.", []) == "Bob은 Readme와 설정 파일을 읽습니다."
     assert apply_pronunciation("변경을 MIGRATION.md로 정리합니다.", []) == "변경을 Migration.md로 정리합니다."
-    assert apply_pronunciation("CHANGELOG와 LICENSE를 봅니다.", []) == "Changelog와 License를 봅니다."
+    assert apply_pronunciation("CHANGELOG와 LICENSE를 봅니다.", []) == "Change log와 License를 봅니다."
+
+
+# 2026-10-01 어댑터 0.60·시드 3개: 3회 모두 틀리던 합성어 8개가 띄어 쓰니 0/24 → 18/24
+# (Runtime 룬타임 → Run time 3/3). 사용자가 청취로 골랐다.
+def test_a_compound_is_written_as_its_two_words() -> None:
+    assert apply_pronunciation("Runtime이 Checkpoint와 Plugin, Inbox를 봅니다.", []) == (
+        "Run time이 Check point와 Plug in, In box를 봅니다."
+    )
+    assert apply_pronunciation("webhooks와 timestamp, timeline을 씁니다.", []) == (
+        "web hooks와 time stamp, time line을 씁니다."
+    ), "복수형도 가르고, time·stamp와 times·tamp 중 앞 낱말이 단수인 쪽을 고른다"
+    assert apply_pronunciation("Feedback과 Snapshot을 봅니다.", []) == "Feed back과 Snap shot을 봅니다."
+
+
+def test_words_that_are_not_two_words_said_in_a_row_are_not_split() -> None:
+    # 옛 사전에 있는 낱말은 접두사와 뿌리로도 갈리므로 두 조각이 모두 네 글자 이상일 때만 가른다.
+    text = "format과 profile, contract, network, something, today를 봅니다."
+    assert apply_pronunciation(text, []) == text
+    # 소리가 두 낱말을 이은 것이 아니거나(car·pet), 한쪽이 약해진 이름·어미이거나(Jack·son,
+    # sup·ported, test·ing, retry·able), 두 가지로 갈리면(han·doff, hand·off) 그대로 둔다.
+    text = "carpet과 Jackson, supported, testing, retryable, serverless, handoff, debug를 봅니다."
+    assert apply_pronunciation(text, []) == text
+    text = "runtime.md와 com.polaris.runtime, src/runtime, run_time, pre-runtime은 그대로입니다."
+    assert apply_pronunciation(text, []) == text
+    # 영어 문장은 영어 목소리가 제 철자로 읽고, 사전의 결정이 먼저다.
+    assert apply_pronunciation("The runtime checks every webhook payload.", []) == (
+        "The runtime checks every webhook payload."
+    )
+    assert apply_pronunciation("Runtime 문서", [{"from": "Runtime", "to": "런타임"}]) == "런타임 문서"
+    inline = [{"from": "Runtime", "to": "Runtime", "literal": True, "inline": True, "comparisonReading": "런타임"}]
+    assert apply_pronunciation("Runtime 문서", inline) == "Runtime 문서"
+
+
+# 2026-10-01: 깃허브는 한글로 써도 ㅅ+ㅎ이 이어져 기터브로 읽혔고, 띄어 쓴 `깃 허브`가 3/3이었다.
+# 받아쓰기는 그 소리를 Git Hub·git-hub·Git 허브로 적는다.
+def test_an_approved_camel_case_term_is_recognized_when_asr_writes_its_words_apart() -> None:
+    from local_tts_engine.pronunciation import comparison_pronunciation
+
+    dictionary = [{"from": "GitHub", "to": "깃 허브", "comparisonReading": "깃 허브"}]
+    for heard in ("Git Hub 저장소", "git-hub 저장소", "Git 허브 저장소", "GitHub 저장소"):
+        assert comparison_pronunciation(heard, dictionary) == "깃 허브 저장소", heard
+    assert comparison_pronunciation("git-hub-actions 저장소", dictionary) == "깃 허브 actions 저장소"
+    # 다른 소리와 다른 낱말은 그대로 남아 관문에 걸린다.
+    assert comparison_pronunciation("Git 터브 저장소", dictionary) == "Git 터브 저장소"
+    assert comparison_pronunciation("Digit Hub 저장소", dictionary) == "Digit Hub 저장소"
+    # 목소리에 보내는 글은 원문의 띄어쓰기를 고치지 않는다.
+    assert apply_pronunciation("Git Hub 저장소", dictionary) == "Git Hub 저장소"
+
+
+def test_the_unknown_term_list_keeps_the_original_word() -> None:
+    preflight = pronunciation_preflight("Runtime이 맥락을 조립합니다.", [])
+    assert preflight["ttsText"] == "Run time이 맥락을 조립합니다."
+    assert preflight["unresolvedAscii"] == ["Runtime"]
 
 
 def test_acronyms_english_prose_and_dictionary_spellings_keep_their_capitals() -> None:

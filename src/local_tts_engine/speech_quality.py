@@ -41,7 +41,10 @@ from .korean_phonetics import (
 )
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
 from .english_reading import reading_match
-from .pronunciation import _dictionary_pattern, comparison_pronunciation, declared_readings, merge_pronunciation_dictionaries
+from .pronunciation import (
+    _dictionary_pattern, comparison_pronunciation, declared_readings, merge_pronunciation_dictionaries,
+    join_compound_words,
+)
 from .prosody import (
     BOUNDARY_WARNING, PAUSE_WARNING, boundary_pause_checks, boundary_targets,
     confirm_pause_checks, interior_silences, lead_term_readings, pause_checks,
@@ -182,6 +185,9 @@ def english_word_checks(
     """
     korean_text = (" ".join(part["text"] for part in speech_parts if part["language"] != "English")
                    if speech_parts else expected_text)
+    # 발음문이 띄어 쓴 합성어(Run time)는 한 낱말로 본다. 낱말마다 보면 체크포인트의 체크를
+    # check 혼자의 읽기(첵)로 재게 된다.
+    korean_text = join_compound_words(korean_text)
     covered: list[tuple[int, int]] = []
     for item in merge_pronunciation_dictionaries(dictionary or []):
         covered.extend(match.span() for match in _dictionary_pattern(item).finditer(korean_text))

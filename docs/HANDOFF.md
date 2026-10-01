@@ -1,6 +1,6 @@
 # 현재 상태
 
-갱신: 2026-09-30. 지금 남은 일과 결과 위치만 둔다. 지난 경위는 git 기록에 있다.
+갱신: 2026-10-01. 지금 남은 일과 결과 위치만 둔다. 지난 경위는 git 기록에 있다.
 
 ## 남은 일
 
@@ -27,6 +27,11 @@
 - **다음: 한국어 문장 속 영어 낱말 한 번 더:** 사용자가 제출 수준은 충분하지만 한글+영어 조합을 다음에 다시 보자고
   했다. 남은 약점은 받아쓰기가 영어 철자로 적으면 소리를 못 가린다는 것('봅'·'래브스'가 `Bob`·`Lab's`로 적혔다)과
   아래 발음 오차율 문제다. Bob 영상의 `javax`(제치셔틀·ZX)·`PoX`(팍스·PUCS)도 흔들렸다.
+- **합성어 띄어 쓰기 규칙 적용됨(2026-10-01):** 발음문에서 `Runtime` → `Run time`처럼 띄어 쓴다. 승인된
+  챕터의 발음문은 그대로이고 CH04의 5곳만 바뀐다(`FactSet`·`reportlab`·`Stacklist`, 사전에 넣은 `GitHub` → 깃 허브).
+  `Guard` → 가드도 사전에 넣었다. 강의 사전이 한글로 둔 합성어는 그대로 둔다. 표기로 안 바뀌는
+  `Agentic`·`Sonnet`은 사전의 한글 읽기(에이전틱·소네트)를 유지한다. `깃 허브` 청취는
+  `output/reviews/2026-10-01/english-spelling-compounds/hangul-probe2/`의 `01-GitHub--01-*`.
 - **다음: 발음 오차율도 영어 용어의 한글 읽기를 인정하게:** 받아쓰기가 영어 용어를 한글로 적으면(`Proof of
   Experience` → 프루프 오브 익스피리언스) 발음 오차율이 부풀어 멀쩡한 후보가 '받아쓰기 불일치'로 실패한다
   (Bob v5 next-steps 0.15 대 영어로 적힌 후보 0.056). 오차율 비교에도 `english_reading`의 한글 읽기를 쓴다.
@@ -51,6 +56,7 @@
 | 영어 대문자 표기 점검 (README·MIGRATION.md·POM) | `output/reviews/2026-09-30/english-spelling/` |
 | 문장 안 영어 용어 121개 전환 (청취 선택 완료) | `output/reviews/2026-09-28/mixed-english-terms/` — 되돌리기는 `apply.py --revert` |
 | 영어 낱말 한글 받아쓰기 판정 측정 (552회 표본·Bob 8장면) | `output/reviews/2026-09-30/english-hangul/` |
+| 늘 틀리는 영어 낱말의 표기 실험·합성어 규칙 회귀 측정 | `output/reviews/2026-10-01/english-spelling-compounds/` |
 | Bob Level 3 제출 영상 첫 판·v2·v3·v4·v5 (제출본 v5) | `output/edits/2026-09-30/bob-level3-final/` — 장면별 원본은 같은 날짜의 `bob-level3-*`, v3 재선택 스크립트는 `bob-level3-v3/` |
 
 후속 편집은 최신 수정본의 PCM·타임라인·자막에서 시작한다. 원래 manifest 음성으로 돌아가면

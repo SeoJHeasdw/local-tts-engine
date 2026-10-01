@@ -1456,5 +1456,14 @@
     "from": "Bob",
     "to": "밥",
     "caseSensitive": true
+  },
+  {
+    "from": "GitHub",
+    "to": "깃 허브",
+    "comparisonReading": "깃 허브"
+  },
+  {
+    "from": "Guard",
+    "to": "가드"
   }
 ]

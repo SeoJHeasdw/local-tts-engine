@@ -657,6 +657,28 @@ def test_english_the_transcript_glued_or_split_is_still_english() -> None:
     assert all(check["heard"] for check in checks), checks
 
 
+def test_a_compound_the_voice_text_split_is_judged_as_one_word() -> None:
+    from local_tts_engine.speech_quality import english_word_checks
+
+    expected = "Run time이 이번 맥락을 조립하고 Check point를 남깁니다."
+    for heard in ("runtime이 이번 맥락을 조립하고 check point를 남깁니다",
+                  "런타임이 이번 맥락을 조립하고 체크 포인트를 남깁니다"):
+        assert all(check["heard"] for check in english_word_checks(expected, heard)), heard
+    checks = english_word_checks(expected, "룬타임이 이번 맥락을 조립하고 체크포인트를 남깁니다")
+    assert [(check["word"], check["heard"]) for check in checks] == [("Runtime", False), ("Checkpoint", True)]
+
+
+def test_a_camel_case_term_read_in_hangul_passes_however_asr_spells_it() -> None:
+    dictionary = [{"from": "GitHub", "to": "깃 허브", "comparisonReading": "깃 허브"}]
+    expected = "여기서 깃 허브 부분을 먼저 살펴보겠습니다."
+    for heard in ("여기서 Git 허브 부분을 먼저 살펴보겠습니다", "여기서 Git Hub 부분을 먼저 살펴보겠습니다",
+                  "여기서 GitHub 부분을 먼저 살펴보겠습니다", "여기서 깃허브 부분을 먼저 살펴보겠습니다"):
+        assert check_pronunciation("깃 허브", expected, heard, dictionary)["status"] == "ok", heard
+    for heard in ("여기서 Git 터브 부분을 먼저 살펴보겠습니다", "여기서 기터프 부분을 먼저 살펴보겠습니다",
+                  "여기서 깃터브 부분을 먼저 살펴보겠습니다"):
+        assert check_pronunciation("깃 허브", expected, heard, dictionary)["status"] != "ok", heard
+
+
 def test_english_evidence_only_breaks_ties_the_korean_checks_leave() -> None:
     from local_tts_engine.speech_quality import choose_best_candidate
 

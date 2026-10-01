@@ -8,7 +8,9 @@ spelling of the right sound" and "a different sound".
 import pytest
 
 from local_tts_engine import english_reading
-from local_tts_engine.english_reading import hangul_reading, reading_lattice, reading_match, compose
+from local_tts_engine.english_reading import (
+    compose, compound_parts, hangul_reading, reading_lattice, reading_match,
+)
 
 
 def exact(word: str, heard: str) -> bool:
@@ -45,6 +47,10 @@ def test_a_different_sound_is_not_another_spelling() -> None:
     assert not exact("Bob", "법은"), "AA의 ㅓ는 비음 앞(컨텍스트)에서만"
     assert not exact("Bob", "봅은") and not exact("Bob", "붑은"), "한 음절 낱말의 AA는 미국식 ㅏ만"
     assert exact("policy", "폴리시"), "여러 음절 낱말은 철자 o의 ㅗ도 쓴다"
+    assert exact("Jarvis", "자비스") and not exact("Jarvis", "조비스"), "철자 a의 AA는 ㅏ만"
+    assert exact("Java", "자바") and not exact("Java", "조바")
+    assert exact("Docker", "도커") and exact("college", "콜리지"), "묵음 e가 있어도 철자 o를 찾는다"
+    assert exact("Watson", "왓슨") and exact("wallet", "월렛"), "[w] 뒤는 철자 a도 워로 적는다"
 
 
 def test_a_final_stop_after_a_short_vowel_is_a_final_consonant() -> None:
@@ -63,6 +69,17 @@ def test_words_the_dictionary_lacks_are_read_from_words_it_has() -> None:
 
 def test_every_reading_found_is_counted_once() -> None:
     assert reading_match("Bob", "밥은 README를 읽고 밥을 먹습니다") == (0.0, 2)
+
+
+def test_a_compound_is_two_words_said_one_after_the_other() -> None:
+    assert compound_parts("Checkpoint") == ("Check", "point") and compound_parts("Plugin") == ("Plug", "in")
+    assert compound_parts("timeline") == ("time", "line"), "사전이 강세를 안 적어도 모음이 온전하면 낱말이다"
+    assert compound_parts("runtime") == ("run", "time") and compound_parts("webhooks") == ("web", "hooks")
+    assert compound_parts("timestamp") == ("time", "stamp"), "times·tamp는 같은 소리의 복수형 가르기다"
+    for word in ("carpet", "target", "Jackson", "support", "testing", "retryable", "handoff", "today"):
+        assert compound_parts(word) is None, word
+    assert compound_parts("worktree", lambda part: part in {"work", "tree"}) == ("work", "tree")
+    assert compound_parts("worktree", lambda part: False) is None, "사전에 없는 낱말은 조각이 낱말이어야 한다"
 
 
 @pytest.fixture
