@@ -139,7 +139,7 @@ test('Chatterbox 부속 토크나이저는 오프라인 snapshot_download가 읽
   assert.equal((await inspectCachedModel(repo, options)).state, 'ready');
 });
 
-test('음성 생성 자식 프로세스만 Hugging Face 캐시를 오프라인으로 사용한다', async () => {
+test('음성 생성과 학습 자식 프로세스는 Hugging Face 캐시를 오프라인으로 사용한다', async () => {
   const original = { HF_HUB_OFFLINE: '0', ALL_PROXY: 'socks5://example.invalid:1080' };
   const scoped = localVoiceEnvironment(original);
   assert.equal(scoped.HF_HUB_OFFLINE, '1');
@@ -152,7 +152,7 @@ test('음성 생성 자식 프로세스만 Hugging Face 캐시를 오프라인�
   const voice = JSON.parse(await runtime.runProcess('voice', process.execPath, ['-e', childCode], { capture: true }));
   assert.deepEqual(voice, { offline: '1', proxy: false });
   const training = JSON.parse(await runtime.runProcess('training', process.execPath, ['-e', childCode], { capture: true }));
-  assert.equal(training.offline, process.env.HF_HUB_OFFLINE || '', '학습 등 별도 작업에는 오프라인 설정을 강제로 넣지 않는다');
+  assert.deepEqual(training, { offline: '1', proxy: false }, '새 목소리 학습도 다운로드 없이 같은 로컬 모델로 실행한다');
 });
 
 test('앱 생성 시작 검사는 모델 준비 실패를 Python 실행 전에 돌려준다', async t => {
@@ -174,4 +174,26 @@ test('앱 생성 시작 검사는 모델 준비 실패를 Python 실행 전에 �
     { referenceAudioPath: audio, referenceTextPath: transcript }, { course: false, ffprobe: false }),
   /선택 모델 파일 없음/);
   assert.equal(checked, true);
+});
+
+test('가중치가 있어도 선택 목소리의 프로필 오류를 준비 완료로 표시하지 않는다', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'voice-profile-readiness-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const audio = path.join(root, 'reference.wav'), transcript = path.join(root, 'reference.txt');
+  await put(audio);
+  await put(transcript, '참조 전사');
+  const adapterPath = path.join(root, 'adapters');
+  await put(path.join(adapterPath, 'adapters.safetensors'));
+  await put(path.join(adapterPath, 'adapter_config.json'), '{}');
+  const settings = { modelId: 'qwen3-tts', adapterId: 'speaker', adapters: [{ id: 'speaker', path: adapterPath,
+    profileError: '목소리 프로필이 없습니다. 참조 음성·전사를 연결해 주세요.' }] };
+  const studio = { referenceAudioPath: audio, referenceTextPath: transcript };
+  const dependencies = { root, env: { HF_HUB_CACHE: path.join(root, 'hub') }, home: root };
+  const readiness = await inspectVoiceReadiness(settings, studio, dependencies);
+  assert.equal(readiness.referenceAudio.state, 'ready');
+  assert.equal(readiness.adapter.state, 'incomplete');
+  assert.match(readiness.adapter.detail, /목소리 프로필이 없습니다/);
+  await assert.rejects(assertVoiceAssetsReady(settings, studio, { quality: false }, dependencies), /목소리 프로필이 없습니다/);
+  const missing = await inspectVoiceReadiness({ ...settings, adapters: [] }, studio, dependencies);
+  assert.equal(missing.adapter.state, 'missing');
 });

@@ -15,7 +15,13 @@
 | `electron-app/main/record-monitor.mjs` | 녹화할 화면 표시: 세기·가장자리 테두리 창, 녹화 중 미리보기 |
 | `electron-app/main/capture/` | 화면 촬영: 규격·인코딩·프레임 전송·사이트 서버, 디스플레이 목록·녹화, 앱 조작 |
 | `electron-app/main/workers/` | 별도 프로세스로 도는 입력 고정·자막·촬영·녹화·앱 데모 진입점 |
-| `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보와 학습 작업 |
+| `electron-app/main/voices.mjs` | 텍스트·페이지 음성 후보 |
+| `electron-app/main/training.mjs` | 사람별 데이터 목록·전사 준비·청취 검수 반영·학습·시험 음성, 기본값 유지 |
+| `electron-app/main/voice-profile.mjs` | 목소리 프로필의 검증·읽기·쓰기와 참조 연결 |
+| `electron-app/main/training-import.mjs` | 선택한 녹음의 불변 원본 기록·복사본 변환·클립 분할 |
+| `electron-app/main/voice-preview.mjs` | 선택한 목소리·강도의 시험 음성 생성과 샘플 기록 |
+| `config/voice-training.json` | 앱·터미널 학습의 공통 모델·학습값·비교값·시험 대본 |
+| `config/legacy-voice.json` | 프로필 도입 전 승인된 본인 목소리의 호환 정보 |
 | `electron-app/main/voice-readiness.mjs` | 설치된 모델·참조·어댑터 파일의 읽기 전용 점검과 제작 시작 전 확인 |
 | `electron-app/main/editing/` | 합치기·페이지 교체·구간 편집·미리듣기 |
 | `electron-app/main/`의 나머지 서비스 | 경로·설정·목록·파일·미디어·결과·IPC·창 관리 |
@@ -29,6 +35,10 @@
 | `src/local_tts_engine/realign_course.py` | 완성 제작본의 음성 보존 재정렬·전후 비교, 읽기 전용 정렬 검사 |
 | `src/local_tts_engine/text_candidate.py` | 자유 텍스트·앱 데모의 청크 합성·후보 검수·최종 WAV 기록 |
 | `src/local_tts_engine/course_catalog.py` | 생성 모델을 로드하지 않는 목록 CLI |
+| `src/local_tts_engine/finetune_analysis.py` | 선택한 데이터의 전사·녹음·화자 일관성 분석 |
+| `src/local_tts_engine/finetune_comparison.py` | 검수한 데이터의 학습 계획 고정·후보 학습·기본 복제와 비교 |
+| `src/local_tts_engine/finetune_adapter.py` | 저장된 어댑터의 rank·alpha·대상 모듈을 합성에 적용 |
+| `src/local_tts_engine/finetune_config.py` | 공통 설정 읽기·모델 로컬 경로 확인·오프라인 실행 |
 | `src/local_tts_engine/`의 나머지 모듈 | 발음·독립 검수·텍스트 후보·내보내기·학습 |
 | `scripts/`, `tests/` | 수동 운영 도구와 회귀 검사 |
 
@@ -39,10 +49,55 @@
   `shared`에서 상위 계층을 참조하지 않는다.
 - renderer의 의존성 전체에는 Node·Electron이 없어야 한다. Node용 공유 모음은
   `shared/index.mjs`, 브라우저는 필요한 개별 모듈을 사용한다.
+
 - Python `course/`는 `course_pilot` 조립 모듈을 역참조하지 않는다. 기존 CLI·helper
   import와 저장된 검수 명령의 `scripts/` 경로는 호환 계약이다.
 - `npm run check:architecture`가 경로 단절·계층 역참조·순환·브라우저 의존성을 검사한다.
   동작 검사는 실제 서비스·컨트롤러를 import하며 소스 조각 평가로 구현을 복제하지 않는다.
+
+## 목소리 프로필과 학습
+
+설정의 `adapterId`는 기존 계약을 유지한다. 어댑터 실행 폴더의 `voice-profile.json`
+(schemaVersion 1)은 표시 이름·참조 WAV·참조 전사 경로·학습 JSONL·청취 상태를 묶는다.
+새 프로필의 참조와 학습 JSONL은 실행 폴더에 복사하고 상대 경로·해시로 고정한다. 같은
+데이터로 다시 학습해도 이전 프로필의 입력이 바뀌지 않는다. 프로필을 전환하거나 복원하면
+어댑터·참조·전사가 함께 바뀐다. 사라진 어댑터, 누락·오류 프로필은 생성 시작을 막는다.
+프로필 도입 전 본인 목소리만 `config/legacy-voice.json`의 정확한 실행 ID로 호환 처리한다.
+표시 이름이 같아도 다른 실행에 승인 상태를 물려주지 않는다.
+
+학습 데이터는 `artifacts/finetune-datasets/<사람별 ID>/`에서 읽는다. `manifest.json`과
+`metadata.jsonl`이 있는 데이터는 표시 이름 또는 데이터 ID로 목록에 표시한다. 분할 CLI의
+`--display-name`으로 이름을 등록할 수 있으며 사람별 소스 코드를 추가하지 않는다. 전사·품질 분석은
+녹음 측정 → 기존 `finetune_dataset transcribe`(Qwen3-ASR) → `finetune_review`(Whisper) 순으로
+실행하고 `training-prepared`로 검수 화면에 돌아온다. `quality-review.json`은 클립 WAV 해시와
+초벌 전사 해시로 묶는다. 바뀐 음성의 측정이나 바뀐 전사의 일치도를 재사용하지 않는다.
+두 받아쓰기의 비교는 정답 대본이나 화자 유사도 측정이 아니며, 추천도 청취 승인이 아니다.
+사용자가 수정한 글·확인 체크·참조 클립 선택을 `app-review.json`에 기록한 뒤 기존
+apply-decisions → validate → export 계약으로 승인된 클립만 학습한다. 기존 본인 데이터는
+호환 정보에 연결된 공식 학습 JSONL과 참조를 사용한다. 현재 선택된 제작 목소리는 학습 입력에
+관여하지 않는다. 같은 이름의 학습 실행은 덮어쓰지 않는다.
+
+앱과 터미널은 `config/voice-training.json`을 읽고 기존 학습·비교 기본값을 유지한다.
+합성의 LoRA 구조는 `adapter_config.json`의 저장 설정을 읽으며 rank 16으로 고정하지 않는다.
+사람별 입력 경로·표시 이름·평가 대본·출력 위치는 데이터 또는 명령 인자로 받는다.
+`finetune_comparison prepare`는 승인 클립과 참조를 골라 `training-plan.json`을 만들고
+분할·메타데이터·참조의 해시를 묶는다. `compare`는 그 계획을 검증한 뒤 동일 모델·참조·새 대본으로
+기본 복제와 후보 어댑터를 비교하고, 학습에 사용하지 않은 원본으로 화자 코사인을 측정한다.
+참조와 같은 음성은 보류 평가에서 제외한다. 기존 번호 기반 계획과 결과 파일 계약도 읽는다.
+
+학습과 음성 생성은 로컬 캐시만 사용하며 자동 다운로드하지 않는다. 학습 완료는
+`training-complete`이고 설정을 자동 적용하지 않는다. 새 프로필의 `listeningStatus`는
+`pending`으로 남으며, 0.60 시험 음성(`preview.wav`·`preview.json`)은 사용자 청취용이다.
+시험 음성의 자동 내용 검사는 하지 않았고, 파일·학습 완료와 사람의 청취 승인은 별개다.
+
+설정에서 녹음을 불러오면 원본 경로·해시를 `manifest.originalSources`에 기록하고 새 데이터
+폴더의 `source/`에만 48kHz·모노·PCM24 파생본을 만든다. 실패·취소 시 이번 폴더만 정리한다.
+등록된 샘플은 목소리 선택에서 재생한다. 다른 강도의 시험 음성은 새 출력 폴더에 보존하고
+`voice-profile.json.preview`에 경로·해시·강도·어댑터 해시를 기록한다. 청취 확인과 적용은
+명시적 체크·적용 요청으로만 저장하며, `listeningApprovals`는 이미 확인한 강도를 보존한다.
+일반 설정 저장은 직렬화하고 아직 적용하지 않은 목소리·대표 녹음·청취 체크를 보존한다.
+녹음 목록의 실패는 일반·목소리 설정을 막지 않는다. 학습 데이터 전환 중 이전 자료로 시작하지
+않으며, 검수 임시 편집은 같은 음성 해시에만 복원한다.
 
 ## 제작 흐름과 복구
 

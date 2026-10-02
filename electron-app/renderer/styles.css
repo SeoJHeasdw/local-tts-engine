@@ -1159,7 +1159,7 @@ button:disabled { cursor: not-allowed; }
    설정
    ========================================================================== */
 /* 제목 한 줄이면 된다. 무엇을 여는지는 누르기 전에 이미 알고 열었다. */
-.settings-modal { width: min(880px, calc(100vw - 48px)); height: min(680px, calc(100dvh - 48px)); overflow: hidden; border-radius: var(--r-xl); }
+.settings-modal { width: min(920px, calc(100vw - 48px)); height: min(760px, calc(100dvh - 48px)); overflow: hidden; border-radius: var(--r-xl); }
 .settings-modal[open] { display: flex; flex-direction: column; }
 .settings-modal .modal-head { flex-shrink: 0; align-items: center; padding: var(--s4) var(--s5); }
 .settings-modal .modal-head h2 { font-size: var(--fs-lg); letter-spacing: -.02em; }
@@ -1193,6 +1193,34 @@ button:disabled { cursor: not-allowed; }
 .settings-pane { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--s5); }
 .settings-panel { display: grid; gap: var(--s4); align-content: start; }
 .settings-panel h3 { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-semi); letter-spacing: -.02em; }
+.settings-section-head { display: grid; gap: var(--s2); }
+.settings-section-head > p { margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-body); }
+.settings-help { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-body); overflow-wrap: anywhere; }
+.settings-details { min-width: 0; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well); }
+.settings-details > summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: var(--s3);
+  color: var(--text-2); cursor: pointer; font-size: var(--fs-sm); font-weight: var(--fw-semi); list-style: none;
+}
+.settings-details > summary::-webkit-details-marker { display: none; }
+.settings-details > summary::before { content: "›"; color: var(--text-3); font-size: var(--fs-lg); line-height: 1; transition: transform var(--motion-fast); }
+.settings-details[open] > summary::before { transform: rotate(90deg); }
+.settings-details > summary:hover { color: var(--text); }
+.settings-details > summary > small { margin-left: auto; color: var(--text-3); font-size: var(--fs-xs); font-weight: var(--fw-normal); }
+.settings-details[open] > summary { border-bottom: 1px solid var(--line); }
+.settings-details-body { display: grid; min-width: 0; gap: var(--s3); padding: var(--s3); }
+.settings-details .setting-row { grid-template-columns: minmax(0, 1fr) minmax(0, 280px); }
+.voice-profile-sample { display: grid; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well); }
+.settings-sample-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2); flex-wrap: wrap; }
+.settings-sample-head h4 { margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.settings-sample-head > span { color: var(--text-3); font-size: var(--fs-xs); }
+#voice-profile-summary { margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-body); overflow-wrap: anywhere; }
+.voice-profile-sample audio { width: 100%; height: 38px; }
+.settings-sample-action { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+.voice-listening-review { padding-top: var(--s2); border-top: 1px solid var(--line); }
+.voice-listening-review label { display: flex; align-items: start; gap: var(--s2); color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-body); cursor: pointer; }
+.voice-listening-review input { flex-shrink: 0; margin-top: 4px; accent-color: var(--lime); }
+.settings-modal input:disabled, .settings-modal select:disabled { opacity: .55; }
+.settings-modal button:disabled { opacity: .45; }
 .voice-readiness { padding: var(--s3) var(--s4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well); }
 .voice-readiness h4 { margin: 0 0 var(--s1); font-size: var(--fs-sm); }
 .voice-readiness > p { margin: 0 0 var(--s3); color: var(--text-4); font-size: var(--fs-xs); }
@@ -1261,7 +1289,7 @@ button:disabled { cursor: not-allowed; }
   background: var(--warn-wash);
 }
 .voice-commit strong { display: block; font-size: var(--fs-sm); font-weight: var(--fw-semi); }
-.voice-commit small { display: block; margin-top: var(--s1); color: var(--text-3); font: var(--fs-xs) var(--mono); }
+.voice-commit small { display: block; margin-top: var(--s1); color: var(--text-2); font-size: var(--fs-xs); line-height: var(--lh-body); overflow-wrap: anywhere; }
 .voice-commit-actions { display: flex; gap: var(--s2); }
 
 /* 켜고 끄는 설정은 고를 값이 둘뿐이다. 목록으로 만들면 한 번 더 열어야 한다. */
@@ -1281,7 +1309,34 @@ button:disabled { cursor: not-allowed; }
 .switch:disabled { opacity: .45; cursor: default; }
 .theme-choice { grid-template-columns: repeat(3, 1fr); }
 
-.finetune-panel { padding: 0; gap: var(--s3); }
+.finetune-panel { display: grid; min-width: 0; padding: 0; gap: var(--s5); }
+.training-flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); margin: 0; padding: 0; list-style: none; }
+.training-flow > li { display: flex; gap: var(--s2); align-items: start; min-width: 0; }
+.training-flow > li > span, .training-step-head > span {
+  display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 26px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-full); color: var(--text-2); font-size: var(--fs-xs); font-weight: var(--fw-semi);
+}
+.training-flow strong { display: block; font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.training-flow small { display: block; margin-top: var(--s1); color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-snug); }
+.training-intro-action { display: grid; gap: var(--s3); }
+.training-intro-action > p { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-body); }
+.training-intro-action > button { justify-self: start; }
+.training-workflow-status { margin: 0; padding: var(--s3); border-radius: var(--r-sm); color: var(--text-2); background: var(--lime-wash); font-size: var(--fs-sm); line-height: var(--lh-body); }
+.training-step { display: grid; min-width: 0; gap: var(--s3); scroll-margin-top: var(--s4); }
+.training-step + .training-step { border-top: 1px solid var(--line); padding-top: var(--s5); }
+.training-step-head { display: flex; gap: var(--s3); align-items: start; }
+.training-step-head > div { min-width: 0; }
+.training-step-head h4 { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.training-step-head p { margin: var(--s1) 0 0; color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-body); }
+.training-step[data-state="current"] .training-step-head > span, .training-step[data-state="complete"] .training-step-head > span, .training-step[data-state="ready"] .training-step-head > span { background: var(--lime-soft); border-color: var(--lime-edge); color: var(--lime); }
+.training-import { display: grid; gap: var(--s3); padding: var(--s3); border-radius: var(--r-md); background: var(--well); }
+.training-import-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center; }
+.training-import-controls input { width: 100%; min-width: 0; height: var(--h-sm); font-size: var(--fs-sm); }
+.training-action-row { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+.training-action-row .quiet-button { min-height: var(--h-sm); padding: var(--s1) var(--s2); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-3); font-size: var(--fs-xs); cursor: pointer; }
+.training-action-row .quiet-button:hover:not(:disabled) { color: var(--text); background: var(--raised); }
+.training-empty { margin: 0; padding: var(--s4); border: 1px dashed var(--line-3); border-radius: var(--r-md); color: var(--text-3); font-size: var(--fs-sm); line-height: var(--lh-body); text-align: center; }
+#training-review-empty:empty { display: none; }
 .finetune-error { margin: 0; color: var(--danger); font-size: var(--fs-xs); line-height: var(--lh-body); }
 
 .profile-guard {
@@ -1430,7 +1485,12 @@ button:disabled { cursor: not-allowed; }
   .settings-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .settings-rail { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
   .settings-rail button { white-space: nowrap; }
-  .setting-row { grid-template-columns: minmax(0, 1fr); gap: var(--s2); }
+  .setting-row, .settings-details .setting-row { grid-template-columns: minmax(0, 1fr); gap: var(--s2); }
+  .profile-guard { grid-template-columns: 30px minmax(0, 1fr); }
+  .profile-guard > button { grid-column: 2; justify-self: start; }
+  .settings-details > summary > small { flex-basis: 100%; margin-left: var(--s4); }
+  .voice-commit-actions { width: 100%; flex-wrap: wrap; }
+  .voice-commit-actions > button { flex: 1; }
   .settings-modal .modal-head, .settings-pane, .settings-modal .settings-footer {
     padding-left: var(--s4); padding-right: var(--s4);
   }
@@ -2003,6 +2063,42 @@ button:disabled { cursor: not-allowed; }
 }
 
 
+
+.training-clips { display: grid; min-width: 0; gap: var(--s3); margin: 0; }
+.training-clips:empty { display: none; }
+.training-role-guide { display: grid; gap: var(--s3); padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--well); }
+.training-role-guide p, .training-recommendation p, .training-selection p { color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-body); margin: var(--s1) 0 0; }
+.training-recommendation { display: grid; gap: var(--s2); padding: var(--s3); border: 1px solid var(--lime-edge); border-radius: var(--r-md); }
+.training-selection { position: sticky; top: 0; z-index: 2; padding: var(--s3); margin: 0; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md); }
+.training-clip { display: grid; min-width: 0; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-md); scroll-margin-top: 88px; }
+.training-clip.is-training { background: var(--lime-wash); }
+.training-clip.is-reference { border-color: var(--lime); }
+.training-clip audio, .training-clip textarea { width: 100%; min-width: 0; }
+.training-clip audio { height: 38px; }
+.training-clip textarea { min-height: 80px; padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--well); color: var(--text); resize: vertical; font-family: inherit; font-size: var(--fs-sm); line-height: var(--lh-body); }
+.training-clip label { display: flex; align-items: start; gap: var(--s2); font-size: var(--fs-sm); line-height: var(--lh-body); cursor: pointer; }
+.training-clip label input { flex-shrink: 0; margin-top: 4px; accent-color: var(--lime); }
+.training-clip > small { color: var(--text-3); font-size: var(--fs-xs); }
+.training-assessments { display: flex; gap: var(--s1); flex-wrap: wrap; }
+.training-badge { padding: 3px 7px; border: 1px solid var(--line); border-radius: var(--r-full); font-size: var(--fs-xs); color: var(--text-2); }
+.training-badge.recommended { border-color: var(--lime-edge); color: var(--lime); }
+.training-agreement { margin: 0; font-size: var(--fs-sm); }
+.training-agreement.warning, .training-warnings { color: var(--warn); }
+.training-warnings { margin: 0; padding-left: 18px; font-size: var(--fs-sm); line-height: var(--lh-body); }
+.training-warnings .no-warning { color: var(--text-3); }
+.training-role-controls { display: grid; gap: var(--s2); padding-top: var(--s2); border-top: 1px solid var(--line); }
+.training-review-note { display: block; margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-body); overflow-wrap: anywhere; }
+.training-comparison { font-size: var(--fs-xs); color: var(--text-3); line-height: var(--lh-body); }
+.training-comparison p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.training-comparison > summary { min-height: var(--h-sm); cursor: pointer; padding: var(--s1) 0; color: var(--text-2); }
+@media (max-width: 540px) {
+  .training-flow { grid-template-columns: 1fr; gap: var(--s3); }
+  .training-import-controls { grid-template-columns: 1fr; }
+  .training-import-controls > button { justify-self: start; }
+  .training-selection { position: static; }
+  .training-action-row { align-items: stretch; flex-direction: column; }
+  .training-action-row > button { width: 100%; }
+}
 
 /* 앱 데모 화면. 뼈대는 화면 녹화·목소리 만들기와 같고, 장면 카드만 여기서 더한다. */
 .demo-chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }

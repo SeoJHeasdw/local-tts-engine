@@ -154,7 +154,9 @@ export async function inspectVoiceReadiness(settings, studio, { fs = nativeFs, e
     },
     referenceAudio,
     referenceText,
-    adapter: settings.adapterId === "none" ? { state: "unused" } : combined(adapterWeights, adapterConfig),
+    adapter: settings.adapterId === "none" ? { state: "unused" }
+      : selectedAdapter?.profileError ? { state: "incomplete", detail: selectedAdapter.profileError }
+      : combined(adapterWeights, adapterConfig),
     quality,
     aligner,
   };
@@ -194,7 +196,8 @@ export async function assertVoiceAssetsReady(settings, studio, requirements = {}
   if (requirements.aligner) checks.push(["단어 시각 정렬 모델", readiness.aligner, DOWNLOAD_ESTIMATE.aligner]);
   for (const [label, result, estimate] of checks) {
     if (result?.state === "ready") continue;
-    const detail = result?.state === "unknown" ? "상태를 읽을 수 없습니다" : result?.state === "incomplete" ? "파일이 불완전합니다" : "로컬 파일이 없습니다";
+    const detail = result?.detail || (result?.state === "unknown" ? "상태를 읽을 수 없습니다"
+      : result?.state === "incomplete" ? "파일이 불완전합니다" : "로컬 파일이 없습니다");
     const installation = estimate
       ? ` ${label}은(는) 목소리 제작에 필요하고 설치 예상 용량은 ${estimate}입니다. 자동 다운로드를 피하려고 시작을 중단했습니다.`
       : " 설정에서 경로와 파일을 확인해 주세요.";

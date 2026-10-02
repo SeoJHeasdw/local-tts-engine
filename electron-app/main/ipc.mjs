@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
-import { FINETUNE_TRAIN_JSONL, RENDERER_DIR, runtimePaths } from "./paths.mjs";
+import { RENDERER_DIR, runtimePaths } from "./paths.mjs";
 import { audioEnvelope, makeRegionPreview, newPreviewDirectory } from "./editing/review-media.mjs";
 import { cancelJobProcesses, pauseJobProcesses, resumeJobProcesses } from "./job-process.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,6 +10,7 @@ import { renameMediaFile, repointReportFile, safeStat } from "./files.mjs";
 import { inspectVoiceReadiness } from "./voice-readiness.mjs";
 import { videoQuality } from '../shared/video-quality.mjs';
 import { readRecaptureTimelineSelection } from './editing/recapture.mjs';
+import { TRAINING_IMPORT_EXTENSIONS } from './training-import.mjs';
 
 // ffmpeg 가 읽는 흔한 컨테이너는 모두 받는다. 코덱·색 형식이 편집에 맞지 않으면
 // 렌더 직전의 검사가 그 이유를 따로 말해 주므로, 담는 문턱에서 미리 막지 않는다.
@@ -57,6 +58,10 @@ export function createIpcService({
   requireRuntimeTool,
   resolveOutputFile,
   runFineTune,
+  listTrainingDatasets,
+  readTrainingDataset,
+  importTrainingDataset,
+  runVoicePreview,
   runTextVoiceCandidates,
   runVideoEdit,
   saveAppSettings,
@@ -92,6 +97,21 @@ export function createIpcService({
 
   function guard(event) {
     if (!senderIsLocal(event)) throw new Error("허용되지 않은 화면 요청입니다.");
+  }
+
+  function launchSettingsJob(options, run) {
+    if (state.activeJob && ['running', 'cancelling'].includes(state.activeJob.state)) {
+      throw new Error('다른 작업이 진행 중입니다. 끝난 뒤 다시 시도해 주세요.');
+    }
+    state.activeJob = { id: crypto.randomUUID(), kind: 'training', options, state: 'running',
+      stage: 'training', child: null, children: new Set(), cancelled: false, startedAt: new Date().toISOString() };
+    emit({ type: 'training-started', options });
+    run().catch(error => {
+      if (!state.activeJob) return;
+      state.activeJob.state = state.activeJob.cancelled ? 'cancelled' : 'failed';
+      emit({ type: 'training-failed', mode: options.mode, cancelled: state.activeJob.cancelled, message: error.message });
+    });
+    return jobSnapshot();
   }
 
   function registerIpc() {
@@ -470,16 +490,60 @@ export function createIpcService({
       return selectTextVoiceFromHistory(target, candidateIndex);
     });
 
+    ipcMain.handle("studio:list-training-datasets", async (event) => {
+      guard(event);
+      return listTrainingDatasets();
+    });
+    ipcMain.handle('studio:import-training-dataset', async (event, raw = {}) => {
+      guard(event);
+      const displayName = String(raw.displayName || '').trim();
+      if (!displayName || displayName.length > 80) throw new Error('먼저 새 목소리 이름을 1~80자로 입력해 주세요.');
+      if (state.activeJob && ['running', 'cancelling'].includes(state.activeJob.state)) {
+        throw new Error('다른 작업이 진행 중입니다. 끝난 뒤 녹음을 불러와 주세요.');
+      }
+      const result = await dialog.showOpenDialog({ title: '같은 사람의 녹음 불러오기',
+        properties: ['openFile', 'multiSelections'], filters: [{ name: '녹음 파일', extensions: [...TRAINING_IMPORT_EXTENSIONS] }] });
+      if (result.canceled || !result.filePaths.length) return null;
+      return launchSettingsJob({ name: displayName, displayName, mode: 'import' }, async () => {
+        const imported = await importTrainingDataset({ displayName, files: result.filePaths });
+        const dataset = await readTrainingDataset(imported.id);
+        state.activeJob.state = 'done';
+        state.activeJob.stage = 'done';
+        emit({ type: 'training-prepared', mode: 'import', dataset });
+      });
+    });
+    ipcMain.handle('studio:start-voice-preview', async (event, raw = {}) => {
+      guard(event);
+      const settings = await readAppSettings();
+      const adapter = settings.adapters.find(item => item.id === raw.adapterId);
+      const scale = Number(raw.adapterScale);
+      if (!adapter || adapter.profileError || !Number.isFinite(scale) || scale < 0.1 || scale > 1) {
+        throw new Error('시험 음성을 만들 목소리와 반영 강도를 확인해 주세요.');
+      }
+      return launchSettingsJob({ name: adapter.displayName, mode: 'preview', adapterId: adapter.id, adapterScale: scale },
+        () => runVoicePreview({ adapterId: adapter.id, adapterScale: scale }));
+    });
+    ipcMain.handle("studio:read-training-dataset", async (event, id) => {
+      guard(event);
+      return readTrainingDataset(id);
+    });
     ipcMain.handle("studio:start-finetune", async (event, rawOptions = {}) => {
       guard(event);
       if (state.activeJob && ["running", "cancelling"].includes(state.activeJob.state)) {
         throw new Error("이미 실행 중인 작업이 있습니다.");
       }
-      await fs.access(FINETUNE_TRAIN_JSONL);
+      const dataset = await readTrainingDataset(rawOptions.datasetId);
       const settings = await readAppSettings();
+      const maxSteps = Math.round(Number(rawOptions.maxSteps ?? 60));
+      if (!Number.isFinite(maxSteps) || maxSteps < 10 || maxSteps > 500) throw new Error("학습 스텝은 10~500 사이여야 합니다.");
       const options = {
         name: normalizeEditName(rawOptions.name),
-        maxSteps: Math.min(500, Math.max(10, Math.round(Number(rawOptions.maxSteps ?? 60)))),
+        mode: rawOptions.mode === "prepare" ? "prepare" : "train",
+        datasetId: dataset.id,
+        displayName: String(rawOptions.displayName || dataset.displayName).trim().slice(0, 80),
+        referenceId: rawOptions.referenceId,
+        reviews: rawOptions.reviews,
+        maxSteps,
         paths: settings.paths,
       };
       state.activeJob = {

@@ -5,18 +5,32 @@ export function installRendererGlobals(t, { api, navViews = ['new', 'review'] })
   const elements = new Map();
   const listeners = new Map();
   const timers = [];
+  const timeoutIds = [];
+  const nativeSetTimeout = globalThis.setTimeout;
+  const nativeClearTimeout = globalThis.clearTimeout;
+  const queryLists = new Map();
   const element = () => {
     const classes = new Set();
+    const handlers = new Map();
     return {
       value: '', textContent: '', innerHTML: '', dataset: {}, style: { setProperty() {} },
       disabled: false, inert: false, children: [], currentTime: 0, duration: 0, scrollTop: 0,
+      checked: false, open: false, paused: true,
       classList: {
         add: (...names) => names.forEach(name => classes.add(name)),
         remove: (...names) => names.forEach(name => classes.delete(name)),
         contains: name => classes.has(name),
         toggle(name, force = !classes.has(name)) { force ? classes.add(name) : classes.delete(name); },
       },
-      addEventListener() {},
+      addEventListener(name, callback, options = {}) {
+        const list = handlers.get(name) || [];
+        list.push({ callback, once: options.once }); handlers.set(name, list);
+      },
+      async fire(name, event = {}) {
+        const list = [...(handlers.get(name) || [])];
+        handlers.set(name, list.filter(item => !item.once));
+        for (const { callback } of list) await callback({ target: this, currentTarget: this, preventDefault() {}, ...event });
+      },
       attributes: {},
       setAttribute(key, value) { this.attributes[key] = value; },
       getAttribute(key) { return this.attributes[key] ?? null; },
@@ -24,7 +38,11 @@ export function installRendererGlobals(t, { api, navViews = ['new', 'review'] })
       append(...items) { this.children.push(...items); },
       replaceChildren(...items) { this.children = items; },
       querySelector: () => element(), querySelectorAll: () => [], closest() { return this; },
-      getBoundingClientRect: () => ({ height: 0, width: 0 }), pause() {}, click() {}, remove() {},
+      getBoundingClientRect: () => ({ height: 0, width: 0 }),
+      pause() { this.paused = true; }, play() { this.paused = false; return Promise.resolve(); },
+      click() { if (!this.disabled && !this.inert) return this.fire('click'); },
+      showModal() { this.open = true; }, close() { this.open = false; return this.fire('close'); },
+      focus() {}, remove() {},
     };
   };
   const query = selector => {
@@ -39,21 +57,25 @@ export function installRendererGlobals(t, { api, navViews = ['new', 'review'] })
   const globals = {
     window: { ttsStudio: api, scrollTo() {}, location: { search: '' } },
     document: {
-      querySelector: query, querySelectorAll: selector => (selector === '.nav-item' ? navItems : []), createElement: element,
+      querySelector: query, querySelectorAll: selector => queryLists.get(selector) || (selector === '.nav-item' ? navItems : []), createElement: element,
       documentElement: element(), body: element(),
       addEventListener: (name, callback) => listeners.set(name, callback),
     },
     matchMedia: () => ({ matches: true, addEventListener() {} }),
     localStorage: { getItem: () => null, setItem() {} },
     setInterval: callback => { timers.push(callback); return 0; },
+    setTimeout: (callback, delay, ...args) => {
+      const id = nativeSetTimeout(callback, delay, ...args); timeoutIds.push(id); return id;
+    },
   };
   const previous = Object.fromEntries(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
   t.after(() => {
+    timeoutIds.forEach(id => nativeClearTimeout(id));
     for (const [key, descriptor] of Object.entries(previous)) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else delete globalThis[key];
     }
   });
-  return { query, listeners, timers };
+  return { query, listeners, timers, setQueryList: (selector, items) => queryLists.set(selector, items) };
 }

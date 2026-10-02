@@ -117,7 +117,7 @@ export function createRuntimeService({
     const job = state.activeJob;
     return runJobProcess(job, stage, executable, args, {
       cwd, capture,
-      env: { ...(stage === "voice" ? localVoiceEnvironment() : process.env),
+      env: { ...(["voice", "training"].includes(stage) ? localVoiceEnvironment() : process.env),
         PYTHONPATH: path.join(ROOT, "src"), PYTHONUNBUFFERED: "1" },
       emit: payload => {
         if (state.activeJob !== job) return;

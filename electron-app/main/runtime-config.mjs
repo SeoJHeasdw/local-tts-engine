@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { legacyVoiceForRoot } from './legacy-voice.mjs';
 
 
 const COMMON_EXECUTABLE_DIRS = Object.freeze([
@@ -18,12 +19,13 @@ export function defaultSourceProjectRoot(projectRoot, env = process.env) {
 
 
 export function defaultStudioPaths(projectRoot, env = process.env) {
+  const legacy = legacyVoiceForRoot(projectRoot);
   return {
     sourceProjectRoot: defaultSourceProjectRoot(projectRoot, env),
     voiceLibraryRoot: path.join(projectRoot, "data/private/voice"),
     outputRoot: path.join(projectRoot, "output"),
-    referenceAudioPath: path.join(projectRoot, "artifacts/benchmarks/2026-08-23/reference.wav"),
-    referenceTextPath: path.join(projectRoot, "artifacts/benchmarks/2026-08-23/reference.txt"),
+    referenceAudioPath: legacy.referenceAudioPath,
+    referenceTextPath: legacy.referenceTextPath,
   };
 }
 

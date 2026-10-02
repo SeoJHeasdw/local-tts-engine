@@ -68,6 +68,7 @@ def test_segment_review_validate_and_export(tmp_path: Path) -> None:
         source_dir=source_dir,
         output_dir=dataset_dir,
         reference=reference,
+        display_name="새 화자",
         min_seconds=2,
         target_seconds=3.5,
         max_seconds=5,
@@ -75,6 +76,7 @@ def test_segment_review_validate_and_export(tmp_path: Path) -> None:
     )
 
     assert source.read_bytes() == source_before
+    assert json.loads((dataset_dir / "manifest.json").read_text())["displayName"] == "새 화자"
     rows = [json.loads(line) for line in (dataset_dir / "metadata.jsonl").read_text().splitlines()]
     assert len(rows) == 2
     assert validate_dataset(dataset_dir)["clips"] == 2

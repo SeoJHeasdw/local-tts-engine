@@ -416,6 +416,7 @@ def generate_candidate(
     output_path: Path,
     metadata_path: Path,
     seed: int,
+    model_path: Path | None = None,
     adapter_path: Path | None = None,
     adapter_scale: float = 1.0,
     quality_review: bool = False,
@@ -465,7 +466,12 @@ def generate_candidate(
         quality_model = load_stt_model(quality_model_path)
         quality_load_ms = round((time.perf_counter() - started) * 1000)
 
-    model_path = resolve_model_path(spec.repository, get_model_path)
+    if model_path is not None:
+        model_path = model_path.expanduser().resolve()
+        if not model_path.is_dir():
+            raise FileNotFoundError(f"설치된 TTS 모델 폴더가 없습니다: {model_path}")
+    else:
+        model_path = resolve_model_path(spec.repository, get_model_path)
     revision = snapshot_revision(model_path)
     mx.random.seed(seed)
     mx.reset_peak_memory()
@@ -475,14 +481,16 @@ def generate_candidate(
         model = load_tts_model(model_path)
     else:
         from mlx_tune import FastTTSModel
+        from .finetune_adapter import load_adapter_settings
+
+        adapter_settings = load_adapter_settings(adapter_path)
 
         training_wrapper, _ = FastTTSModel.from_pretrained(
-            model_name=str(model_path), max_seq_length=512,
+            model_name=str(model_path), max_seq_length=adapter_settings["maxSequenceLength"],
         )
         training_wrapper = FastTTSModel.get_peft_model(
-            training_wrapper, r=16, lora_alpha=16, lora_dropout=0.0,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                            "gate_proj", "up_proj", "down_proj"],
+            training_wrapper, r=adapter_settings["rank"], lora_alpha=adapter_settings["alpha"],
+            lora_dropout=adapter_settings["dropout"], target_modules=adapter_settings["targetModules"],
             random_state=seed,
         )
         training_wrapper.load_adapter(str(adapter_path))
@@ -637,6 +645,7 @@ def generate_candidate(
     metadata = {
         "schemaVersion": 2,
         "cachePolicy": "disabled", "modelKey": model_key, "model": spec.repository,
+        "modelPath": str(model_path),
         "modelRevision": revision, "adapter": adapter, "seed": seed,
         "sourceText": source_text, "ttsText": tts_text, "textSha256": sha256_text(tts_text),
         "reference": str(reference_path.resolve()), "output": str(output_path.resolve()),
@@ -676,6 +685,7 @@ def generate_candidate(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=sorted(MODEL_SPECS), default="qwen3-tts")
+    parser.add_argument("--model-path", type=Path, help="사용할 설치된 TTS 모델 폴더")
     parser.add_argument("--text-file", type=Path, required=True)
     parser.add_argument("--reference", type=Path, required=True)
     parser.add_argument("--reference-text", type=Path, required=True)
@@ -692,7 +702,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     generate_candidate(
-        model_key=args.model, text_path=args.text_file,
+        model_key=args.model, model_path=args.model_path, text_path=args.text_file,
         reference_path=args.reference, reference_text_path=args.reference_text,
         output_path=args.output, metadata_path=args.metadata, seed=args.seed,
         adapter_path=args.adapter, adapter_scale=args.adapter_scale,

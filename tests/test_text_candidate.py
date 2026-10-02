@@ -213,8 +213,9 @@ def test_unreviewed_chunk_retries_only_audio_defect_without_claiming_quality() -
     assert result["severity"] == "not-checked"
 
 
+@pytest.mark.parametrize('use_saved_adapter', [False, True])
 def test_full_text_candidate_assembles_real_sample_gaps_and_truthful_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_saved_adapter: bool,
 ) -> None:
     # Exercise the command orchestration with deterministic fake generation;
     # no weights, ASR or audio normalizer are loaded by this test.
@@ -231,7 +232,8 @@ def test_full_text_candidate_assembles_real_sample_gaps_and_truthful_metadata(
     tts = ModuleType("mlx_audio.tts")
     tts.__path__ = []
     tts_utils = ModuleType("mlx_audio.tts.utils")
-    tts_utils.load_model = lambda _path: SimpleNamespace(generate=lambda **_kwargs: None)
+    loaded_models = []
+    tts_utils.load_model = lambda path: (loaded_models.append(path), SimpleNamespace(generate=lambda **_kwargs: None))[1]
     audio_utils = ModuleType("mlx_audio.utils")
     audio_utils.get_model_path = lambda _repository: str(tmp_path)
     for name, module in (("mlx_audio", mlx_audio), ("mlx_audio.tts", tts),
@@ -240,7 +242,8 @@ def test_full_text_candidate_assembles_real_sample_gaps_and_truthful_metadata(
 
     import local_tts_engine.text_candidate as target
 
-    monkeypatch.setattr(target, "resolve_model_path", lambda _repository, _download: tmp_path)
+    resolved_models = []
+    monkeypatch.setattr(target, "resolve_model_path", lambda repository, _download: (resolved_models.append(repository), tmp_path)[1])
     monkeypatch.setattr(target, "snapshot_revision", lambda _path: "test-revision")
     monkeypatch.setattr(target, "production_pronunciation", lambda: [])
     generated_texts = []
@@ -270,13 +273,43 @@ def test_full_text_candidate_assembles_real_sample_gaps_and_truthful_metadata(
     reference_text = tmp_path / "reference.txt"
     reference_text.write_text("참조 발화", encoding="utf-8")
     output = tmp_path / "voice.wav"
+    installed_model = tmp_path / 'chosen-base-model'
+    installed_model.mkdir()
+    adapter = None
+    peft_calls = []
+    if use_saved_adapter:
+        adapter = tmp_path / 'run/adapters'
+        adapter.mkdir(parents=True)
+        (adapter / 'adapters.safetensors').write_bytes(b'fixture adapter')
+        (adapter / 'adapter_config.json').write_text(json.dumps({'lora_parameters': {
+            'rank': 8, 'alpha': 24, 'dropout': 0.0, 'keys': ['q_proj', 'custom_proj']}}))
+        (adapter.parent / 'training-result.json').write_text(json.dumps({'parameters': {'maxSequenceLength': 1024}}))
+        layer = SimpleNamespace(lora_a=1, lora_b=1, scale=1.0)
+        wrapper = SimpleNamespace(model=SimpleNamespace(named_modules=lambda: [('', layer)], eval=lambda: None),
+            full_model=SimpleNamespace(generate=lambda **_kwargs: None), load_adapter=lambda _path: None)
+        tune = ModuleType('mlx_tune')
+        tune.FastTTSModel = SimpleNamespace(
+            from_pretrained=lambda **kwargs: (peft_calls.append(('load', kwargs)), (wrapper, None))[1],
+            get_peft_model=lambda value, **kwargs: (peft_calls.append(('peft', kwargs)), value)[1])
+        monkeypatch.setitem(sys.modules, 'mlx_tune', tune)
 
     metadata = generate_candidate(
         model_key="qwen3-tts", text_path=text, reference_path=tmp_path / "reference.wav",
         reference_text_path=reference_text, output_path=output,
-        metadata_path=tmp_path / "voice.json", seed=42,
+        metadata_path=tmp_path / "voice.json", seed=42, model_path=installed_model,
+        adapter_path=adapter, adapter_scale=0.6,
     )
 
+    assert target.MODEL_SPECS['qwen3-tts'].repository not in resolved_models
+    assert metadata['modelPath'] == str(installed_model)
+    if use_saved_adapter:
+        assert peft_calls == [
+            ('load', {'model_name': str(installed_model), 'max_seq_length': 1024}),
+            ('peft', {'r': 8, 'lora_alpha': 24, 'lora_dropout': 0.0,
+                'target_modules': ['q_proj', 'custom_proj'], 'random_state': 42})]
+        assert layer.scale == 0.6
+    else:
+        assert loaded_models == [installed_model]
     assert len(metadata["chunks"]) > 1
     assert len(generated_texts) == len(metadata["chunks"]) + 1
     assert generated_texts[0] == generated_texts[1]

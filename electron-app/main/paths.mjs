@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultStudioPaths } from "./runtime-config.mjs";
 import { outputPathsForRoot } from "../shared/index.mjs";
+import { legacyVoiceForRoot } from './legacy-voice.mjs';
 
 export const APP_DIR = fileURLToPath(new URL("../", import.meta.url));
 
@@ -18,10 +19,11 @@ export const APP_SETTINGS_PATH = path.join(ROOT, "artifacts/app-settings.json");
 export const ACTIVE_JOB_PATH = path.join(ROOT, "artifacts/active-job.json");
 
 export const FINETUNE_RUN_ROOT = path.join(ROOT, "artifacts/finetune-runs");
+export const FINETUNE_DATASET_ROOT = path.join(ROOT, "artifacts/finetune-datasets");
 
-export const FINETUNE_TRAIN_JSONL = path.join(ROOT, "artifacts/finetune-datasets/jaeho-ko-v1/official/train.jsonl");
+export const FINETUNE_TRAIN_JSONL = legacyVoiceForRoot(ROOT).trainJsonl;
 
-export const ADAPTER = path.join(ROOT, "artifacts/finetune-runs/2026-08-25/jaeho-ko-r16-v1/adapters");
+export const ADAPTER = path.join(FINETUNE_RUN_ROOT, legacyVoiceForRoot(ROOT).adapterId, 'adapters');
 
 // How many different seeds a chunk may spend before a page is handed to a
 // person. Mirrors MAX_AUTOMATIC_ATTEMPTS in speech_quality.py.

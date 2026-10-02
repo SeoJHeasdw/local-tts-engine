@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "adapterId": "2026-08-25/jaeho-ko-r16-v1",
+  "datasetId": "jaeho-ko-v1",
+  "displayName": "내 목소리",
+  "trainJsonl": "artifacts/finetune-datasets/jaeho-ko-v1/official/train.jsonl",
+  "referenceAudioPath": "artifacts/benchmarks/2026-08-23/reference.wav",
+  "referenceTextPath": "artifacts/benchmarks/2026-08-23/reference.txt",
+  "listeningStatus": "approved",
+  "adapterScale": 0.6
+}

@@ -25,9 +25,7 @@ import numpy as np
 import soundfile as sf
 
 
-DEFAULT_MASTER_DIR = Path(
-    "/Users/jaehoseo/Desktop/vswrk/javis/local-tts-engine/data/private/voice/training/pvc/master-wav"
-)
+DEFAULT_MASTER_DIR = Path(__file__).resolve().parents[2] / "data/private/voice/training/pvc/master-wav"
 DEFAULT_REFERENCE = Path("artifacts/benchmarks/2026-08-23/reference.wav")
 DEFAULT_ASR_MODEL = "mlx-community/Qwen3-ASR-0.6B-8bit"
 SCHEMA_VERSION = 1
@@ -352,6 +350,7 @@ def segment_dataset(
     source_dir: Path,
     output_dir: Path,
     reference: Path,
+    display_name: str | None = None,
     source_pattern: str = "*.wav",
     max_source_seconds: float | None = None,
     min_seconds: float = 3.0,
@@ -361,6 +360,8 @@ def segment_dataset(
     min_silence_ms: int = 240,
 ) -> dict[str, Any]:
     metadata_path = output_dir / "metadata.jsonl"
+    if display_name is not None and (not display_name.strip() or len(display_name.strip()) > 80):
+        raise ValueError("목소리 표시 이름은 1~80자여야 합니다.")
     if metadata_path.exists():
         raise FileExistsError(
             f"기존 데이터셋을 덮어쓰지 않습니다: {output_dir}. 새 output-dir을 사용하세요."
@@ -456,6 +457,8 @@ def segment_dataset(
         "sources": source_records,
         "stats": dataset_stats(rows),
     }
+    if display_name is not None:
+        manifest["displayName"] = display_name.strip()
     write_json(output_dir / "manifest.json", manifest)
     return manifest
 
@@ -484,6 +487,7 @@ def transcribe_dataset(
             max_tokens=384,
         )
         row["text"] = normalize_transcript(result.text)
+        row["asrText"] = row["text"]
         row["asrModel"] = model_name
         language = getattr(result, "language", None)
         row["asrLanguage"] = language
@@ -771,6 +775,7 @@ def build_parser() -> argparse.ArgumentParser:
     segment.add_argument("--source-pattern", default="*.wav")
     segment.add_argument("--output-dir", type=Path, required=True)
     segment.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE)
+    segment.add_argument("--display-name", help="앱에서 선택할 목소리 표시 이름")
     segment.add_argument("--max-source-seconds", type=float)
     segment.add_argument("--min-seconds", type=float, default=3.0)
     segment.add_argument("--target-seconds", type=float, default=8.0)
@@ -818,6 +823,7 @@ def main(argv: list[str] | None = None) -> int:
             source_dir=args.source_dir,
             output_dir=args.output_dir,
             reference=args.reference,
+            display_name=args.display_name,
             source_pattern=args.source_pattern,
             max_source_seconds=args.max_source_seconds,
             min_seconds=args.min_seconds,

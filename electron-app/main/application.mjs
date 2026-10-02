@@ -7,6 +7,9 @@ import { createRecordingService } from "./recording.mjs";
 import { createRecordMonitorService } from "./record-monitor.mjs";
 import { createAppDemoService } from "./app-demo.mjs";
 import { createVoicesService } from "./voices.mjs";
+import { createTrainingService } from "./training.mjs";
+import { createTrainingImportService } from './training-import.mjs';
+import { createVoicePreviewService } from './voice-preview.mjs';
 import { createEditingComposeService } from "./editing/compose.mjs";
 import { createEditingPagesService } from "./editing/pages.mjs";
 import { createEditingRegionsService } from "./editing/regions.mjs";
@@ -71,12 +74,17 @@ export function createStudio({
   });
   const {
     generateReplacementVoice, runVoiceCandidates, runTextVoiceCandidates, selectTextVoice,
-    listTextVoiceCandidates, selectTextVoiceFromHistory, runFineTune,
+    listTextVoiceCandidates, selectTextVoiceFromHistory,
   } = createVoicesService({
     chosenRecord, emit, inspectMedia, readAppSettings,
     registerSelected, requireRuntimeTool, resolveOutputTarget, runProcess, saveAppSettings,
     state,
   });
+  const { listTrainingDatasets, readTrainingDataset, runFineTune } = createTrainingService({
+    emit, readAppSettings, requireRuntimeTool, runProcess, state,
+  });
+  const { importDataset: importTrainingDataset } = createTrainingImportService({ runProcess, requireRuntimeTool });
+  const { runVoicePreview } = createVoicePreviewService({ readAppSettings, runProcess, requireRuntimeTool, emit, state });
   const { validateEditVideo, runComposeEdit } = createEditingComposeService({
     chosenRecord, emit, ffprobe, inspectMedia, requireRuntimeTool, runProcess,
   });
@@ -100,6 +108,7 @@ export function createStudio({
     listDemoScenarios, listOutputs, listRecordingSources, loadCatalog, pickDemoProject, pickDemoScenario,
     readActiveJob, readAppSettings, readDemoProject, readDemoScenario, readDemoCameraPreview,
     registerSelected, renameOutput, requireRuntimeTool, resolveOutputFile,
+    listTrainingDatasets, readTrainingDataset, importTrainingDataset, runVoicePreview,
     runFineTune, runTextVoiceCandidates, runVideoEdit, saveAppSettings, saveDemoScript,
     listTextVoiceCandidates, selectTextVoice, selectTextVoiceFromHistory,
     setClearedFindings, setClearedReviewWarnings, setOutputReview, shell,

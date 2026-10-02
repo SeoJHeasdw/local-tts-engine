@@ -4,6 +4,8 @@ import { createReviewController } from "./controllers/review.mjs";
 import { createRecordingController } from "./controllers/recording.mjs";
 import { createAppDemoController } from "./controllers/app-demo.mjs";
 import { createDemoPolishController } from "./controllers/demo-polish.mjs";
+import { createTrainingController } from "./controllers/training.mjs";
+import { voiceProfileView, sameVoiceScale } from '../shared/voice-profile-view.mjs';
 import { animateLayout, transitionPage, dismissToast, appendFollowingLog } from "./motion.mjs";
 import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/video-quality.mjs";
 
@@ -74,6 +76,13 @@ let candidatePurpose = "edit";
 let textVoiceHistoryTarget = null;
 let catalogChapters = [];
 let creationState = "idle";
+let listeningReviewKey = '';
+let trainingResultAdapterId = null;
+let previewReturnDraft = null;
+let settingsSaveQueue = Promise.resolve();
+let settingsSaveRevision = 0;
+let settingsSavingVoice = false;
+let settingsJobRunning = false;
 
 function showToast(message, kind = "success") {
   const toast = document.createElement("div");
@@ -221,11 +230,9 @@ function updateCourseNavigator(start, end) {
 }
 
 function voiceProfileLabel() {
-  if (appSettings?.modelId === "chatterbox-v3") return "실험 목소리";
-  if (appSettings?.adapterId === "none") return "기본 복제 목소리";
-  const adapter = appSettings?.adapters?.find((item) => item.id === appSettings.adapterId);
-  const approved = adapter?.label === "jaeho-ko-r16-v1" && Math.abs(Number(appSettings?.adapterScale || 0.6) - 0.6) < 0.001;
-  return approved ? "내 목소리 · 승인됨" : "내 목소리 · 실험 설정";
+  if (!appSettings) return '목소리 확인 중';
+  const view = voiceProfileView(appSettings);
+  return `${view.label}${view.adapter ? view.approved ? ' · 청취 확인됨' : ' · 청취 확인 필요' : ''}`;
 }
 
 function updateProductionBrief() {
@@ -626,7 +633,7 @@ function updateVoicePageMeta() {
     ? "Chatterbox V3"
     : appSettings?.adapterId === "none"
       ? "Qwen3 기본 복제"
-    : `${appSettings?.adapters?.find((item) => item.id === appSettings.adapterId)?.label || "파인튜닝"} · ${Number(appSettings?.adapterScale || 0.6).toFixed(2)}`;
+    : `${voiceProfileView(appSettings).label} · ${Number(appSettings?.adapterScale || 0.6).toFixed(2)}`;
   $("#voice-page-meta").textContent = `${start}~${end}페이지 음성을 ${profile} 설정으로 새로 만듭니다.`;
 }
 
@@ -659,6 +666,11 @@ function openJobDialog(title) {
   $("#edit-dialog-title").textContent = title;
   $("#edit-dialog-spinner").classList.remove("hidden");
   $("#edit-dialog-success").classList.add("hidden");
+  $('#training-preview').pause();
+  $('#training-preview').classList.add('hidden');
+  $('#training-preview').removeAttribute('src');
+  $('#review-trained-voice').classList.add('hidden');
+  $('#return-to-training').classList.add('hidden');
   $('#edit-complete-warnings').classList.add('hidden');
   $("#edit-dialog-error").classList.add("hidden");
   $("#candidate-gallery").classList.add("hidden");
@@ -904,11 +916,18 @@ function renderSettings(settings) {
   appSettings = settings;
   $("#global-model").value = settings.modelId;
   const adapterSelect = $("#global-adapter");
-  const options = [{ id: "none", label: "어댑터 없음 · 기본 복제" }, ...(settings.adapters || [])];
+  const options = [{ id: "none", label: "대표 녹음으로 기본 복제" }, ...(settings.adapters || [])];
+  if (settings.adapterId !== 'none' && !options.some(item => item.id === settings.adapterId)) {
+    options.push({ id: settings.adapterId, label: '적용 중인 목소리 · 파일을 찾을 수 없음', profileError: '파일을 찾을 수 없습니다.' });
+  }
   adapterSelect.replaceChildren(...options.map((item) => {
     const option = document.createElement("option");
     option.value = item.id;
-    option.textContent = item.label;
+    const duplicate = item.displayName && options.filter(other => other.displayName === item.displayName).length > 1;
+    option.textContent = item.displayName
+      ? `${item.displayName}${duplicate ? ` · ${item.date}` : ''}${item.profileError ? ' · 파일 확인 필요'
+        : item.listeningStatus === 'rejected' ? ' · 사용 보류' : item.listeningStatus !== 'approved' ? ' · 청취 확인 필요' : ''}` : item.label;
+    option.disabled = Boolean(item.profileError);
     return option;
   }));
   adapterSelect.value = settings.adapterId;
@@ -920,14 +939,17 @@ function renderSettings(settings) {
   $("#global-scale-field").classList.toggle("hidden", settings.modelId !== "qwen3-tts" || settings.adapterId === "none");
   paintGlobalRange();
   const selectedAdapter = settings.adapters?.find((item) => item.id === settings.adapterId) || null;
-  const approved = settings.modelId === "qwen3-tts"
-    && selectedAdapter?.label === "jaeho-ko-r16-v1"
-    && Math.abs(Number(settings.adapterScale || 0.6) - 0.6) < 0.001;
+  const approved = voiceProfileView(settings).approved;
   $("#sidebar-model").textContent = approved ? "제작 목소리" : "음성 설정";
   $("#sidebar-adapter").textContent = selectedAdapter
-    ? `${selectedAdapter.label} · ${Number(settings.adapterScale).toFixed(2)}`
+    ? `${selectedAdapter.displayName || selectedAdapter.label} · ${Number(settings.adapterScale).toFixed(2)}`
     : settings.modelId === "chatterbox-v3" ? "Chatterbox V3" : "Qwen3 기본 복제";
   for (const [key, value] of Object.entries(settings.paths || {})) setPathField(key, value);
+  for (const key of ['referenceAudioPath', 'referenceTextPath']) {
+    const button = $(`[data-pick-path="${key}"]`);
+    button.disabled = Boolean(selectedAdapter?.referencePaths);
+    button.title = selectedAdapter?.referencePaths ? '목소리 프로필을 고르면 함께 바뀝니다.' : '';
+  }
   renderVoiceCommit();
   updateVoicePageMeta();
   updateProductionBrief();
@@ -942,6 +964,7 @@ const READINESS_LABELS = {
 };
 
 function paintVoiceReadiness() {
+  $('#voice-readiness-title').textContent = '현재 적용된 목소리의 제작 준비';
   const models = voiceReadiness?.models || {};
   const modelNames = { 'qwen3-tts': 'Qwen3-TTS 1.7B Base', 'chatterbox-v3': 'Chatterbox Multilingual V3' };
   for (const option of $('#global-model').children || []) {
@@ -955,7 +978,7 @@ function paintVoiceReadiness() {
     quality: voiceReadiness?.quality, aligner: voiceReadiness?.aligner,
   };
   const names = { trainPython: '제작 Python', ffprobe: '길이 검사 도구', model: '적용된 모델',
-    referenceAudio: '참조 음성', referenceText: '참조 전사문', adapter: '목소리 어댑터',
+    referenceAudio: '대표 녹음', referenceText: '대표 녹음의 글', adapter: '학습한 목소리 파일',
     quality: '자동 검수 모델', aligner: '단어 정렬 모델' };
   for (const [key, item] of Object.entries(rows)) {
     const field = $(`#voice-ready-${key}`);
@@ -970,45 +993,71 @@ function paintVoiceReadiness() {
 }
 
 function updateProfileGuard() {
-  const modelId = $("#global-model").value;
-  const adapterId = $("#global-adapter").value;
-  const adapter = appSettings?.adapters?.find((item) => item.id === adapterId);
-  const scale = Number($("#global-scale").value);
-  const approved = modelId === "qwen3-tts" && adapter?.label === "jaeho-ko-r16-v1" && Math.abs(scale - 0.6) < 0.001;
+  if (!appSettings) return;
+  const view = voiceProfileView(appSettings, voiceDraft());
   const guard = $("#profile-guard");
-  guard.classList.toggle("approved", approved);
-  guard.classList.toggle("experimental", !approved);
-  guard.querySelector(":scope > span").textContent = approved ? "✓" : "!";
-  $("#profile-guard-title").textContent = approved ? "제작 목소리" : "실험 설정";
-  $("#profile-guard-copy").textContent = approved
-    ? "jaeho-ko-r16-v1 · 강도 0.60"
-    : `${modelId === "chatterbox-v3" ? "Chatterbox V3" : adapter?.label || "Qwen3 기본 복제"}${adapter ? ` · 강도 ${scale.toFixed(2)}` : ""}`;
-  $("#restore-production-profile").classList.toggle("hidden", approved);
+  guard.classList.toggle("approved", view.approved);
+  guard.classList.toggle("experimental", !view.approved);
+  guard.querySelector(":scope > span").textContent = view.approved ? "✓" : "!";
+  $("#profile-guard-title").textContent = view.title;
+  $("#profile-guard-copy").textContent = view.explanation;
+  $('#voice-profile-summary').textContent = `${voiceDirty() ? '아직 적용 전' : '현재 적용 중'} · ${view.description}`;
+  $('#restore-production-profile').textContent = '현재 적용값으로 되돌리기';
+  $('#restore-production-profile').classList.toggle('hidden', !voiceDirty());
+  const reviewKey = `${view.adapter?.id}|${voiceDraft().adapterScale}|${view.adapter?.previewAudioSha256}`;
+  if (reviewKey !== listeningReviewKey) {
+    listeningReviewKey = reviewKey;
+    $('#voice-listening-confirm').checked = false;
+  }
+  const preview = $('#voice-profile-preview');
+  if (preview.getAttribute('src') !== (view.adapter?.previewUrl || null)) {
+    preview.pause();
+    if (view.adapter?.previewUrl) preview.setAttribute('src', view.adapter.previewUrl);
+    else preview.removeAttribute('src');
+  }
+  preview.classList.toggle('hidden', !view.adapter?.previewUrl);
+  preview.setAttribute('aria-label', `${view.label} 시험 음성`);
+  $('#voice-preview-empty').textContent = view.adapter?.previewUrl
+    ? `이 시험 음성의 반영 강도는 ${Number(view.adapter.previewScale).toFixed(2)}입니다.${view.previewMatches ? ' 직접 들어 보고 확인하세요.' : ' 선택한 강도와 다릅니다. 아래 버튼으로 새 시험 음성을 만들 수 있습니다.'}`
+    : view.canGeneratePreview ? '아직 저장된 시험 음성이 없습니다. 아래 버튼으로 만들어 들어 보세요.'
+      : view.blocked ? view.explanation : '학습한 목소리를 고르면 여기에서 시험 음성을 들을 수 있습니다.';
+  $('#create-voice-preview').disabled = !view.canGeneratePreview || settingsSavingVoice;
+  $('#voice-listening-review').classList.toggle('hidden', !view.needsListening || !view.previewMatches);
+  for (const key of ['referenceAudioPath', 'referenceTextPath']) {
+    const bound = view.adapter?.referencePaths?.[key];
+    if (bound) setPathField(key, bound);
+    const button = $(`[data-pick-path="${key}"]`);
+    button.disabled = Boolean(view.adapter?.referencePaths) || view.blocked;
+    button.title = view.adapter?.referencePaths ? '대표 녹음과 글은 선택한 목소리에 함께 연결됩니다.' : '';
+  }
+  $('#voice-reference-path-hint').textContent = view.adapter?.referencePaths
+    ? `${view.label}에 연결된 대표 녹음과 글입니다. 목소리를 고르면 함께 바뀝니다.`
+    : '기본 복제는 아래 대표 녹음과 그 녹음의 글을 사용합니다. 변경 후 목소리 적용 버튼을 누르세요.';
+  renderVoiceCommit();
 }
 
 function restoreProductionProfile() {
-  const adapter = appSettings?.adapters?.find((item) => item.label === "jaeho-ko-r16-v1");
-  $("#global-model").value = "qwen3-tts";
-  $("#global-adapter").disabled = false;
-  if (adapter) $("#global-adapter").value = adapter.id;
-  $("#global-scale").value = "0.6";
-  $("#global-scale-field").classList.toggle("hidden", !adapter);
-  paintGlobalRange();
-  updateProfileGuard();
+  applyVoiceDraft({ ...appSettings, paths: appSettings.paths });
 }
 
-async function openModelSettings() {
-  const [settings, status] = await Promise.all([api.getSettings(), api.getStatus().catch(() => null)]);
+async function openModelSettings(section = 'general') {
+  if (typeof section !== 'string') section = 'general';
+  const dialog = $('#model-settings-dialog');
+  if (!dialog.open) dialog.showModal();
+  showSettingsSection(section);
+  settingsStatus('설정을 불러오는 중입니다.');
+  let settings, status;
+  try { [settings, status] = await Promise.all([api.getSettings(), api.getStatus().catch(() => null)]); }
+  catch (error) { settingsStatus(`설정을 불러오지 못했습니다. 닫았다가 다시 열어 주세요. ${error.message}`, 'failed'); return; }
   voiceReadiness = status?.readiness || null;
   runtimeReadiness = status?.runtime || null;
   renderSettings(settings);
-  $("#finetune-name").value = `jaeho-ko-r16-${dateStamp()}`.toLowerCase();
+  training.load().catch(showTrainingError);
   $("#finetune-panel").classList.add("hidden");
   $("#finetune-error").classList.add("hidden");
   $("#open-finetune-panel").setAttribute("aria-expanded", "false");
-  showSettingsSection("general");
+  showSettingsSection(section);
   settingsStatus();
-  $("#model-settings-dialog").showModal();
 }
 
 // 경로는 길고, 궁금한 것은 앞이 아니라 끝이다. 글자 방향을 뒤집거나 칸을
@@ -1040,6 +1089,7 @@ function showSettingsSection(name) {
   for (const panel of $$("[data-settings-panel]")) {
     panel.classList.toggle("hidden", panel.dataset.settingsPanel !== name);
   }
+  if (typeof settingsStatus === 'function') settingsStatus();
 }
 
 $$("#settings-rail button").forEach((button) => {
@@ -1049,12 +1099,13 @@ $$("#settings-rail button").forEach((button) => {
 // 설정은 바꾸는 즉시 저장한다. 저장 버튼을 누르지 않고 닫아 조용히 날아가는
 // 일이 없어야 한다. 다만 제작 목소리만은 전체 강의의 목소리를 정하는 값이라
 // 한 번 더 묻는다 — 그 값은 여기서 편집만 하고, 적용은 따로 누른다.
-const SETTINGS_HINT = "바꾸는 즉시 저장됩니다. 제작 목소리만 적용을 한 번 더 확인합니다.";
+const SETTINGS_HINT = "일반 설정은 바로 저장됩니다. 목소리는 적용 버튼을 누르면 바뀝니다.";
 let settingsStatusTimer = null;
 
 function settingsStatus(message = "", tone = "") {
   const element = $("#settings-status");
-  element.textContent = message || SETTINGS_HINT;
+  const learning = $('#settings-rail [data-settings-section="training"]')?.classList.contains('selected');
+  element.textContent = message || (learning ? '녹음의 글과 선택은 학습 시작 때 반영됩니다. 일반 설정과 목소리 선택은 별도로 저장합니다.' : SETTINGS_HINT);
   element.classList.toggle("saved", tone === "saved");
   element.classList.toggle("failed", tone === "failed");
   if (settingsStatusTimer) clearTimeout(settingsStatusTimer);
@@ -1068,6 +1119,8 @@ function voiceDraft() {
     modelId: $("#global-model").value,
     adapterId: $("#global-adapter").value,
     adapterScale: Number($("#global-scale").value),
+    paths: Object.fromEntries(['referenceAudioPath', 'referenceTextPath'].map(key => [key,
+      $(`#path-${key}`).dataset.path ?? $(`#path-${key}`).value])),
   };
 }
 
@@ -1076,23 +1129,28 @@ function voiceDirty() {
   const draft = voiceDraft();
   return draft.modelId !== appSettings.modelId
     || draft.adapterId !== appSettings.adapterId
-    || Math.abs(draft.adapterScale - Number(appSettings.adapterScale)) > 0.0005;
+    || Math.abs(draft.adapterScale - Number(appSettings.adapterScale)) > 0.0005
+    || ['referenceAudioPath', 'referenceTextPath'].some(key => draft.paths[key] !== appSettings.paths?.[key]);
 }
 
 function voiceLabel({ modelId, adapterId, adapterScale }) {
   if (modelId !== "qwen3-tts") return "Chatterbox V3";
   const adapter = appSettings?.adapters?.find((item) => item.id === adapterId);
-  return adapter ? `${adapter.label} · ${Number(adapterScale).toFixed(2)}` : "Qwen3 기본 복제";
+  return adapter ? `${adapter.displayName || adapter.label} · ${Number(adapterScale).toFixed(2)}` : "Qwen3 기본 복제";
 }
 
 function renderVoiceCommit() {
+  if (!appSettings) return;
   const dirty = voiceDirty();
-  $("#voice-commit").classList.toggle("hidden", !dirty);
-  // 적용을 기다리는 줄이 섰으면 안내 문구는 물러난다. 둘을 함께 띄우면 지금
-  // 할 일이 무엇인지가 흐려진다.
-  $("#settings-status").classList.toggle("hidden", dirty);
-  if (!dirty) return;
-  $("#voice-commit-diff").textContent = `${voiceLabel(appSettings)} → ${voiceLabel(voiceDraft())}`;
+  const view = voiceProfileView(appSettings, voiceDraft());
+  const confirm = $('#voice-listening-confirm').checked && view.previewMatches;
+  $('#voice-commit').classList.toggle('hidden', !dirty && !view.needsListening);
+  $('#settings-status').classList.remove('hidden');
+  $('#voice-commit-apply').disabled = settingsSavingVoice || view.blocked || (view.needsListening && !confirm);
+  $('#voice-commit-apply').textContent = settingsSavingVoice ? '적용 중…' : dirty ? '선택한 목소리 적용' : '청취 확인 저장';
+  $('#voice-commit-diff').textContent = dirty
+    ? `현재 ${voiceLabel(appSettings)} → 적용할 목소리 ${voiceLabel(voiceDraft())}`
+    : view.needsListening ? '현재 적용 중인 목소리의 시험 음성을 듣고 확인을 표시해 주세요.' : '';
 }
 
 // 저장은 늘 전체를 보낸다. 목소리를 아직 적용하지 않았다면 편집 중인 값이
@@ -1101,42 +1159,74 @@ function renderVoiceCommit() {
 async function persistSettings({ includeVoice = false, label = "" } = {}) {
   if (!appSettings) return false;
   const draft = voiceDraft();
-  const voice = includeVoice ? draft : {
-    modelId: appSettings.modelId,
-    adapterId: appSettings.adapterId,
-    adapterScale: Number(appSettings.adapterScale),
-  };
-  try {
-    const saved = await api.saveSettings({
-      ...voice,
-      voiceParallelism: Number($("#global-parallelism").value),
-      preventSleep: $("#prevent-sleep").checked,
-      notifyOnFinish: $("#notify-finish").checked,
-      paths: pathSettings(),
-    });
-    renderSettings(saved);
-    // 저장한 경로나 모델이 바뀌었으므로 이전 파일 상태를 그대로 표시하지 않는다.
-    try {
-      const status = await api.getStatus();
-      voiceReadiness = status.readiness || null;
-      runtimeReadiness = status.runtime || null;
-    } catch { voiceReadiness = null; runtimeReadiness = null; }
-    paintVoiceReadiness();
-    // 화면을 저장값으로 다시 그렸으니, 아직 적용하지 않은 편집은 되돌려 세운다.
-    if (!includeVoice) applyVoiceDraft(draft);
-    settingsStatus(`${label || "설정"} 저장됨`, "saved");
-    return true;
-  } catch (error) {
-    settingsStatus(`저장하지 못했습니다. ${error.message}`, "failed");
+  const view = voiceProfileView(appSettings, draft);
+  if (includeVoice && (view.blocked || (view.needsListening && (!view.previewMatches || !$('#voice-listening-confirm').checked)))) {
+    settingsStatus(view.blocked ? view.explanation : '선택한 강도의 시험 음성을 듣고 확인을 표시해 주세요.', 'failed');
     return false;
   }
+  const requested = { voiceParallelism: Number($('#global-parallelism').value),
+    preventSleep: $('#prevent-sleep').checked, notifyOnFinish: $('#notify-finish').checked, paths: pathSettings() };
+  const approval = includeVoice && view.needsListening ? { audioSha256: view.adapter.previewAudioSha256 } : null;
+  const ticket = ++settingsSaveRevision;
+  if (includeVoice) settingsSavingVoice = true;
+  renderVoiceCommit();
+  settingsStatus(`${label || '설정'} 저장 중…`);
+  const task = settingsSaveQueue.catch(() => {}).then(async () => {
+    try {
+      const voice = includeVoice ? draft : { modelId: appSettings.modelId,
+        adapterId: appSettings.adapterId, adapterScale: Number(appSettings.adapterScale) };
+      const paths = { ...requested.paths, ...(includeVoice ? draft.paths : Object.fromEntries(
+        ['referenceAudioPath', 'referenceTextPath'].map(key => [key, appSettings.paths[key]]))) };
+      const saved = await api.saveSettings({ ...requested, ...voice, paths,
+        ...(approval ? { listeningApproval: approval } : {}) });
+      const latestDraft = voiceDraft();
+      const latestListeningKey = listeningReviewKey;
+      const latestListeningChecked = $('#voice-listening-confirm').checked;
+      if (ticket === settingsSaveRevision) {
+        const changedWhileSaving = latestDraft.modelId !== draft.modelId || latestDraft.adapterId !== draft.adapterId
+          || !sameVoiceScale(latestDraft.adapterScale, draft.adapterScale)
+          || ['referenceAudioPath', 'referenceTextPath'].some(key => latestDraft.paths[key] !== draft.paths[key]);
+        renderSettings(saved);
+        if (!includeVoice || changedWhileSaving) {
+          applyVoiceDraft(latestDraft);
+          if (latestListeningKey === listeningReviewKey) $('#voice-listening-confirm').checked = latestListeningChecked;
+        }
+        else $('#voice-listening-confirm').checked = false;
+      } else appSettings = saved;
+      try {
+        const status = await api.getStatus();
+        if (ticket === settingsSaveRevision) {
+          voiceReadiness = status.readiness || null;
+          runtimeReadiness = status.runtime || null;
+        }
+      } catch {
+        if (ticket === settingsSaveRevision) { voiceReadiness = null; runtimeReadiness = null; }
+      }
+      if (ticket === settingsSaveRevision) {
+        paintVoiceReadiness();
+        settingsStatus(`${label || '설정'} 저장됨`, 'saved');
+      }
+      return true;
+    } catch (error) {
+      settingsStatus(`저장하지 못했습니다. ${error.message}`, 'failed');
+      return false;
+    } finally {
+      if (includeVoice) settingsSavingVoice = false;
+      updateProfileGuard();
+    }
+  });
+  settingsSaveQueue = task;
+  return task;
 }
 
-function applyVoiceDraft({ modelId, adapterId, adapterScale }) {
+function applyVoiceDraft({ modelId, adapterId, adapterScale, paths }) {
   $("#global-model").value = modelId;
   $("#global-adapter").disabled = modelId !== "qwen3-tts";
   $("#global-adapter").value = adapterId;
   $("#global-scale").value = String(adapterScale);
+  if (paths) for (const key of ['referenceAudioPath', 'referenceTextPath']) {
+    if (paths[key]) setPathField(key, paths[key]);
+  }
   $("#global-scale-field").classList.toggle("hidden", modelId !== "qwen3-tts" || adapterId === "none");
   paintGlobalRange();
   updateProfileGuard();
@@ -1145,23 +1235,70 @@ function applyVoiceDraft({ modelId, adapterId, adapterScale }) {
 
 function handleTrainingEvent(event) {
   if (event.type === "training-started") {
-    openJobDialog("파인튜닝 학습 중");
-    $("#edit-running-label").textContent = "새 음성 어댑터를 학습하고 있습니다.";
+    settingsJobRunning = true;
+    const mode = event.options?.mode;
+    if (mode !== 'preview') previewReturnDraft = null;
+    if ($('#model-settings-dialog').open) $('#model-settings-dialog').close();
+    openJobDialog(mode === 'import' ? '녹음 불러오는 중' : mode === 'prepare' ? '녹음과 글 확인 중'
+      : mode === 'preview' ? '시험 음성 만드는 중' : '새 목소리 학습 중');
+    $('#training-preview').classList.add('hidden');
+    $('#training-preview').removeAttribute('src');
+    $('#edit-running-label').textContent = mode === 'import' ? '원본을 보존한 채 듣고 확인할 짧은 녹음으로 나누고 있습니다.'
+      : mode === 'prepare' ? '녹음 상태를 분석하고 들리는 말을 글로 옮기고 있습니다.'
+        : mode === 'preview' ? '선택한 목소리와 강도로 새 시험 음성을 만들고 있습니다.'
+          : '확인한 녹음으로 목소리와 말투를 학습하고 있습니다. 완료 후 시험 음성을 직접 들어 주세요.';
   } else if (event.type === "log") {
     appendEditLog(event.text);
   } else if (event.type === "training-failed") {
+    settingsJobRunning = false;
     $("#edit-dialog-spinner").classList.add("hidden");
-    $("#edit-dialog-error").classList.remove("hidden");
-    $("#edit-error-message").textContent = event.message;
+    $('#edit-dialog-error').classList.toggle('hidden', Boolean(event.cancelled));
+    $('#edit-dialog-success').classList.toggle('hidden', !event.cancelled);
+    if (event.cancelled) $('#edit-complete-summary').textContent = '작업을 중지했습니다. 이전에 만든 목소리와 원본 녹음은 그대로 있습니다.';
+    else $('#edit-error-message').textContent = event.message;
+    $('#return-to-training').classList.remove('hidden');
+    $('#return-to-training').textContent = previewReturnDraft ? '목소리 선택으로 돌아가기' : '녹음 확인으로 돌아가기';
     $("#cancel-edit-button").classList.add("hidden");
     $("#close-edit-dialog").classList.remove("hidden");
+  } else if (event.type === "training-prepared") {
+    settingsJobRunning = false;
+    $('#edit-job-dialog').close();
+    training.render(event.dataset);
+    showSettingsSection('training');
+    $('#finetune-panel').classList.remove('hidden');
+    $('#open-finetune-panel').setAttribute('aria-expanded', 'true');
+    if (!$('#model-settings-dialog').open) $('#model-settings-dialog').showModal();
+    settingsStatus();
+    showToast(event.mode === 'import' ? '녹음을 불러왔습니다. 자동 준비를 누르면 글과 녹음 상태를 확인할 수 있습니다.'
+      : '자동 준비가 끝났습니다. 녹음을 듣고 사용할 자료와 대표 녹음 하나를 골라 주세요.');
+  } else if (event.type === 'voice-profile-preview-ready') {
+    settingsJobRunning = false;
+    $('#edit-job-dialog').close();
+    renderSettings(event.settings);
+    applyVoiceDraft(previewReturnDraft || { ...event.settings, modelId: 'qwen3-tts',
+      adapterId: event.adapterId, adapterScale: event.previewScale });
+    showSettingsSection('voice');
+    if (!$('#model-settings-dialog').open) $('#model-settings-dialog').showModal();
+    settingsStatus('시험 음성이 준비됐습니다. 들어 보고 확인을 표시한 뒤 적용하세요.');
   } else if (event.type === "training-complete") {
+    settingsJobRunning = false;
+    trainingResultAdapterId = event.adapter?.id || null;
     renderSettings(event.settings);
     $("#edit-dialog-spinner").classList.add("hidden");
     $("#edit-dialog-success").classList.remove("hidden");
-    $("#edit-complete-summary").textContent = `${event.adapter?.label || "새 어댑터"} 학습 완료 · 전역 설정에 적용됨`;
+    $("#edit-complete-summary").textContent = `${event.adapter?.displayName || "새 목소리"} 학습 완료 · 설정에서 프로필을 선택해 샘플을 들어 보세요. 기존 제작 목소리는 유지됩니다.`;
+    if (event.previewUrl) {
+      $('#training-preview').src = event.previewUrl;
+      $('#training-preview').classList.remove('hidden');
+      const previewScale = Number(event.previewScale ?? 0.6).toFixed(2);
+      $('#training-preview').setAttribute('aria-label', `새 목소리 강도 ${previewScale} 시험 음성`);
+      $('#edit-complete-summary').textContent = `${event.adapter?.displayName || '새 목소리'} 학습 완료 · 강도 ${previewScale} 시험 음성입니다. 들어 보고 승인할 때 설정에서 프로필을 적용하세요. 기존 제작 목소리는 유지됩니다.`;
+    } else if (event.previewError) {
+      $('#edit-complete-summary').textContent += ` 시험 음성 생성 실패: ${event.previewError}`;
+    }
     $("#cancel-edit-button").classList.add("hidden");
     $("#close-edit-dialog").classList.remove("hidden");
+    $('#review-trained-voice').classList.toggle('hidden', !trainingResultAdapterId);
   }
 }
 
@@ -1480,7 +1617,9 @@ async function initialize() {
       openJobDialog("영상 편집 중");
       setEditBusy(true);
     } else if (status.activeJob.kind === "training") {
-      openJobDialog("파인튜닝 학습 중");
+      settingsJobRunning = true;
+      openJobDialog('목소리 작업 진행 중');
+      $('#edit-running-label').textContent = '진행 중인 목소리 작업에 다시 연결했습니다. 완료 후 다음 단계를 안내합니다.';
     } else if (status.activeJob.kind === "record") {
       recording.restore(status.activeJob);
     } else if (status.activeJob.kind === "demo-record") {
@@ -1709,11 +1848,17 @@ $("#open-model-settings").addEventListener("click", openModelSettings);
 // 적용하지 않고 닫은 목소리 편집은 저장되지 않는다. 조용히 사라지면 다음에
 // 열었을 때 왜 그대로인지 알 수 없으므로, 버렸다는 사실을 말하고 되돌려 둔다.
 $("#model-settings-dialog").addEventListener("close", () => {
+  $('#voice-profile-preview').pause();
   if (!voiceDirty()) return;
   applyVoiceDraft({
     modelId: appSettings.modelId, adapterId: appSettings.adapterId, adapterScale: Number(appSettings.adapterScale),
+    paths: appSettings.paths,
   });
-  showToast("적용하지 않은 제작 목소리 변경은 버렸습니다.", "error");
+  showToast('목소리 변경은 적용하지 않았습니다. 기존 목소리를 계속 사용합니다.');
+});
+$('#edit-job-dialog').addEventListener('close', () => $('#training-preview').pause());
+$('#edit-job-dialog').addEventListener('cancel', event => {
+  if (settingsJobRunning) event.preventDefault();
 });
 $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => $(`#${button.dataset.closeDialog}`).close()));
 $("#global-adapter").addEventListener("change", () => {
@@ -1742,17 +1887,24 @@ $$("#theme-choice button").forEach((button) => button.addEventListener("click", 
 $("#voice-commit-apply").addEventListener("click", () => persistSettings({ includeVoice: true, label: "제작 목소리" }));
 $("#voice-commit-cancel").addEventListener("click", () => applyVoiceDraft({
   modelId: appSettings.modelId, adapterId: appSettings.adapterId, adapterScale: Number(appSettings.adapterScale),
+  paths: appSettings.paths,
 }));
+$('#voice-listening-confirm').addEventListener('change', renderVoiceCommit);
 const SETTINGS_PATH_LABELS = {
-  outputRoot: "결과물 폴더", sourceProjectRoot: "강의 소스", voiceLibraryRoot: "내 목소리 원본",
-  referenceAudioPath: "참조 음성", referenceTextPath: "참조 전사문",
+  outputRoot: "결과물 폴더", sourceProjectRoot: "강의 소스", voiceLibraryRoot: "녹음 보관 폴더",
+  referenceAudioPath: "대표 녹음", referenceTextPath: "대표 녹음의 글",
 };
 $$('[data-pick-path]').forEach((button) => button.addEventListener("click", async () => {
   const key = button.dataset.pickPath;
-  const value = await api.pickLocation(key);
-  if (!value) return;
-  setPathField(key, value);
-  await persistSettings({ label: SETTINGS_PATH_LABELS[key] || "경로" });
+  try {
+    const value = await api.pickLocation(key);
+    if (!value) return;
+    setPathField(key, value);
+    if (['referenceAudioPath', 'referenceTextPath'].includes(key)) {
+      updateProfileGuard();
+      settingsStatus('대표 녹음의 변경은 목소리 적용 버튼을 누르면 저장됩니다.');
+    } else await persistSettings({ label: SETTINGS_PATH_LABELS[key] || '경로' });
+  } catch (error) { settingsStatus(`경로를 바꾸지 못했습니다. ${error.message}`, 'failed'); }
 }));
 $("#open-finetune-panel").addEventListener("click", () => {
   animateLayout($("#finetune-panel").closest(".settings-panel"), () => {
@@ -1760,13 +1912,17 @@ $("#open-finetune-panel").addEventListener("click", () => {
     $("#open-finetune-panel").setAttribute("aria-expanded", String(!$("#finetune-panel").classList.contains("hidden")));
   });
 });
-$("#start-finetune").addEventListener("click", async () => {
-  const name = $("#finetune-name").value.trim();
-  const maxSteps = Number($("#finetune-steps").value);
+function showTrainingError(error) {
+  $('#finetune-error').classList.remove('hidden');
+  $('#finetune-error').textContent = error.message;
+}
+const training = createTrainingController({ $, api, start: startTraining, showError: showTrainingError });
+training.bind();
+async function startTraining(options) {
   $("#model-settings-dialog").close();
-  openJobDialog("파인튜닝 준비 중");
+  openJobDialog(options.mode === 'prepare' ? '녹음과 글 준비 중' : '새 목소리 준비 중');
   try {
-    await api.startFinetune({ name, maxSteps });
+    await api.startFinetune(options);
   } catch (error) {
     $("#edit-job-dialog").close();
     await openModelSettings();
@@ -1774,6 +1930,64 @@ $("#start-finetune").addEventListener("click", async () => {
     $("#finetune-panel").classList.remove("hidden");
     $("#finetune-error").classList.remove("hidden");
     $("#finetune-error").textContent = error.message;
+  }
+}
+$("#start-finetune").addEventListener("click", () => {
+  try { startTraining(training.options()); } catch (error) { showTrainingError(error); }
+});
+
+$('#import-training-recordings').addEventListener('click', async () => {
+  const displayName = $('#training-import-name').value.trim();
+  if (!displayName || displayName.length > 80) {
+    $('#training-import-hint').textContent = '먼저 새 목소리 이름을 입력해 주세요. 예: 발표자, 내레이션 담당자';
+    $('#training-import-name').setAttribute('aria-invalid', 'true');
+    $('#training-import-name').focus();
+    return;
+  }
+  $('#training-import-name').removeAttribute('aria-invalid');
+  $('#import-training-recordings').disabled = true;
+  $('#training-import-hint').textContent = '같은 사람의 녹음 파일을 선택해 주세요.';
+  try {
+    const job = await api.importTrainingDataset({ displayName });
+    if (!job) $('#training-import-hint').textContent = '파일 선택을 취소했습니다. 준비되면 녹음 불러오기를 다시 눌러 주세요.';
+  }
+  catch (error) { $('#training-import-hint').textContent = `녹음을 불러오지 못했습니다. ${error.message}`; }
+  finally { $('#import-training-recordings').disabled = false; }
+});
+$('#training-import-name').addEventListener('input', () => {
+  $('#training-import-name').removeAttribute('aria-invalid');
+  $('#training-import-hint').textContent = '한 사람의 녹음을 여러 개 선택할 수 있습니다. 원본은 그대로 보관합니다.';
+});
+$('#create-voice-preview').addEventListener('click', async () => {
+  previewReturnDraft = voiceDraft();
+  settingsJobRunning = true;
+  $('#create-voice-preview').disabled = true;
+  $('#model-settings-dialog').close();
+  openJobDialog('시험 음성 준비 중');
+  try { await api.startVoicePreview({ adapterId: previewReturnDraft.adapterId, adapterScale: previewReturnDraft.adapterScale }); }
+  catch (error) {
+    settingsJobRunning = false;
+    $('#edit-job-dialog').close();
+    applyVoiceDraft(previewReturnDraft);
+    if (!$('#model-settings-dialog').open) $('#model-settings-dialog').showModal();
+    settingsStatus(`시험 음성을 만들지 못했습니다. ${error.message}`, 'failed');
+  }
+  finally { updateProfileGuard(); }
+});
+$('#review-trained-voice').addEventListener('click', async () => {
+  $('#edit-job-dialog').close();
+  await openModelSettings('voice');
+  const adapter = appSettings?.adapters?.find(item => item.id === trainingResultAdapterId);
+  if (adapter) applyVoiceDraft({ ...appSettings, modelId: 'qwen3-tts', adapterId: adapter.id,
+    adapterScale: adapter.previewScale ?? appSettings.adapterScale });
+});
+$('#return-to-training').addEventListener('click', async () => {
+  $('#edit-job-dialog').close();
+  await openModelSettings(previewReturnDraft ? 'voice' : 'training');
+  if (previewReturnDraft) applyVoiceDraft(previewReturnDraft);
+  else {
+    $('#finetune-panel').classList.remove('hidden');
+    $('#open-finetune-panel').setAttribute('aria-expanded', 'true');
   }
 });
 

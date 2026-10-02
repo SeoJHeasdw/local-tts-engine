@@ -736,136 +736,208 @@
       <div class="modal-head"><h2 id="settings-title">설정</h2><button type="button" class="icon-button" data-close-dialog="model-settings-dialog" aria-label="설정 닫기">×</button></div>
       <div class="settings-shell">
         <nav class="settings-rail" id="settings-rail" aria-label="설정 구역">
-          <button type="button" class="selected" data-settings-section="general" aria-current="true" autofocus>일반</button>
-          <button type="button" data-settings-section="voice">목소리</button>
-          <button type="button" data-settings-section="training">학습</button>
+          <button type="button" class="selected" data-settings-section="general" aria-controls="settings-general-panel" aria-current="true" autofocus>일반</button>
+          <button type="button" data-settings-section="voice" aria-controls="settings-voice-panel">목소리 선택</button>
+          <button type="button" data-settings-section="training" aria-controls="settings-training-panel">새 목소리 만들기</button>
         </nav>
 
         <div class="settings-pane">
-          <section class="settings-panel" data-settings-panel="general" aria-labelledby="settings-general-title">
-            <h3 id="settings-general-title">일반</h3>
+          <section class="settings-panel" id="settings-general-panel" data-settings-panel="general" aria-labelledby="settings-general-title">
+            <div class="settings-section-head"><h3 id="settings-general-title">일반</h3><p>결과를 보관할 곳과 작업 환경을 정합니다. 바꾸면 바로 저장됩니다.</p></div>
             <div class="setting-rows">
               <div class="setting-row">
-                <div class="setting-copy"><strong>결과물 폴더</strong><small>영상·목소리·작업 파일을 이 아래에 자동으로 나눠 보관합니다.</small></div>
-                <div class="setting-control path-control"><input id="path-outputRoot" readonly aria-label="결과물 폴더 경로"><button type="button" data-pick-path="outputRoot">변경</button></div>
+                <div class="setting-copy"><strong><label for="path-outputRoot">결과물 폴더</label></strong><small id="output-path-hint">영상·목소리·작업 파일을 이 아래에 나누어 보관합니다.</small></div>
+                <div class="setting-control path-control"><input id="path-outputRoot" readonly aria-describedby="output-path-hint"><button type="button" data-pick-path="outputRoot" aria-label="결과물 폴더 변경">변경</button></div>
               </div>
               <div class="setting-row">
-                <div class="setting-copy"><strong>화면 테마</strong><small id="theme-hint">맥 설정을 따라갑니다.</small></div>
+                <div class="setting-copy"><strong>화면 테마</strong><small id="theme-hint">Mac 설정을 따라갑니다.</small></div>
                 <div class="setting-control"><div class="segmented theme-choice" id="theme-choice" role="group" aria-label="화면 테마"><button type="button" data-theme-mode="system" aria-pressed="true">시스템</button><button type="button" data-theme-mode="dark" aria-pressed="false">다크</button><button type="button" data-theme-mode="light" aria-pressed="false">라이트</button></div></div>
               </div>
               <div class="setting-row">
-                <div class="setting-copy"><strong>동시에 만들 후보</strong><small>후보마다 합성·독립 검수를 함께 실행합니다. 1개씩 만드는 것이 기본입니다.</small></div>
-                <div class="setting-control"><select id="global-parallelism" aria-label="동시에 만들 후보 수"><option value="1">1개 · 검수 안정 (기본)</option><option value="2">2개 · 메모리 여유가 있을 때</option></select></div>
-              </div>
-
-              <div class="setting-row">
-                <div class="setting-copy"><strong>작업 중 Mac 잠자기 방지</strong><small>한 챕터 제작은 일곱 시간을 넘습니다. 잠들면 제작도 함께 멈춥니다. 화면은 그대로 꺼집니다.</small></div>
-                <div class="setting-control"><input class="switch" id="prevent-sleep" type="checkbox" role="switch" aria-label="작업 중 Mac 잠자기 방지"></div>
+                <div class="setting-copy"><strong><label for="global-parallelism">동시에 만들 후보</label></strong><small id="parallelism-hint">각 후보의 음성 만들기와 자동 검수를 함께 진행합니다. 메모리가 부족하면 작업이 실패할 수 있습니다.</small></div>
+                <div class="setting-control"><select id="global-parallelism" aria-describedby="parallelism-hint"><option value="1">1개씩 · 기본</option><option value="2">2개씩 · 메모리 여유가 있을 때</option></select></div>
               </div>
               <div class="setting-row">
-                <div class="setting-copy"><strong>작업 끝나면 알림</strong><small>완료·실패를 맥 알림으로 알려 줍니다. 두 시간짜리 작업을 들여다보고 있지 않아도 됩니다.</small></div>
-                <div class="setting-control"><input class="switch" id="notify-finish" type="checkbox" role="switch" aria-label="작업 끝나면 알림"></div>
+                <div class="setting-copy"><strong><label for="prevent-sleep">작업 중 Mac 잠자기 방지</label></strong><small id="prevent-sleep-hint">작업이 끝날 때까지 컴퓨터가 잠들지 않게 합니다. 화면은 꺼질 수 있습니다.</small></div>
+                <div class="setting-control"><input class="switch" id="prevent-sleep" type="checkbox" role="switch" aria-describedby="prevent-sleep-hint"></div>
+              </div>
+              <div class="setting-row">
+                <div class="setting-copy"><strong><label for="notify-finish">작업 끝나면 알림</label></strong><small id="notify-finish-hint">완료하거나 실패하면 Mac 알림으로 알려 줍니다.</small></div>
+                <div class="setting-control"><input class="switch" id="notify-finish" type="checkbox" role="switch" aria-describedby="notify-finish-hint"></div>
               </div>
             </div>
 
-            <h4 class="setting-group-head">바꿀 일이 드문 경로<small>강의나 음성 프로필 자체를 옮길 때만 건드립니다.</small></h4>
-            <div class="setting-rows">
-              <div class="setting-row">
-                <div class="setting-copy"><strong>강의 소스</strong><small>대본과 슬라이드를 읽어 오는 저장소입니다.</small></div>
-                <div class="setting-control path-control"><input id="path-sourceProjectRoot" readonly aria-label="강의 소스 경로"><button type="button" data-pick-path="sourceProjectRoot">변경</button></div>
+            <details class="settings-details">
+              <summary><span>자료가 있는 폴더</span><small>강의 소스·녹음 보관 위치</small></summary>
+              <div class="settings-details-body">
+                <p class="settings-help">자료를 다른 곳에 보관할 때 변경하세요. 새 위치의 자료를 다음 작업부터 읽어 옵니다.</p>
+                <div class="setting-rows">
+                  <div class="setting-row">
+                    <div class="setting-copy"><strong><label for="path-sourceProjectRoot">강의 소스 폴더</label></strong><small id="source-path-hint">대본과 슬라이드를 읽어 오는 저장소입니다.</small></div>
+                    <div class="setting-control path-control"><input id="path-sourceProjectRoot" readonly aria-describedby="source-path-hint"><button type="button" data-pick-path="sourceProjectRoot" aria-label="강의 소스 폴더 변경">변경</button></div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy"><strong><label for="path-voiceLibraryRoot">녹음 보관 폴더</label></strong><small id="voice-library-path-hint">사람별 녹음 원본·정제본을 보관하는 위치입니다. 학습할 녹음은 새 목소리 만들기에서 고릅니다.</small></div>
+                    <div class="setting-control path-control"><input id="path-voiceLibraryRoot" readonly aria-describedby="voice-library-path-hint"><button type="button" data-pick-path="voiceLibraryRoot" aria-label="녹음 보관 폴더 변경">변경</button></div>
+                  </div>
+                </div>
               </div>
-              <div class="setting-row">
-                <div class="setting-copy"><strong>내 목소리 원본</strong><small>학습에 쓰는 원본·정제본 보관 위치입니다.</small></div>
-                <div class="setting-control path-control"><input id="path-voiceLibraryRoot" readonly aria-label="내 목소리 원본 경로"><button type="button" data-pick-path="voiceLibraryRoot">변경</button></div>
-              </div>
-              <div class="setting-row">
-                <div class="setting-copy"><strong>참조 음성</strong><small>합성할 때 목소리를 흉내 낼 짧은 클립입니다.</small></div>
-                <div class="setting-control path-control"><input id="path-referenceAudioPath" readonly aria-label="참조 음성 경로"><button type="button" data-pick-path="referenceAudioPath">변경</button></div>
-              </div>
-              <div class="setting-row">
-                <div class="setting-copy"><strong>참조 전사문</strong><small>참조 음성에서 실제로 읽은 말입니다. 정확해야 합니다.</small></div>
-                <div class="setting-control path-control"><input id="path-referenceTextPath" readonly aria-label="참조 전사문 경로"><button type="button" data-pick-path="referenceTextPath">변경</button></div>
-              </div>
-            </div>
+            </details>
           </section>
 
-          <section class="settings-panel hidden" data-settings-panel="voice" aria-labelledby="settings-voice-title">
-            <h3 id="settings-voice-title">목소리</h3>
-            <div class="profile-guard approved" id="profile-guard">
+          <section class="settings-panel hidden" id="settings-voice-panel" data-settings-panel="voice" aria-labelledby="settings-voice-title">
+            <div class="settings-section-head"><h3 id="settings-voice-title">목소리 선택</h3><p>앞으로 만들 음성에 사용할 목소리를 고릅니다. 샘플을 듣고 아래의 적용 버튼을 누르세요.</p></div>
+            <div class="profile-guard approved" id="profile-guard" role="status" aria-live="polite">
               <span aria-hidden="true">✓</span>
-              <div><strong id="profile-guard-title">제작 목소리</strong><p id="profile-guard-copy">프로필을 불러오는 중입니다.</p></div>
-              <button type="button" id="restore-production-profile">제작값 복원</button>
+              <div><strong id="profile-guard-title">현재 적용된 목소리</strong><p id="profile-guard-copy">현재 목소리를 불러오는 중입니다.</p></div>
+              <button type="button" id="restore-production-profile">승인된 기본값 복원</button>
             </div>
-            <section class="voice-readiness" aria-labelledby="voice-readiness-title">
-              <h4 id="voice-readiness-title">로컬 제작 준비</h4>
-              <p>모델을 실행하거나 내려받지 않고 파일만 확인합니다. 실제 음질은 합성 후 따로 검수하세요.</p>
-              <dl>
-                <div><dt>제작 Python</dt><dd id="voice-ready-trainPython">확인 중</dd></div>
-                <div><dt>길이 검사 도구</dt><dd id="voice-ready-ffprobe">확인 중</dd></div>
-                <div><dt>적용된 모델</dt><dd id="voice-ready-model">확인 중</dd></div>
-                <div><dt>참조 음성</dt><dd id="voice-ready-referenceAudio">확인 중</dd></div>
-                <div><dt>참조 전사문</dt><dd id="voice-ready-referenceText">확인 중</dd></div>
-                <div><dt>목소리 어댑터</dt><dd id="voice-ready-adapter">확인 중</dd></div>
-                <div><dt>자동 검수 모델</dt><dd id="voice-ready-quality">확인 중</dd></div>
-                <div><dt>단어 정렬 모델</dt><dd id="voice-ready-aligner">확인 중</dd></div>
-              </dl>
-              <p id="voice-readiness-issues" role="status"></p>
+            <div class="setting-rows">
+              <div class="setting-row">
+                <div class="setting-copy"><strong><label for="global-adapter">사용할 목소리</label></strong><small id="voice-profile-choice-hint">이름을 고르면 같은 사람의 학습값과 대표 녹음을 함께 사용합니다. 새 목소리는 왼쪽의 새 목소리 만들기에서 준비하세요.</small></div>
+                <div class="setting-control"><select id="global-adapter" aria-describedby="voice-profile-choice-hint"><option value="">목소리를 불러오는 중…</option></select></div>
+              </div>
+            </div>
+            <section class="voice-profile-sample" aria-labelledby="voice-profile-sample-title">
+              <div class="settings-sample-head"><h4 id="voice-profile-sample-title">선택한 목소리 들어보기</h4><span>저장된 시험 음성</span></div>
+              <p id="voice-profile-summary" role="status" aria-live="polite">목소리를 고르면 적용 상태와 샘플 정보를 확인할 수 있습니다.</p>
+              <audio id="voice-profile-preview" class="hidden" controls preload="none" aria-label="선택한 목소리 샘플"></audio>
+              <p id="voice-preview-empty" class="settings-help">샘플을 확인하는 중입니다.</p>
+              <div class="settings-sample-action"><button type="button" class="secondary-small" id="create-voice-preview" aria-describedby="voice-scale-hint voice-preview-empty" disabled>이 강도로 시험 음성 만들기</button></div>
+              <div class="voice-listening-review hidden" id="voice-listening-review">
+                <label><input type="checkbox" id="voice-listening-confirm"><span>이 시험 음성을 듣고 목소리와 발음을 확인했습니다</span></label>
+              </div>
             </section>
             <div class="setting-rows">
-              <div class="setting-row">
-                <div class="setting-copy"><strong>기본 모델</strong><small>한국어 제작은 Qwen3-TTS로 승인돼 있습니다.</small></div>
-                <div class="setting-control"><select id="global-model" aria-label="기본 모델"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 확인 중</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 확인 중</option></select></div>
-              </div>
-              <div class="setting-row">
-                <div class="setting-copy"><strong>목소리 어댑터</strong><small>내 목소리로 학습한 LoRA를 고릅니다.</small></div>
-                <div class="setting-control"><select id="global-adapter" aria-label="목소리 어댑터"></select></div>
-              </div>
               <div class="setting-row setting-row-wide" id="global-scale-field">
-                <div class="setting-copy"><strong>내 목소리 반영 강도</strong><small>한국어 제작 기본값은 0.60입니다. 바꾸면 짧은 샘플을 먼저 들어 보세요.</small></div>
+                <div class="setting-copy"><strong><label for="global-scale">목소리 반영 강도</label></strong><small id="voice-scale-hint">학습한 목소리의 특징을 얼마나 반영할지 정합니다. 강도를 바꾸면 등록된 샘플과 실제 결과가 달라질 수 있습니다.</small></div>
                 <div class="setting-control range-control">
-                  <output id="global-scale-output">0.60</output>
-                  <input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6" aria-label="내 목소리 반영 강도">
-                  <div class="range-labels"><span>기본 모델에 가깝게</span><span>학습값 그대로</span></div>
+                  <output id="global-scale-output" for="global-scale">0.60</output>
+                  <input id="global-scale" type="range" min="0.1" max="1" step="0.01" value="0.6" aria-describedby="voice-scale-hint">
+                  <div class="range-labels"><span>기본 모델의 말투에 가깝게</span><span>학습한 특징을 더 강하게</span></div>
                 </div>
               </div>
             </div>
-            <p class="setting-explain">승인된 영어 용어는 한국어 문장과 함께 읽습니다. Qwen의 영어 인용문은 LoRA 없이 내 목소리 특징만 참조해 따로 읽습니다.</p>
+            <details class="settings-details" id="voice-settings-advanced">
+              <summary><span>고급 설정·준비 상태</span><small>모델·대표 녹음·실행 환경</small></summary>
+              <div class="settings-details-body">
+                <div class="setting-rows">
+                  <div class="setting-row">
+                    <div class="setting-copy"><strong><label for="global-model">음성 모델</label></strong><small id="voice-model-hint">목소리를 만드는 엔진입니다. 모델을 바꾼 뒤에는 새 음성을 직접 들어 확인하세요.</small></div>
+                    <div class="setting-control"><select id="global-model" aria-describedby="voice-model-hint"><option value="qwen3-tts">Qwen3-TTS 1.7B Base · 확인 중</option><option value="chatterbox-v3">Chatterbox Multilingual V3 · 확인 중</option></select></div>
+                  </div>
+                </div>
+                <p id="voice-reference-path-hint" class="settings-help">등록된 목소리의 대표 녹음과 글은 목소리 선택에 맞춰 함께 바뀝니다.</p>
+                <div class="setting-rows">
+                  <div class="setting-row">
+                    <div class="setting-copy"><strong><label for="path-referenceAudioPath">대표 녹음 파일</label></strong><small id="reference-audio-hint">새 문장을 만들 때 음색과 말투의 기준으로 듣는 짧은 녹음입니다.</small></div>
+                    <div class="setting-control path-control"><input id="path-referenceAudioPath" readonly aria-describedby="reference-audio-hint voice-reference-path-hint"><button type="button" data-pick-path="referenceAudioPath" aria-label="대표 녹음 파일 변경">변경</button></div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy"><strong><label for="path-referenceTextPath">대표 녹음의 글 파일</label></strong><small id="reference-text-hint">대표 녹음에서 실제로 읽은 말입니다. 녹음과 정확히 맞아야 합니다.</small></div>
+                    <div class="setting-control path-control"><input id="path-referenceTextPath" readonly aria-describedby="reference-text-hint voice-reference-path-hint"><button type="button" data-pick-path="referenceTextPath" aria-label="대표 녹음의 글 파일 변경">변경</button></div>
+                  </div>
+                </div>
+                <section class="voice-readiness" aria-labelledby="voice-readiness-title">
+                  <h4 id="voice-readiness-title">이 설정으로 만들 준비가 됐나요?</h4>
+                  <p>실행 환경과 필요한 파일을 확인합니다. 실제 음질은 만든 음성을 들어서 확인하세요.</p>
+                  <dl>
+                    <div><dt>음성 실행 환경</dt><dd id="voice-ready-trainPython">확인 중</dd></div>
+                    <div><dt>음성 길이 확인 도구</dt><dd id="voice-ready-ffprobe">확인 중</dd></div>
+                    <div><dt>선택한 음성 모델</dt><dd id="voice-ready-model">확인 중</dd></div>
+                    <div><dt>대표 녹음</dt><dd id="voice-ready-referenceAudio">확인 중</dd></div>
+                    <div><dt>대표 녹음의 글</dt><dd id="voice-ready-referenceText">확인 중</dd></div>
+                    <div><dt>목소리 학습값</dt><dd id="voice-ready-adapter">확인 중</dd></div>
+                    <div><dt>자동 검수 모델</dt><dd id="voice-ready-quality">확인 중</dd></div>
+                    <div><dt>단어 위치 확인 모델</dt><dd id="voice-ready-aligner">확인 중</dd></div>
+                  </dl>
+                  <p id="voice-readiness-issues" role="status" aria-live="polite"></p>
+                </section>
+                <p class="settings-help">한국어 문장 속 영어 용어는 함께 읽습니다. 영어 인용문은 대표 녹음의 목소리를 참고해 따로 읽습니다.</p>
+              </div>
+            </details>
           </section>
 
-          <section class="settings-panel hidden" data-settings-panel="training" aria-labelledby="settings-training-title">
-            <h3 id="settings-training-title">학습</h3>
-            <div class="setting-rows">
-              <div class="setting-row">
-                <div class="setting-copy"><strong>새 파인튜닝</strong><small>검수 완료된 공식 데이터 82개 학습 클립을 사용합니다.</small></div>
-                <div class="setting-control"><button type="button" class="secondary-small" id="open-finetune-panel" aria-controls="finetune-panel" aria-expanded="false">준비하기</button></div>
-              </div>
+          <section class="settings-panel hidden" id="settings-training-panel" data-settings-panel="training" aria-labelledby="settings-training-title">
+            <div class="settings-section-head"><h3 id="settings-training-title">새 목소리 만들기</h3><p>한 사람의 녹음으로 새 목소리를 만듭니다. 자동 준비 뒤 직접 듣고 확인하는 과정이 필요합니다.</p></div>
+            <ol class="training-flow" aria-label="새 목소리를 만드는 순서">
+              <li><span>1</span><div><strong>녹음 자동 준비</strong><small>사람 선택·글 초안 만들기</small></div></li>
+              <li><span>2</span><div><strong>듣고 확인</strong><small>글 맞추기·쓸 녹음 고르기</small></div></li>
+              <li><span>3</span><div><strong>목소리 만들기</strong><small>학습·새 음성 듣기</small></div></li>
+            </ol>
+            <div class="training-intro-action">
+              <p>완료한 목소리는 목록에 추가됩니다. 직접 들어본 뒤 목소리 선택에서 적용하세요.</p>
+              <button type="button" class="secondary-small" id="open-finetune-panel" aria-controls="finetune-panel" aria-expanded="false">녹음 선택하고 시작</button>
             </div>
             <div class="finetune-panel hidden" id="finetune-panel">
-              <div class="setting-rows">
-                <div class="setting-row">
-                  <div class="setting-copy"><strong>결과 이름</strong><small>학습이 끝나면 이 이름의 어댑터가 생깁니다.</small></div>
-                  <div class="setting-control"><input id="finetune-name" autocomplete="off" aria-label="파인튜닝 결과 이름"></div>
+              <p id="training-step-status" class="training-workflow-status" role="status" aria-live="polite">학습할 녹음을 불러오는 중입니다.</p>
+              <section class="training-step" id="training-step-prepare" data-training-step="prepare" data-state="current" aria-labelledby="training-prepare-title">
+                <div class="training-step-head"><span aria-hidden="true">1</span><div><h4 id="training-prepare-title">녹음 선택·자동 준비</h4><p>새 녹음을 불러오거나 준비된 녹음 모음에서 고르세요. 글 초안을 만들고 녹음 품질을 분석합니다.</p></div></div>
+                <div class="training-import">
+                  <div class="setting-copy"><strong><label for="training-import-name">새 목소리 이름</label></strong><small id="training-import-hint">한 사람의 녹음을 여러 개 선택할 수 있습니다. 원본은 그대로 보관합니다. WAV·M4A·MP3 등 음성 파일을 지원합니다.</small></div>
+                  <div class="training-import-controls"><input id="training-import-name" maxlength="80" placeholder="목소리 목록에 표시할 이름" aria-describedby="training-import-hint"><button type="button" class="secondary-small" id="import-training-recordings">녹음 불러오기</button></div>
                 </div>
-                <div class="setting-row">
-                  <div class="setting-copy"><strong>학습 스텝</strong><small>많을수록 오래 걸리고 과적합 위험이 커집니다.</small></div>
-                  <div class="setting-control"><input id="finetune-steps" type="number" min="10" max="500" value="60" aria-label="학습 스텝"></div>
+                <div class="setting-rows">
+                  <div class="setting-row">
+                    <div class="setting-copy"><strong><label for="training-dataset">학습할 사람의 녹음</label></strong><small id="training-dataset-hint">준비된 녹음 모음에서 고릅니다. 한 사람의 녹음만 사용하세요.</small></div>
+                    <div class="setting-control"><select id="training-dataset" aria-describedby="training-dataset-hint"><option value="">녹음을 불러오는 중…</option></select></div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy"><strong><label for="training-profile-name">목소리 이름</label></strong><small id="training-name-hint">완료한 뒤 목소리 선택 목록에 표시할 이름입니다.</small></div>
+                    <div class="setting-control"><input id="training-profile-name" maxlength="80" placeholder="목소리 목록에 표시할 이름" aria-describedby="training-name-hint"></div>
+                  </div>
                 </div>
-              </div>
-              <p class="finetune-error hidden" id="finetune-error" role="status"></p>
-              <button class="primary-button full" type="button" id="start-finetune"><span>파인튜닝 시작</span><span aria-hidden="true">→</span></button>
+                <p id="training-summary" class="setting-explain" role="status" aria-live="polite">녹음 목록을 확인하고 있습니다.</p>
+                <div class="training-action-row"><button type="button" class="secondary-small" id="prepare-training" aria-describedby="training-prepare-hint" disabled>녹음과 글 자동 준비</button><button type="button" class="quiet-button" id="reload-training-datasets">녹음 목록 다시 불러오기</button></div>
+                <p id="training-prepare-hint" class="settings-help" role="status">목록을 불러온 뒤 자동 준비를 시작할 수 있습니다.</p>
+              </section>
+              <section class="training-step" id="training-step-review" data-training-step="review" aria-labelledby="training-review-title">
+                <div class="training-step-head"><span aria-hidden="true">2</span><div><h4 id="training-review-title">듣고 글을 확인하세요</h4><p>깨끗한 녹음과 정확한 글이 목소리 품질을 결정합니다. 자동 경고가 없어도 직접 들어보세요.</p></div></div>
+                <div class="training-role-guide">
+                  <div><strong>학습에 사용할 녹음 · 3개 이상</strong><p>목소리와 말투를 배울 자료입니다. 실제로 들리는 말과 글이 맞는지 확인하고, 잡음·다른 사람·잘린 말이 없는 녹음을 포함하세요.</p></div>
+                  <div><strong>대표 녹음 · 한 개</strong><p>새 문장을 만들 때 음색과 말투의 기준으로 듣는 녹음입니다. 학습에 포함한 녹음 중 평소 말투가 또렷한 하나를 고르세요.</p></div>
+                </div>
+                <details class="settings-details training-review-help"><summary><span>자동 분석 결과는 어떻게 보나요?</span></summary><div class="settings-details-body"><p class="settings-help">받아쓰기 일치도는 두 자동 받아쓰기가 같은 말을 적었는지 비교한 값입니다. 정답률이나 목소리 유사도가 아닙니다. 90% 미만이면 글의 차이를 확인하세요. 대표 녹음은 6~12초 길이와 녹음 경고 없음 기준으로 추천합니다. 추천만으로 청취가 완료되지는 않습니다.</p></div></details>
+                <div id="training-recommendation" class="training-recommendation hidden">
+                  <p id="training-reference-hint"></p><button type="button" class="secondary-small" id="listen-training-reference">추천 녹음 듣기</button>
+                </div>
+                <div class="training-selection" role="status" aria-live="polite"><strong id="training-selection">아직 확인한 녹음이 없습니다.</strong><p id="training-selection-hint">녹음을 듣고 사용할 자료와 대표 녹음을 골라 주세요.</p></div>
+                <p id="training-review-empty" class="training-empty" role="status">녹음을 고르면 여기에 듣고 확인할 자료가 표시됩니다.</p>
+                <div id="training-clips" class="training-clips" aria-label="듣고 확인할 녹음"></div>
+              </section>
+              <section class="training-step" id="training-step-create" data-training-step="create" aria-labelledby="training-create-title">
+                <div class="training-step-head"><span aria-hidden="true">3</span><div><h4 id="training-create-title">새 목소리 만들기</h4><p>선택한 자료로 학습하고 시험 음성을 만듭니다. 완료한 음성을 직접 들어본 뒤 사용 여부를 정하세요.</p></div></div>
+                <details class="settings-details" id="training-settings-advanced">
+                  <summary><span>고급 학습 설정</span><small>결과 폴더 이름·학습 횟수</small></summary>
+                  <div class="settings-details-body">
+                    <div class="setting-rows">
+                      <div class="setting-row">
+                        <div class="setting-copy"><strong><label for="finetune-name">결과 폴더 이름</label></strong><small id="training-run-name-hint">작업을 구분하는 저장 이름입니다. 자동으로 정해지며 목소리 표시 이름과는 별개입니다.</small></div>
+                        <div class="setting-control"><input id="finetune-name" autocomplete="off" spellcheck="false" aria-describedby="training-run-name-hint"></div>
+                      </div>
+                      <div class="setting-row">
+                        <div class="setting-copy"><strong><label for="finetune-steps">학습 횟수</label></strong><small id="training-steps-hint">많을수록 오래 걸립니다. 너무 반복하면 새 문장을 읽는 품질이 떨어질 수 있습니다.</small></div>
+                        <div class="setting-control"><input id="finetune-steps" type="number" min="10" max="500" value="60" aria-describedby="training-steps-hint"></div>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+                <p class="finetune-error hidden" id="finetune-error" role="alert"></p>
+                <button class="primary-button full" type="button" id="start-finetune" aria-describedby="training-selection-hint" disabled><span id="training-start-label">새 목소리 만들기</span><span aria-hidden="true">→</span></button>
+              </section>
             </div>
           </section>
         </div>
       </div>
       <div class="settings-footer">
-        <div class="voice-commit hidden" id="voice-commit" role="status">
-          <div><strong>제작 목소리를 바꿉니다</strong><small id="voice-commit-diff"></small></div>
+        <div class="voice-commit hidden" id="voice-commit" role="status" aria-live="polite">
+          <div><strong>목소리 변경이 아직 적용되지 않았습니다</strong><small id="voice-commit-diff"></small></div>
           <div class="voice-commit-actions">
-            <button type="button" class="secondary-small" id="voice-commit-cancel">되돌리기</button>
-            <button type="button" class="primary-small" id="voice-commit-apply">이 값으로 적용</button>
+            <button type="button" class="secondary-small" id="voice-commit-cancel">변경 취소</button>
+            <button type="button" class="primary-small" id="voice-commit-apply" aria-describedby="voice-commit-diff">선택한 목소리 적용</button>
           </div>
         </div>
-        <p id="settings-status">바꾸는 즉시 저장됩니다. 제작 목소리만 적용을 한 번 더 확인합니다.</p>
+        <p id="settings-status" role="status" aria-live="polite">일반 설정은 바로 저장됩니다. 목소리 변경은 적용 버튼을 누르면 저장됩니다.</p>
       </div>
     </dialog>
 
@@ -874,12 +946,13 @@
       <div class="job-modal-body">
         <div class="job-spinner" id="edit-dialog-spinner"><span class="spinner"></span><p id="edit-running-label">원본은 그대로 두고 새 결과를 만들고 있습니다.</p></div>
         <div class="job-success hidden" id="edit-dialog-success"><div class="complete-icon">✓</div><p id="edit-complete-summary"></p><p class="record-done-warnings hidden" id="edit-complete-warnings" role="status"></p></div>
+        <audio id="training-preview" class="hidden" controls preload="none" aria-label="새 목소리 강도 0.60 시험 음성"></audio>
         <div class="job-error hidden" id="edit-dialog-error"><strong>작업을 완료하지 못했습니다.</strong><p id="edit-error-message"></p></div>
         <div class="candidate-gallery hidden" id="candidate-gallery"><p>각 후보를 재생해 보고 가장 마음에 드는 목소리를 고르세요.</p><div id="candidate-list"></div></div>
         <div class="batch-progress hidden" id="batch-progress"><div class="batch-progress-head"><span id="batch-progress-text">0 / 0 완료</span><span class="batch-eta" id="batch-eta"></span></div><div><i id="batch-progress-bar"></i></div></div>
         <details class="log-panel"><summary>상세 기록</summary><pre id="edit-log"></pre></details>
       </div>
-      <div class="modal-actions"><button class="secondary-small" id="cancel-edit-button" type="button">작업 중지</button><button class="primary-small hidden" id="apply-voice-candidate" type="button">선택한 목소리로 교체</button><button class="primary-small hidden" id="open-edit-result" type="button">결과 열기</button><button class="secondary-small hidden" id="reveal-edit-result" type="button">Finder</button></div>
+      <div class="modal-actions"><button class="secondary-small" id="cancel-edit-button" type="button">작업 중지</button><button class="secondary-small hidden" id="return-to-training" type="button">녹음 확인으로 돌아가기</button><button class="primary-small hidden" id="review-trained-voice" type="button">이 목소리 검토하기</button><button class="primary-small hidden" id="apply-voice-candidate" type="button">선택한 목소리로 교체</button><button class="primary-small hidden" id="open-edit-result" type="button">결과 열기</button><button class="secondary-small hidden" id="reveal-edit-result" type="button">Finder</button></div>
     </dialog>
     <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="true"></div>
   </body>

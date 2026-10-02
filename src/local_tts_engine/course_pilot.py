@@ -602,20 +602,20 @@ def _synthesize_excerpt(
         model = load_tts_model(model_path)
     else:
         from mlx_tune import FastTTSModel
+        from .finetune_adapter import load_adapter_settings
+
+        adapter_settings = load_adapter_settings(adapter_path)
 
         training_wrapper, _ = FastTTSModel.from_pretrained(
             model_name=str(model_path),
-            max_seq_length=512,
+            max_seq_length=adapter_settings["maxSequenceLength"],
         )
         training_wrapper = FastTTSModel.get_peft_model(
             training_wrapper,
-            r=16,
-            lora_alpha=16,
-            lora_dropout=0.0,
-            target_modules=[
-                "q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj",
-            ],
+            r=adapter_settings["rank"],
+            lora_alpha=adapter_settings["alpha"],
+            lora_dropout=adapter_settings["dropout"],
+            target_modules=adapter_settings["targetModules"],
             random_state=seed,
         )
         training_wrapper.load_adapter(str(adapter_path))

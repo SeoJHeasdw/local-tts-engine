@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
-import { ADAPTER, DEFAULT_QUALITY_ATTEMPTS, FINETUNE_RUN_ROOT, FINETUNE_TRAIN_JSONL, LEGACY_OUTPUT_PATHS, dateFolder, runtimePaths } from "./paths.mjs";
+import { ADAPTER, DEFAULT_QUALITY_ATTEMPTS, LEGACY_OUTPUT_PATHS, dateFolder, runtimePaths } from "./paths.mjs";
 import { assertPageReplaceable, isInside, mapWithConcurrency, voiceQualityFindings } from "../shared/index.mjs";
 import { pathToFileURL } from "node:url";
 import { assertCurrentCourseManifest } from "./course-run-state.mjs";
@@ -461,36 +461,6 @@ export function createVoicesService({
     return report;
   }
 
-  async function runFineTune(options) {
-    const studio = runtimePaths(options.paths);
-    const outputDir = path.join(FINETUNE_RUN_ROOT, dateFolder(), options.name);
-    await fs.mkdir(outputDir, { recursive: true });
-    await runProcess("training", requireRuntimeTool("trainPython", "음성 생성 Python"), [
-      "-m", "local_tts_engine.finetune_mlx",
-      "--train-jsonl", FINETUNE_TRAIN_JSONL,
-      "--output-dir", outputDir,
-      "--max-steps", String(options.maxSteps),
-      "--rank", "16",
-      "--alpha", "16",
-      "--gradient-accumulation", "4",
-      "--learning-rate", "0.00002",
-      "--eval-output", path.join(outputDir, "eval-after.wav"),
-      "--reference", studio.referenceAudioPath,
-      "--reference-text", studio.referenceTextPath,
-    ]);
-    const result = JSON.parse(await fs.readFile(path.join(outputDir, "training-result.json"), "utf8"));
-    const settings = await readAppSettings();
-    const adapter = settings.adapters.find((item) => item.path === result.adapterDir)
-      || settings.adapters.find((item) => item.label === options.name)
-      || null;
-    const updatedSettings = adapter
-      ? await saveAppSettings({ ...settings, modelId: "qwen3-tts", adapterId: adapter.id })
-      : settings;
-    state.activeJob.state = "done";
-    state.activeJob.stage = "done";
-    emit({ type: "training-complete", result, adapter, settings: updatedSettings });
-  }
-
   return { generateReplacementVoice, runVoiceCandidates, runTextVoiceCandidates, selectTextVoice,
-    listTextVoiceCandidates, selectTextVoiceFromHistory, runFineTune };
+    listTextVoiceCandidates, selectTextVoiceFromHistory };
 }

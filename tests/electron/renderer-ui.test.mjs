@@ -148,15 +148,13 @@ test("테마는 첫 그림 전에 정해지고 화면에는 하나만 박힌다"
 // 일곱 시간짜리 제작이 도는 동안 맥이 잠들면 제작도 멈춘다. 두 시간 뒤에 끝나는
 // 작업을 계속 들여다볼 수도 없다. 동작은 attention 검사가 맡는다.
 test("자리를 비울 수 있게 하는 두 설정이 화면과 저장에 함께 있다", async () => {
-  const [html, script, main] = await Promise.all([
+  const [html, main] = await Promise.all([
     fs.readFile(path.join(renderer, "index.html"), "utf8"),
-    readRendererSource(),
     readMainSource(),
   ]);
   assert.match(html, /class="switch" id="prevent-sleep"[^>]*role="switch"/);
   assert.match(html, /class="switch" id="notify-finish"[^>]*role="switch"/);
-  assert.match(script, /preventSleep: \$\("#prevent-sleep"\)\.checked,/);
-  assert.match(script, /notifyOnFinish: \$\("#notify-finish"\)\.checked,/);
+  // The real settings handlers are exercised in settings-flow.test.mjs.
   // 기본은 켜 둔다. 일곱 시간짜리 작업에서 꺼져 있어 좋을 까닭이 없다.
   assert.match(main, /preventSleep: stored\.preventSleep !== false,/);
   assert.match(main, /notifyOnFinish: stored\.notifyOnFinish !== false,/);
@@ -189,20 +187,13 @@ test("설정은 구역 레일과 한 줄 한 설정으로 서고, 옛 두 기둥
 // 저장 버튼을 누르지 않고 닫아 조용히 날아가는 일이 없어야 한다. 다만 제작
 // 목소리는 전체 강의의 목소리를 정하는 값이라 적용을 한 번 더 확인한다.
 test("설정은 즉시 저장하고, 제작 목소리만 적용을 따로 받는다", async () => {
-  const [html, script] = await Promise.all([
-    fs.readFile(path.join(renderer, "index.html"), "utf8"),
-    readRendererSource(),
-  ]);
+  const html = await fs.readFile(path.join(renderer, "index.html"), "utf8");
   assert.doesNotMatch(html, /id="save-model-settings"/, "저장 버튼은 사라졌다");
-  assert.match(script, /\$\("#global-parallelism"\)\.addEventListener\("change", \(\) => persistSettings\(/);
-  assert.match(script, /await persistSettings\(\{ label: SETTINGS_PATH_LABELS\[key\]/);
-  // 경로 하나를 바꾼 것이 아직 적용하지 않은 목소리까지 함께 바꾸면 안 된다.
-  assert.match(script, /const voice = includeVoice \? draft : \{/);
-  assert.match(script, /modelId: appSettings\.modelId,/);
-  assert.match(script, /if \(!includeVoice\) applyVoiceDraft\(draft\);/);
-  // 적용은 따로 누른다. 누르지 않고 닫으면 버렸다고 말한다.
-  assert.match(script, /\$\("#voice-commit-apply"\)\.addEventListener\("click", \(\) => persistSettings\(\{ includeVoice: true/);
-  assert.match(script, /적용하지 않은 제작 목소리 변경은 버렸습니다/);
+  // Actual save ordering, draft preservation and listening confirmation use
+  // the real application in settings-flow.test.mjs, rather than source regexes.
+  assert.match(html, /id="voice-commit-apply"/);
+  assert.match(html, /id="voice-commit-cancel"/);
+  assert.match(html, /id="voice-listening-confirm"/);
   assert.match(html, /id="voice-commit-diff"/);
 });
 

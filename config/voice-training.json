@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "model": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
+  "transcriptionModel": "mlx-community/Qwen3-ASR-0.6B-8bit",
+  "comparisonModel": "mlx-community/whisper-large-v3-turbo-asr-fp16",
+  "comparisonModelPath": "artifacts/models/whisper-large-v3-turbo-asr-fp16",
+  "training": {
+    "rank": 16,
+    "alpha": 16,
+    "gradientAccumulation": 4,
+    "learningRate": 0.00002,
+    "weightDecay": 0.01,
+    "maxSequenceLength": 512,
+    "warmupSteps": 5,
+    "seed": 20260825
+  },
+  "comparison": {
+    "steps": [10, 20],
+    "warmupSteps": 2,
+    "seed": 20261001,
+    "qualityAttempts": 4
+  },
+  "preview": {
+    "text": "안녕하세요. 오늘은 새로운 기술을 업무에 적용하는 방법을 살펴보겠습니다. 중요한 것은 작은 사례부터 직접 확인하는 것입니다.\n",
+    "scale": 0.6,
+    "seed": 20261001
+  }
+}
