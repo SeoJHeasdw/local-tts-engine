@@ -11,7 +11,7 @@ import math
 import re
 from typing import Any
 
-from .alignment_audit import voiced_spans
+from .alignment_audit import WORD_OVERLAP_TOLERANCE_MS, voiced_spans
 from .settings import STEP_VISUAL_LEAD_MS, SLIDE_VISUAL_LEAD_MS
 
 ALIGNMENT_REPAIR_VERSION = "waveform-constrained-v3"
@@ -118,7 +118,9 @@ def _place_words(words: list[dict], start: float, end: float) -> tuple[list[dict
     outside = [w["startMs"] < start - 180 or w["endMs"] > end + 180 for w in words]
     # Strong trailing drift is another indication that later anchors failed.
     drift = end - words[-1]["endMs"] > 350
-    if any(collapsed) or any(outside) or drift:
+    overlapping = any(right["startMs"] < left["endMs"] - WORD_OVERLAP_TOLERANCE_MS
+                      for left, right in zip(words, words[1:]))
+    if any(collapsed) or any(outside) or drift or overlapping:
         rates = sorted((w["endMs"] - w["startMs"]) / weight
                        for w, weight, bad in zip(words, weights, collapsed) if not bad)
         cap = max(400.0, 3 * rates[len(rates) // 2]) if rates else 400.0
@@ -138,7 +140,7 @@ def _place_words(words: list[dict], start: float, end: float) -> tuple[list[dict
                     break
         previous_end = -math.inf
         for i in range(n):
-            if anchor[i] and words[i]["startMs"] < previous_end - 20:
+            if anchor[i] and words[i]["startMs"] < previous_end - WORD_OVERLAP_TOLERANCE_MS:
                 anchor[i] = False
             elif anchor[i]:
                 previous_end = words[i]["endMs"]

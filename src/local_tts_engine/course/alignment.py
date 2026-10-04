@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
+import os
+import tempfile
 import unicodedata
 from pathlib import Path
 from typing import Any
 
-from .serialization import stable_digest, write_json
+from .serialization import stable_digest
 from .types import CourseChunk
 
 
@@ -50,6 +53,10 @@ def entry_alignment_slices(
         raise RuntimeError(
             f"{chunk.key} 정렬 토큰 수가 다릅니다: expected={sum(counts)}, actual={len(words)}"
         )
+    expected = [token for entry in chunk.entries for token in alignment_tokens(entry.tts_text)]
+    actual = [clean_alignment_token(str(word.get("text", ""))) for word in words]
+    if actual != expected:
+        raise RuntimeError(f"{chunk.key} 정렬 단어가 현재 발음문과 다릅니다.")
     result: list[list[dict[str, Any]]] = []
     cursor = 0
     for count in counts:
@@ -121,6 +128,31 @@ def merge_step_record_parts(records: list[dict[str, Any]]) -> list[dict[str, Any
     return merged
 
 
+def read_cached_alignment(
+    chunk: CourseChunk, clip: dict[str, Any], alignment_path: Path,
+) -> list[dict[str, Any]] | None:
+    """Reuse only complete records bound to this chunk, text, hash and duration."""
+    try:
+        record = json.loads(alignment_path.read_text(encoding="utf-8"))
+        if (record.get("schemaVersion") != 1 or record.get("chunkKey") != chunk.key
+                or record.get("hash") != clip["hash"] or not isinstance(record.get("words"), list)):
+            return None
+        words = record["words"]
+        entry_alignment_slices(chunk, words)
+        duration = (float(clip["frames"]) * 1000 / float(clip["sampleRate"])
+                    if "frames" in clip and "sampleRate" in clip else clip.get("durationMs"))
+        if duration is not None and (not math.isfinite(float(duration)) or float(duration) <= 0):
+            return None
+        for word in words:
+            start, end = float(word["startMs"]), float(word["endMs"])
+            if (not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < start
+                    or (duration is not None and end > float(duration) + 1)):
+                return None
+        return words
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, AttributeError, RuntimeError, ZeroDivisionError):
+        return None
+
+
 def load_or_create_alignment(
     chunk: CourseChunk,
     clip: dict[str, Any],
@@ -143,8 +175,9 @@ def load_or_create_alignment(
     Returns:
         단어별 {"text", "startMs", "endMs"} 딕셔너리 목록.
     """
-    if use_cache and alignment_path.is_file():
-        return json.loads(alignment_path.read_text(encoding="utf-8"))["words"]
+    cached = read_cached_alignment(chunk, clip, alignment_path) if use_cache else None
+    if cached is not None:
+        return cached
     if aligner is None:
         raise RuntimeError(f"{chunk.key} 정렬 캐시가 없지만 aligner가 로드되지 않았습니다.")
 
@@ -166,13 +199,21 @@ def load_or_create_alignment(
     ]
     # 토큰 수 일관성 검증 후 캐시 저장
     entry_alignment_slices(chunk, words)
-    write_json(
-        alignment_path,
-        {
-            "schemaVersion": 1,
-            "chunkKey": chunk.key,
-            "hash": clip["hash"],
-            "words": words,
-        },
-    )
+    record = {
+        "schemaVersion": 1,
+        "chunkKey": chunk.key,
+        "hash": clip["hash"],
+        "words": words,
+    }
+    alignment_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=alignment_path.parent,
+                                     prefix=f".{alignment_path.name}.", delete=False) as pending:
+        pending_path = Path(pending.name)
+        try:
+            pending.write(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+            pending.flush()
+            os.fsync(pending.fileno())
+            os.replace(pending_path, alignment_path)
+        finally:
+            pending_path.unlink(missing_ok=True)
     return words

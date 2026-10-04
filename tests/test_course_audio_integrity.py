@@ -129,6 +129,61 @@ def test_long_gap_does_not_dilute_a_short_quiet_intrusion(tmp_path) -> None:
     }
 
 
+def test_long_clips_compare_samples_between_the_former_stride_positions(tmp_path) -> None:
+    rate = 24_000
+    speech = (0.1 * np.sin(2 * np.pi * 190 * np.arange(10 * rate) / rate)).astype(np.float32)
+    clip, native, final = (tmp_path / name for name in ("clip.wav", "native.wav", "final.wav"))
+    sf.write(clip, speech, rate, subtype="PCM_24")
+    sf.write(native, speech, rate, subtype="PCM_24")
+    damaged = speech.copy()
+    damaged[1::2] = 0
+    sf.write(final, damaged, rate, subtype="PCM_24")
+    report = inspect_final_track(native, final, [
+        {"key": "clip", "audioPath": str(clip), "startSample": 0, "endSample": len(speech)},
+    ])
+    assert report["status"] == "failed"
+    assert "waveform-changed" in {issue["code"] for issue in report["issues"]}
+    assert report["chunks"][0]["similarity"] < 0.85
+
+
+def test_local_near_muting_fails_but_uniform_normalization_gain_passes(tmp_path) -> None:
+    rate = 24_000
+    speech = (0.1 * np.sin(2 * np.pi * 190 * np.arange(10 * rate) / rate)).astype(np.float32)
+    clip, native, final = (tmp_path / name for name in ("clip.wav", "native.wav", "final.wav"))
+    sf.write(clip, speech, rate, subtype="PCM_24")
+    sf.write(native, speech, rate, subtype="PCM_24")
+    chunks = [{"key": "clip", "audioPath": str(clip), "startSample": 0, "endSample": len(speech)}]
+    sf.write(final, speech * 1.5, rate, subtype="PCM_24")
+    assert inspect_final_track(native, final, chunks)["status"] == "ok"
+    damaged = speech * 1.5
+    damaged[2 * rate:3 * rate] *= 0.001
+    sf.write(final, damaged, rate, subtype="PCM_24")
+    report = inspect_final_track(native, final, chunks)
+    assert report["status"] == "failed"
+    assert "local-signal-loss" in {issue["code"] for issue in report["issues"]}
+    assert report["chunks"][0]["minimumLocalGainRatio"] < 0.002
+
+
+def test_a_loud_first_phrase_cannot_hide_near_muting_most_quieter_speech(tmp_path) -> None:
+    rate = 24_000
+    wave = np.sin(2 * np.pi * 190 * np.arange(10 * rate) / rate)
+    speech = (wave * 0.03).astype(np.float32)
+    speech[:rate] = wave[:rate] * 0.4
+    clip, native, final = (tmp_path / name for name in ("clip.wav", "native.wav", "final.wav"))
+    sf.write(clip, speech, rate, subtype="PCM_24")
+    sf.write(native, speech, rate, subtype="PCM_24")
+    chunks = [{"key": "clip", "audioPath": str(clip), "startSample": 0, "endSample": len(speech)}]
+    sf.write(final, speech * 1.5, rate, subtype="PCM_24")
+    assert inspect_final_track(native, final, chunks)["status"] == "ok"
+    damaged = speech.copy()
+    damaged[rate:] *= 0.001
+    sf.write(final, damaged, rate, subtype="PCM_24")
+    report = inspect_final_track(native, final, chunks)
+    assert report["status"] == "failed"
+    assert "local-signal-loss" in {issue["code"] for issue in report["issues"]}
+    assert report["chunks"][0]["minimumLocalGainRatio"] < 0.002
+
+
 def test_short_tail_intrusion_is_not_diluted_by_end_padding(tmp_path) -> None:
     rate = 24_000
     speech = (0.1 * np.sin(2 * np.pi * 190 * np.arange(rate) / rate)).astype(np.float32)

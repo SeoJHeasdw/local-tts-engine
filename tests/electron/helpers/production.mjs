@@ -10,11 +10,12 @@ import { fileSha256 } from '../../../electron-app/main/files.mjs';
 
 // Real orchestration, contracts, validation, publication and recovery; only the
 // model/capture processes and probes are replaced. Outputs are isolated.
-export async function productionFixture(t, { mode = 'chapter', chapterMode = 'lesson', quality = 'high' } = {}) {
+export async function productionFixture(t, { mode = 'chapter', chapterMode = 'lesson', quality = 'high', deliverable = 'video', productionDay = null } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tts-production-run-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const options = { ...normalizeOptions({ name: 'test', title: 'CH03', mode, chapterMode,
-    chapter: 'ch03', startPage: 312, endPage: 414, videoQuality: quality }), paths: { outputRoot: dir } };
+    chapter: 'ch03', startPage: 312, endPage: 414, videoQuality: quality, deliverable }),
+    ...(productionDay ? { productionDay } : {}), paths: { outputRoot: dir } };
   const studio = runtimePaths(options.paths);
   assert.ok(studio.captionOutputRoot.startsWith(`${dir}/`));
   const project = path.join(studio.captionOutputRoot, options.name, '.production-input');
@@ -60,7 +61,7 @@ export async function productionFixture(t, { mode = 'chapter', chapterMode = 'le
         throw new Error('사용자가 작업을 중지했습니다.');
       }
       if (failures.get(name) === stage) throw new Error(`${name}: ${stage} 테스트 실패`);
-      const sourceDir = path.join(studio.ttsOutputRoot, dateFolder(), name);
+      const sourceDir = path.join(studio.ttsOutputRoot, options.productionDay || dateFolder(), name);
       const renderDir = path.join(studio.captionOutputRoot, name);
       if (stage === 'voice') {
         assert.ok(args.includes('--no-cache'));
@@ -73,13 +74,16 @@ export async function productionFixture(t, { mode = 'chapter', chapterMode = 'le
           chunks: [{ key: 'chunk', startMs: 0, endMs: 1000 }],
           quality: { enabled: true, summary: { clean: true }, chunks: [] },
         });
+        await fs.writeFile(path.join(sourceDir, 'audio.wav'), `voice-${name}`);
       } else if (stage === 'export') {
         // 타임라인은 내보내기가 만들고, 자막·촬영이 그것을 지목해 읽는다.
         assert.equal(JSON.parse(value('--preset-json')).name, name);
-        await json(path.join(renderDir, 'timeline.json'), { totalMs: 1000, entries: [] });
+        await json(path.join(renderDir, 'timeline.json'), { totalMs: 1000, entries: [{ startMs: 0, endMs: 1000 }] });
       } else if (stage === 'captions') {
         assert.equal(value('--timeline'), path.join(renderDir, 'timeline.json'));
         await json(path.join(renderDir, 'captions.json'), [{ text: '원문', startMs: 0, endMs: 1000 }]);
+        await fs.writeFile(path.join(renderDir, 'captions.srt'), '1\n00:00:00,000 --> 00:00:01,000\n원문\n');
+        await fs.writeFile(path.join(renderDir, 'captions.vtt'), 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n원문\n');
       } else if (stage === 'capture') {
         assert.ok(args.includes('--no-cache'));
         assert.equal(value('--timeline'), path.join(renderDir, 'timeline.json'));

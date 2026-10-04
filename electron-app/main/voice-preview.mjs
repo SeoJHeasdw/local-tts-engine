@@ -6,7 +6,7 @@ import { dateFolder } from './paths.mjs';
 import { fileSha256 } from './files.mjs';
 import { readTrainingConfig } from './training-config.mjs';
 import { inspectCachedModel } from './voice-readiness.mjs';
-import { readVoiceProfile, writeVoiceProfile } from './voice-profile.mjs';
+import { readVoiceProfile, writeVoiceProfile, voiceInputIdentity, voiceInputMatches } from './voice-profile.mjs';
 
 export function createVoicePreviewService({ readAppSettings, requireRuntimeTool, runProcess, emit, state,
   inspectModel = inspectCachedModel }) {
@@ -24,6 +24,7 @@ export function createVoicePreviewService({ readAppSettings, requireRuntimeTool,
     const text = path.join(output, 'text.txt'), audio = path.join(output, 'preview.wav');
     await fs.writeFile(text, config.preview.text, 'utf8');
     const refs = adapter.referencePaths;
+    const identity = await voiceInputIdentity(adapter.path, refs);
     await runProcess('voice', requireRuntimeTool('trainPython', '목소리 제작 도구'),
       ['-m', 'local_tts_engine.text_candidate', '--model-path', model.path,
         '--text-file', text, '--reference', refs.referenceAudioPath, '--reference-text', refs.referenceTextPath,
@@ -31,6 +32,9 @@ export function createVoicePreviewService({ readAppSettings, requireRuntimeTool,
         '--metadata', path.join(output, 'preview.json'), '--seed', String(config.preview.seed),
         '--quality-review', '--quality-attempts', String(config.comparison.qualityAttempts)]);
     if (state.activeJob.cancelled) throw new Error('시험 음성 만들기를 중지했습니다.');
+    if (!voiceInputMatches(identity, await voiceInputIdentity(adapter.path, refs))) {
+      throw new Error('시험 음성을 만드는 동안 목소리 파일·대표 녹음·전사가 바뀌었습니다. 다시 만들어 주세요.');
+    }
     const runDirectory = path.dirname(adapter.path);
     let profile;
     try { ({ profile } = await readVoiceProfile(runDirectory)); }
@@ -41,8 +45,7 @@ export function createVoicePreviewService({ readAppSettings, requireRuntimeTool,
         referenceAudioPath: refs.referenceAudioPath, referenceTextPath: refs.referenceTextPath };
     }
     const preview = { audioPath: audio, audioSha256: await fileSha256(audio), scale,
-      adapterWeightsSha256: await fileSha256(path.join(adapter.path, 'adapters.safetensors')),
-      adapterConfigSha256: await fileSha256(path.join(adapter.path, 'adapter_config.json')),
+      ...identity,
       generatedAt: new Date().toISOString() };
     await writeVoiceProfile(runDirectory, { ...profile, preview });
     state.activeJob.state = 'done';

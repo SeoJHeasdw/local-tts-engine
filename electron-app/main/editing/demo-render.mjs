@@ -295,11 +295,9 @@ export async function renderAppDemo({
     fs.renameSync(workFile, finalFile);
     done = true;
 
-    if (cues.length) {
-      fs.writeFileSync(path.join(demoDir, "captions.srt"), captionsToSrt(cues), "utf8");
-      fs.writeFileSync(path.join(demoDir, "captions.vtt"), captionsToVtt(cues), "utf8");
-      writeCaptureReport(path.join(demoDir, "captions.json"), { schemaVersion: 1, cues });
-    }
+    fs.writeFileSync(path.join(demoDir, "captions.srt"), captionsToSrt(cues), "utf8");
+    fs.writeFileSync(path.join(demoDir, "captions.vtt"), captionsToVtt(cues), "utf8");
+    writeCaptureReport(path.join(demoDir, "captions.json"), { schemaVersion: 1, cues });
 
     const video = probe.streams.find(stream => stream.codec_type === "video");
     const audio = probe.streams.find(stream => stream.codec_type === "audio") || null;

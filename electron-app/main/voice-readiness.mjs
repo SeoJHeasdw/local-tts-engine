@@ -2,6 +2,7 @@ import nativeFs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ROOT } from "./paths.mjs";
+import { voiceInputIdentity, voiceInputMatches } from './voice-profile.mjs';
 
 const MODEL_REPOSITORIES = Object.freeze({
   "qwen3-tts": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
@@ -144,6 +145,13 @@ export async function inspectVoiceReadiness(settings, studio, { fs = nativeFs, e
   const combined = (...items) => ({ state: items.every((item) => item === "ready") ? "ready"
     : items.includes("unknown") ? "unknown" : items.includes("incomplete") ? "incomplete" : "missing" });
   const chatterbox = combined(chatterboxModel.state, chatterboxTokenizer.state);
+  let approvalError = selectedAdapter?.approvalError;
+  if (selectedAdapter?.voiceInputIdentity) {
+    try {
+      const current = await voiceInputIdentity(selectedAdapter.path, studio, { fs });
+      if (!voiceInputMatches(selectedAdapter.voiceInputIdentity, current)) approvalError = '청취 확인 뒤 목소리 파일·대표 녹음·전사가 바뀌었습니다. 다시 듣고 확인해 주세요.';
+    } catch { approvalError = '청취 확인한 목소리 파일·대표 녹음·전사를 읽지 못했습니다.'; }
+  }
   if (chatterboxModel.state === "ready" && chatterboxTokenizer.state !== "ready") {
     chatterbox.detail = "S3TokenizerV2 부속 모델 파일을 확인해 주세요";
   }
@@ -155,7 +163,7 @@ export async function inspectVoiceReadiness(settings, studio, { fs = nativeFs, e
     referenceAudio,
     referenceText,
     adapter: settings.adapterId === "none" ? { state: "unused" }
-      : selectedAdapter?.profileError ? { state: "incomplete", detail: selectedAdapter.profileError }
+      : selectedAdapter?.profileError || approvalError ? { state: "incomplete", detail: selectedAdapter.profileError || approvalError }
       : combined(adapterWeights, adapterConfig),
     quality,
     aligner,

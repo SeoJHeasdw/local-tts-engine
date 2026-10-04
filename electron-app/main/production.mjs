@@ -7,6 +7,7 @@ import { combineChapterReports, pendingUnits, mapWithConcurrency, presetFromMani
 import { fileSha256, findVideo, publishVideo, safeStat, writeReport } from "./files.mjs";
 import { assertCurrentCourseManifest } from "./course-run-state.mjs";
 import { alignmentWarnings } from "../shared/quality.mjs";
+import { jobIsActive } from './job-process.mjs';
 
 export function createProductionService({
   emit,
@@ -41,14 +42,37 @@ export function createProductionService({
   // 실제 결과가 어긋날 수 있어, 결과 자체를 근거로 삼는다.
   async function finishedUnitNames(units, studio, expectedFingerprint = null) {
     const checked = await mapWithConcurrency(units, 4, async (unit) => {
+      const deliverable = unit.deliverable || 'video';
+      const reportDir = deliverable === 'audio'
+        ? path.join(studio.ttsOutputRoot, unit.productionDay || dateFolder(), unit.name)
+        : path.join(studio.captionOutputRoot, unit.name);
       const report = await fs
-        .readFile(path.join(studio.captionOutputRoot, unit.name, "validation-report.json"), "utf8")
+        .readFile(path.join(reportDir, "validation-report.json"), "utf8")
         .then(JSON.parse)
         .catch(() => null);
-      if (!report?.summary?.ok || !report?.videoPath || !(await safeStat(report.videoPath))?.isFile()) return null;
-      if ((report.videoQuality?.id ?? 'standard') !== (unit.videoQuality ?? 'standard')) return null;
+      if (!report?.summary?.ok) return null;
       if (expectedFingerprint && report.sourceContract?.fingerprint !== expectedFingerprint) return null;
-      if (report.capture?.fileSha256 && await fileSha256(report.videoPath) !== report.capture.fileSha256) return null;
+      if (deliverable === 'video') {
+        if (!report.videoPath || !(await safeStat(report.videoPath))?.isFile()) return null;
+        if ((report.videoQuality?.id ?? 'standard') !== (unit.videoQuality ?? 'standard')) return null;
+        if (report.capture?.fileSha256 && await fileSha256(report.videoPath) !== report.capture.fileSha256) return null;
+      } else {
+        if (!report.audioPath || !(await safeStat(report.audioPath))?.isFile()
+          || !report.audioSha256 || await fileSha256(report.audioPath) !== report.audioSha256) return null;
+        try {
+          const manifest = JSON.parse(await fs.readFile(path.join(report.sourceDir, 'manifest.json'), 'utf8'));
+          await assertCurrentCourseManifest(report.sourceDir, manifest, fs);
+          if ((manifest.runId ?? null) !== (report.voiceRunId ?? null)) return null;
+          if (deliverable === 'captions') {
+            const timeline = JSON.parse(await fs.readFile(path.join(reportDir, 'timeline.json'), 'utf8'));
+            const captions = JSON.parse(await fs.readFile(path.join(reportDir, 'captions.json'), 'utf8'));
+            if (!timeline.entries?.length || !captions.length || !report.captionFilesSha256) return null;
+            for (const name of ['timeline.json', 'captions.json', 'captions.srt', 'captions.vtt']) {
+              if (await fileSha256(path.join(reportDir, name)) !== report.captionFilesSha256[name]) return null;
+            }
+          }
+        } catch { return null; }
+      }
       return unit.name;
     });
     return checked.filter(Boolean);
@@ -169,6 +193,10 @@ export function createProductionService({
       sourceDir,
       renderDir: options.deliverable === "audio" ? null : renderDir,
       audioPath: manifest.audioPath,
+      audioSha256: summary.ok ? await fileSha256(manifest.audioPath) : null,
+      captionFilesSha256: !summary.ok || options.deliverable === 'audio' ? null : Object.fromEntries(await Promise.all(
+        ['timeline.json', 'captions.json', 'captions.srt', 'captions.vtt'].map(async name => [name,
+          await fileSha256(path.join(renderDir, name))]))),
       videoPath,
       durationMs: Number(manifest.durationMs),
       naturalness: manifest.naturalness || null,
@@ -198,7 +226,7 @@ export function createProductionService({
 
   async function runPipelineUnit(options, studio, captureSiteDir) {
     const job = state.activeJob;
-    const sourceDir = path.join(studio.ttsOutputRoot, dateFolder(), options.name);
+    const sourceDir = path.join(studio.ttsOutputRoot, options.productionDay || dateFolder(), options.name);
     const renderDir = path.join(studio.captionOutputRoot, options.name);
     const ttsArgs = [
       "-m", "local_tts_engine.course_pilot",
@@ -353,7 +381,7 @@ export function createProductionService({
         throw new Error('이전 제작의 입력 판본을 확인할 수 없습니다. 기존 결과를 보존하고 새 작업 이름으로 제작해 주세요.');
       }
     }
-    options = { ...options, inputFingerprint: fingerprint };
+    options = { ...options, inputFingerprint: fingerprint, productionDay: options.productionDay || dateFolder() };
     const studio = { ...originalStudio, sourceProjectRoot: input.project, deckRoot: input.deck,
       configPath: path.join(input.deck, "narration.config.json") };
     emit({ type: "log", stream: "stdout",
@@ -394,7 +422,10 @@ export function createProductionService({
     for (const [index, unit] of units.entries()) {
       if (job.cancelled) throw new Error("사용자가 작업을 중지했습니다.");
       if (finished.includes(unit.name)) {
-        reports.push(await fs.readFile(path.join(studio.captionOutputRoot, unit.name, 'validation-report.json'), 'utf8').then(JSON.parse));
+        const reportDir = unit.deliverable === 'audio'
+          ? path.join(studio.ttsOutputRoot, unit.productionDay, unit.name)
+          : path.join(studio.captionOutputRoot, unit.name);
+        reports.push(await fs.readFile(path.join(reportDir, 'validation-report.json'), 'utf8').then(JSON.parse));
         continue;
       }
       // 일시정지는 편 사이에서 확정된다. 앱이 꺼져도 이어할 수 있는 지점이 곧
@@ -446,6 +477,7 @@ export function createProductionService({
   }
 
   function launchPipeline(options) {
+    if (jobIsActive(state.activeJob)) throw new Error('이미 실행 중인 작업이 있습니다.');
     state.activeJob = {
       id: crypto.randomUUID(),
       kind: "create",

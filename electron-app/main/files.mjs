@@ -28,15 +28,24 @@ export async function findVideo(renderDir, name, expectedFileName = null) {
   return path.join(renderDir, dated.at(-1).item);
 }
 
-// 결과 폴더의 영상 이름을 Finder에서 바꾸는 일은 흔하다. 기록해 둔 경로와
-// 글자가 다르다고 남이 되면, 그 영상의 확인 항목과 승인 표시가 통째로
-// 사라진다. 적어 둔 파일이 더는 없고 같은 폴더의 영상을 연 것이라면,
-// 이름만 바뀐 바로 그 영상이다.
-export async function reportDescribesVideo(reportVideoPath, videoPath) {
+// A Finder rename can retain review evidence only when the video bytes match.
+// Legacy exact-path pending reports remain readable. Approval requires a digest;
+// its historical record remains on disk when the current bytes are unverifiable.
+export async function reportDescribesVideo(reportVideoPath, videoPath, report = {}, currentSha256 = null) {
+  if (!reportVideoPath || !videoPath) return false;
   const recorded = path.resolve(String(reportVideoPath || ""));
-  if (recorded === videoPath) return true;
-  if (path.dirname(recorded) !== path.dirname(videoPath)) return false;
-  return !await safeStat(recorded);
+  const selected = path.resolve(videoPath);
+  if (recorded !== selected && (path.dirname(recorded) !== path.dirname(selected)
+      || await safeStat(recorded))) return false;
+  const recordedDigests = [report.videoSha256, report.capture?.fileSha256, report.review?.fileSha256]
+    .filter(value => value != null);
+  if (recordedDigests.some(value => typeof value !== 'string' || !/^[a-f0-9]{64}$/i.test(value))) return false;
+  const digests = recordedDigests;
+  if (!digests.length) return recorded === selected && report.review?.status !== 'approved';
+  try {
+    const digest = currentSha256 || await fileSha256(selected);
+    return digests.every(expected => expected.toLowerCase() === digest);
+  } catch { return false; }
 }
 
 async function publishedVideoNames(root) {
@@ -102,7 +111,7 @@ export async function listDirectories(root) {
 // 검증 기록은 다음에 열 때의 유일한 근거다. 쓰다 만 파일이 남으면 그 결과는
 // 통째로 읽히지 않으므로, 옆에 다 쓰고 나서 자리를 바꾼다.
 export async function writeReport(reportPath, report, tag) {
-  const temporary = `${reportPath}.${tag}-${process.pid}.tmp`;
+  const temporary = `${reportPath}.${tag}-${process.pid}-${crypto.randomUUID()}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   await fs.rename(temporary, reportPath);
   return report;
@@ -110,20 +119,57 @@ export async function writeReport(reportPath, report, tag) {
 
 // 영상 하나만 바꿔 부르면 이름을 나눠 갖던 타임라인이 뒤에 남는다. 그러면
 // 다음 검수에서 페이지를 잃으므로, 이름을 함께 쓰던 곁 파일도 같이 옮긴다.
-export async function renameMediaFile(file, rawName) {
+export async function renameMediaFile(file, rawName, { fs: fileSystem = fs } = {}) {
   const directory = path.dirname(file);
   const previous = path.basename(file);
   const next = renamedFileName(previous, rawName);
   if (next === previous) return file;
   const target = path.join(directory, next);
-  if (await safeStat(target)) throw new Error("같은 이름의 파일이 이미 있습니다.");
   const previousStem = path.basename(previous, path.extname(previous));
   const nextStem = path.basename(next, path.extname(next));
-  await fs.rename(file, target);
-  for (const entry of await fs.readdir(directory).catch(() => [])) {
-    if (entry === next || !entry.startsWith(`${previousStem}.`)) continue;
-    await fs.rename(path.join(directory, entry), path.join(directory, `${nextStem}${entry.slice(previousStem.length)}`))
-      .catch(() => {});
+  const companions = (await fileSystem.readdir(directory, { withFileTypes: true }))
+    .filter(entry => entry.name !== previous && entry.name.startsWith(`${previousStem}.`)
+      && (entry.isFile() || entry.isSymbolicLink()))
+    .map(entry => ({ from: path.join(directory, entry.name),
+      to: path.join(directory, `${nextStem}${entry.name.slice(previousStem.length)}`) }));
+  const moves = [{ from: file, to: target }, ...companions];
+  for (const { to } of moves) {
+    try {
+      await fileSystem.lstat(to);
+      throw new Error("같은 이름의 영상 또는 연결 파일이 이미 있습니다.");
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  const reserve = async (from, to) => {
+    try { await fileSystem.link(from, to); }
+    catch (error) {
+      if (!['ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EPERM'].includes(error.code)) throw error;
+      // External volumes may not support hard links. Exclusive copies retain
+      // the same no-overwrite contract and preserve the original until commit.
+      await fileSystem.copyFile(from, to, fs.constants.COPYFILE_EXCL);
+    }
+  };
+  const linked = [], removed = [];
+  try {
+    // Hard links provide an atomic no-replace operation in this same directory.
+    // Keep every original until all destinations have been reserved successfully.
+    for (const move of moves) { await reserve(move.from, move.to); linked.push(move); }
+    for (const move of moves) { await fileSystem.unlink(move.from); removed.push(move); }
+  } catch (error) {
+    const recoveryErrors = [];
+    for (const move of removed.reverse()) {
+      try { await reserve(move.to, move.from); }
+      catch (recoveryError) { recoveryErrors.push(recoveryError); }
+    }
+    if (!recoveryErrors.length) {
+      for (const move of linked.reverse()) {
+        try { await fileSystem.unlink(move.to); }
+        catch (recoveryError) { recoveryErrors.push(recoveryError); }
+      }
+    }
+    if (recoveryErrors.length) throw new AggregateError([error, ...recoveryErrors],
+      "이름 변경을 복구하지 못했습니다. 원본과 연결 파일을 확인해 주세요.");
+    if (error.code === 'EEXIST') throw new Error("같은 이름의 영상 또는 연결 파일이 이미 있습니다.");
+    throw error;
   }
   return target;
 }

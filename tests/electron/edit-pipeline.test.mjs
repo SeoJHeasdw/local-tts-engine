@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { createMediaService } from '../../electron-app/main/media.mjs';
 import { createEditingComposeService } from '../../electron-app/main/editing/compose.mjs';
 import { createEditingPagesService } from '../../electron-app/main/editing/pages.mjs';
+import { bindPageVoiceCandidate } from '../../electron-app/main/page-voice-integrity.mjs';
 
 const execute = promisify(execFile);
 const ffmpeg = args => execute('ffmpeg', ['-v', 'error', ...args], { timeout: 30000 });
@@ -132,6 +133,12 @@ for (const [mode, fit] of [['single', 'match-audio'], ['batch', 'match-audio'], 
       first: { path: audio, generatedVoice: { startPage: 2, endPage: 2, sourceStartMs: 0, sourceEndMs: fit === 'keep-video' ? 800 : 1400 } },
       second: { path: audio, generatedVoice: { startPage: 4, endPage: 4, sourceStartMs: 0, sourceEndMs: 800 } },
     };
+    const metadataPath = path.join(directory, 'candidate.json');
+    await fs.writeFile(metadataPath, JSON.stringify({ sourceText: '시험 음성' }));
+    for (const record of [records.first, records.second]) {
+      record.generatedVoice = await bindPageVoiceCandidate(audio,
+        { ...record.generatedVoice, metadataPath, spokenText: '시험 음성' }, timeline);
+    }
     const app = appMethods(records);
     const out = path.join(directory, 'out');
     await fs.mkdir(out);

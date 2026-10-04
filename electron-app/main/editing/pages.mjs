@@ -3,6 +3,7 @@ import nativeFs from "node:fs/promises";
 import path from "node:path";
 import { assertPageReplaceable, mapWithConcurrency, pageVoicePatchesPlan, patchedTimeline, timeRangeForPages } from "../../shared/index.mjs";
 import { captionText, editedReviewContext, retimeCaptions } from "./review-media.mjs";
+import { bindPageVoiceCandidate, verifyPageVoiceCandidate } from '../page-voice-integrity.mjs';
 
 export function createEditingPagesService({
   chosenRecord,
@@ -50,10 +51,20 @@ export function createEditingPagesService({
 
   async function runVoiceEdit(options, outputDir) {
     const videoRecord = chosenRecord(options.videoToken, "video");
+    if (options.audioSource === 'generate') {
+      assertPageReplaceable(videoRecord, options);
+      const timeline = JSON.parse(await fs.readFile(videoRecord.timelinePath, 'utf8'));
+      timeRangeForPages(timeline.entries, Number(options.startPage), Number(options.endPage));
+    }
     const audioRecord = options.audioSource === "generate"
       ? await generateReplacementVoice(options, outputDir).then((value) => ({ path: value.audioPath, generatedVoice: value.generatedVoice }))
       : chosenRecord(options.audioToken, "audio");
     if (audioRecord.generatedVoice) {
+      if (options.audioSource === 'generate') {
+        const timeline = JSON.parse(await fs.readFile(videoRecord.timelinePath, 'utf8'));
+        audioRecord.generatedVoice = await bindPageVoiceCandidate(audioRecord.path,
+          audioRecord.generatedVoice, timeline, { fs });
+      }
       return runPageVoicePatch(videoRecord, audioRecord, options, outputDir);
     }
     const video = videoRecord.path;
@@ -143,6 +154,12 @@ export function createEditingPagesService({
     });
 
     const matchAudio = options.durationPolicy === "match-audio";
+    // Check every token immediately before encoding. Missing/shortened audio
+    // must fail here instead of being concealed by the filter's silence padding.
+    for (const patch of requested) {
+      const audioProbe = await inspectMedia(patch.audioRecord.path);
+      await verifyPageVoiceCandidate(patch.audioRecord, timeline, audioProbe, { fs });
+    }
     const plan = pageVoicePatchesPlan({ videoDuration, matchAudio, patches: entries });
     const videoArgs = plan.videoUnchanged ? ["-c:v", "copy"] : videoReencodeArgs(videoProbe);
     if (!plan.videoUnchanged) {

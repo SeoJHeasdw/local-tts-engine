@@ -2,9 +2,10 @@ import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
 import { ADAPTER, DEFAULT_QUALITY_ATTEMPTS, LEGACY_OUTPUT_PATHS, dateFolder, runtimePaths } from "./paths.mjs";
-import { assertPageReplaceable, isInside, mapWithConcurrency, voiceQualityFindings } from "../shared/index.mjs";
+import { assertPageReplaceable, isInside, mapWithConcurrency, timeRangeForPages, voiceQualityFindings } from "../shared/index.mjs";
 import { pathToFileURL } from "node:url";
 import { assertCurrentCourseManifest } from "./course-run-state.mjs";
+import { bindPageVoiceCandidate } from './page-voice-integrity.mjs';
 
 export function createVoicesService({
   chosenRecord,
@@ -145,6 +146,8 @@ export function createVoicesService({
   async function runVoiceCandidates(options, outputDir) {
     const video = chosenRecord(options.videoToken, "video");
     assertPageReplaceable(video, options);
+    const targetTimeline = JSON.parse(await fs.readFile(video.timelinePath, 'utf8'));
+    timeRangeForPages(targetTimeline.entries, Number(options.startPage), Number(options.endPage));
     const count = Math.min(8, Math.max(2, Math.round(Number(options.candidateCount ?? 3))));
     const digest = crypto.createHash("sha256").update(options.name).digest();
     const baseSeed = digest.readUInt32BE(0);
@@ -164,6 +167,8 @@ export function createVoicesService({
         ? await generateSpokenText({ ...options, seed }, candidateDir)
         : await generateReplacementVoice({ ...options, seed, qualityAttempts: 1,
           recoveryFindings: video.voiceFindings || [] }, candidateDir);
+      generated.generatedVoice = await bindPageVoiceCandidate(generated.audioPath,
+        generated.generatedVoice, targetTimeline, { fs });
       candidates.push({ index: index + 1, seed, ...generated });
       emit({ type: "voice-item-complete", completed: candidates.length, total: count, name: `후보 ${index + 1}` });
     }

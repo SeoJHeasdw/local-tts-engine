@@ -319,7 +319,7 @@ test("결과와 검수 화면 모두에서 파일 이름을 그 자리에서 바
   assert.match(main, /ipcMain\.handle\("studio:rename-output"/);
   assert.match(main, /ipcMain\.handle\("studio:rename-video"/);
   // 영상만 바꿔 부르면 이름을 나눠 갖던 타임라인이 뒤에 남아 페이지를 잃는다.
-  assert.match(main, /entry\.startsWith\(`\$\{previousStem\}\.`\)/);
+  assert.match(main, /entry\.name\.startsWith\(`\$\{previousStem\}\.`\)/);
   assert.match(main, /displayName: path\.basename\(next, path\.extname\(next\)\)/);
 });
 
@@ -349,7 +349,7 @@ test("이름이 바뀐 영상도 같은 결과로 이어 준다", async () => {
   // Finder에서 이름을 고친 영상은 적어 둔 경로에 없다. 폴더에 그대로 있는데도
   // 열 수 없다거나 확인 항목이 사라졌다고 말하지 않는다.
   assert.match(main, /async function reportDescribesVideo\(/);
-  assert.match(main, /await reportDescribesVideo\(report\.videoPath, value\.path\)/);
+  assert.match(main, /await reportDescribesVideo\(report\.videoPath, value\.path, report\)/);
   assert.match(main, /file = await findVideo\(directory, target\.name\) \|\| file/);
   assert.match(main, /await existingFile\(report\.videoPath\) \|\| await findVideo\(dir, entry\.name\)/);
 });

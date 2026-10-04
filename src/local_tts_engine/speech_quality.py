@@ -41,6 +41,7 @@ from .korean_phonetics import (
 )
 from .restarts import RESTART_POLICY, RESTART_WARNING, acoustic_restarts, confirm_restarts
 from .english_reading import reading_match
+from .english_voice import comparison_transcript
 from .pronunciation import (
     _dictionary_pattern, comparison_pronunciation, declared_readings, merge_pronunciation_dictionaries,
     join_compound_words,
@@ -615,10 +616,11 @@ def evaluate_candidate(
     speech_parts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Score one TTS candidate and return a serializable quality record."""
+    comparison_recognized = comparison_transcript(recognized_text, speech_parts)
     expected = comparison_text(expected_text, dictionary)
-    recognized = comparison_text(recognized_text, dictionary)
+    recognized = comparison_text(comparison_recognized, dictionary)
     cer = character_error_rate(expected, recognized)
-    per = phonetic_error_rate(expected_text, recognized_text, dictionary)
+    per = phonetic_error_rate(expected_text, comparison_recognized, dictionary)
     waveform = waveform_metrics(audio_path)
     duration_seconds = float(waveform["durationMs"]) / 1000
     pace = len(expected) / duration_seconds if duration_seconds else None
@@ -632,18 +634,18 @@ def evaluate_candidate(
             len(re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", part["text"])) / (part["durationMs"] / 1000), 3)}
             for part in speech_parts if part["language"] == "English" and part["durationMs"] > 0]
     required_checks = [
-        check_pronunciation(term, expected_text, recognized_text, dictionary)
+        check_pronunciation(term, expected_text, comparison_recognized, dictionary)
         for term in required_pronunciations
     ]
     lexical_checks = lexical_pronunciation_checks(
         expected_text,
-        recognized_text,
+        comparison_recognized,
         dictionary,
         required_pronunciations,
     )
-    content_checks = [*clause_omissions(expected_text, recognized_text, dictionary),
-                      *adjacent_repetitions(expected_text, recognized_text, dictionary),
-                      *negation_omissions(expected_text, recognized_text, dictionary)]
+    content_checks = [*clause_omissions(expected_text, comparison_recognized, dictionary),
+                      *adjacent_repetitions(expected_text, comparison_recognized, dictionary),
+                      *negation_omissions(expected_text, comparison_recognized, dictionary)]
     checks = [*required_checks, *lexical_checks]
     failures: list[str] = []
     warnings: list[str] = []
@@ -688,6 +690,8 @@ def evaluate_candidate(
         "audioPath": str(audio_path.resolve()),
         "expectedText": expected_text,
         "recognizedText": recognized_text.strip(),
+        **({"comparisonRecognizedText": comparison_recognized.strip()}
+           if comparison_recognized != recognized_text else {}),
         "requiredPronunciations": list(required_pronunciations),
         "pronunciationChecks": checks,
         "lexicalChecks": lexical_checks,

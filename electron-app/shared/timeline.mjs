@@ -55,14 +55,28 @@ export function timeRangeForPages(entries, startPage, endPage) {
   if (!Number.isInteger(startPage) || !Number.isInteger(endPage) || startPage < 1 || endPage < startPage) {
     throw new Error("자를 시작·끝 페이지를 확인해 주세요.");
   }
-  const selected = (entries || []).filter((entry) => {
+  const selected = (entries || []).map((entry, index) => ({ entry, index })).filter(({ entry }) => {
     const page = Number(entry.slideNumber);
     return page >= startPage && page <= endPage;
   });
   if (!selected.length) throw new Error("선택한 페이지가 이 영상의 타임라인에 없습니다.");
+  const identities = new Set();
+  for (const [index, item] of selected.entries()) {
+    const previous = selected[index - 1];
+    const entry = item.entry;
+    const identity = entry.slideId && Number.isInteger(entry.step) ? `${entry.slideId}:${entry.step}` : null;
+    if ((previous && (item.index !== previous.index + 1
+      || Number(entry.slideNumber) < Number(previous.entry.slideNumber)
+      || (Number(entry.slideNumber) === Number(previous.entry.slideNumber)
+        && entry.slideId && previous.entry.slideId && entry.slideId !== previous.entry.slideId)))
+      || (identity && identities.has(identity))) {
+      throw new Error('선택한 페이지가 반복되거나 떨어져 있습니다. 해당 클립을 따로 선택해 페이지 음성을 교체해 주세요.');
+    }
+    if (identity) identities.add(identity);
+  }
   return {
-    start: Number(selected[0].startMs) / 1000,
-    end: Number(selected.at(-1).endMs) / 1000,
+    start: Number(selected[0].entry.startMs) / 1000,
+    end: Number(selected.at(-1).entry.endMs) / 1000,
   };
 }
 

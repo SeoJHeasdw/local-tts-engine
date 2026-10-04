@@ -83,6 +83,21 @@ def test_without_room_tone_a_closure_is_only_shortened():
     assert len(audio) - len(corrected) == round(RATE * 0.045)
 
 
+@pytest.mark.parametrize("tone", [None, TONE])
+def test_overlapping_words_cannot_fill_or_cut_the_same_closure_twice(tone):
+    audio = speech_with_gap(0.2, 240, seconds=1)
+    words = [{"text": "바깥과", "startMs": 0, "endMs": 700},
+             {"text": "연결을", "startMs": 100, "endMs": 800}]
+    single, _ = normalize_word_closures(audio, RATE, words[:1], tone)
+    corrected, record = normalize_word_closures(audio, RATE, words, tone)
+    assert np.array_equal(corrected, single)
+    assert record["closures"] == 1 and record["removedMs"] == 120
+    assert len(record["capped"]) == 1
+    assert record["filled"] == int(tone is not None)
+    # The 60 ms following the closure were deleted by a repeated cut before.
+    assert np.array_equal(corrected[-round(RATE * 0.5):], audio[-round(RATE * 0.5):])
+
+
 def test_korean_segments_are_corrected_before_their_positions_are_recorded():
     rate = 24_000
 

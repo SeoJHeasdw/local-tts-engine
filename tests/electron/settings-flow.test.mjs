@@ -168,4 +168,83 @@ test('실제 설정 화면은 미적용 목소리·저장·청취 확인·완료
     assert.equal($('#sidebar-adapter').textContent, '목소리 b · 0.60');
     assert.equal($('#voice-listening-review').classList.contains('hidden'), true);
   });
+
+  await t.test('설정 조회가 늦어도 그 사이 적용한 목소리를 일반 설정 저장으로 되돌리지 않는다', async () => {
+    await $('#model-settings-dialog').close();
+    const stale = structuredClone(saved), readGate = deferred();
+    readSettings = () => readGate.promise;
+    const opening = $('#open-model-settings').click();
+    await tick();
+    $('#global-adapter').value = 'a';
+    await $('#global-adapter').fire('change');
+    await $('#voice-commit-apply').click();
+    assert.equal(saved.adapterId, 'a');
+    readGate.resolve(stale);
+    await opening;
+    assert.equal($('#global-adapter').value, 'a');
+    $('#notify-finish').checked = true;
+    await $('#notify-finish').fire('change');
+    assert.equal(saves.at(-1).adapterId, 'a');
+    readSettings = async () => structuredClone(saved);
+  });
+
+  await t.test('설정 조회 중 고른 미적용 목소리와 같은 샘플의 청취 확인을 보존한다', async () => {
+    await $('#model-settings-dialog').close();
+    const stale = structuredClone(saved), readGate = deferred();
+    readSettings = () => readGate.promise;
+    const opening = $('#open-model-settings').click(); await tick();
+    $('#global-adapter').value = 'b';
+    await $('#global-adapter').fire('change');
+    $('#voice-listening-confirm').checked = true;
+    await $('#voice-listening-confirm').fire('change');
+    const count = saves.length;
+    readGate.resolve(stale); await opening;
+    assert.equal($('#global-adapter').value, 'b');
+    assert.equal($('#voice-listening-confirm').checked, true);
+    assert.match($('#voice-profile-summary').textContent, /아직 적용 전.*목소리 b/);
+    assert.equal(saved.adapterId, 'a'); assert.equal(saves.length, count);
+    readSettings = async () => structuredClone(saved);
+  });
+
+  await t.test('조회 중 확인한 샘플이 실제로 바뀌면 미적용 선택만 보존하고 확인은 해제한다', async () => {
+    await $('#model-settings-dialog').close();
+    const stale = structuredClone(saved), readGate = deferred();
+    stale.adapters[1].previewAudioSha256 = 'replacement-sample-b';
+    readSettings = () => readGate.promise;
+    const opening = $('#open-model-settings').click(); await tick();
+    $('#global-adapter').value = 'b'; await $('#global-adapter').fire('change');
+    $('#voice-listening-confirm').checked = true; await $('#voice-listening-confirm').fire('change');
+    readGate.resolve(stale); await opening;
+    assert.equal($('#global-adapter').value, 'b');
+    assert.equal($('#voice-listening-confirm').checked, false);
+    assert.equal(saved.adapterId, 'a');
+    readSettings = async () => structuredClone(saved);
+  });
+
+  await t.test('닫았다 다시 연 설정에서 이전 조회 응답은 최신 조회 결과를 덮지 않는다', async () => {
+    await $('#model-settings-dialog').close();
+    const first = deferred(), second = deferred(); let reads = 0;
+    readSettings = () => (++reads === 1 ? first.promise : second.promise);
+    const oldOpen = $('#open-model-settings').click(); await tick();
+    await $('#model-settings-dialog').close();
+    const newOpen = $('#open-model-settings').click(); await tick();
+    second.resolve(structuredClone(saved)); await newOpen;
+    first.resolve({ ...structuredClone(saved), adapterId: 'b' }); await oldOpen;
+    assert.equal($('#global-adapter').value, 'a');
+    readSettings = async () => structuredClone(saved);
+  });
+
+  await t.test('진행 중인 저장이 끝난 뒤 설정을 조회해 새 설정을 표시한다', async () => {
+    const gate = deferred(); gateSave = gate;
+    $('#prevent-sleep').checked = true;
+    const saving = $('#prevent-sleep').fire('change'); await tick();
+    await $('#model-settings-dialog').close();
+    let reads = 0;
+    readSettings = async () => { ++reads; return structuredClone(saved); };
+    const opening = $('#open-model-settings').click(); await tick();
+    assert.equal(reads, 0);
+    gate.resolve(); await Promise.all([saving, opening]);
+    assert.equal(reads, 1);
+    assert.equal($('#prevent-sleep').checked, true);
+  });
 });

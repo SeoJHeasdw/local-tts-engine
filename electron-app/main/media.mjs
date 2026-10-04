@@ -117,7 +117,7 @@ export function createMediaService({
           path.join(captionRoot, path.basename(path.dirname(value.path)), "validation-report.json")];
         for (const reportPath of reports) {
           const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
-          if (report?.videoPath && await reportDescribesVideo(report.videoPath, value.path)) {
+          if (report?.videoPath && await reportDescribesVideo(report.videoPath, value.path, report)) {
             value.voiceFindings = report.voiceFindings || [];
             value.reviewWarnings = outputReviewWarnings(report);
             value.clearedReviewWarnings = clearedOutputReviewWarningKeys(report);

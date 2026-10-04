@@ -3,7 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { FINETUNE_DATASET_ROOT, FINETUNE_RUN_ROOT, ROOT, dateFolder } from './paths.mjs';
 import { LEGACY_VOICE, readTrainingConfig, trainingArguments } from './training-config.mjs';
-import { writeVoiceProfile } from './voice-profile.mjs';
+import { writeVoiceProfile, voiceInputIdentity, voiceInputMatches } from './voice-profile.mjs';
 import { inspectCachedModel } from './voice-readiness.mjs';
 import { fileSha256 } from './files.mjs';
 import { isInside } from '../shared/index.mjs';
@@ -184,11 +184,22 @@ export function createTrainingService({ emit, readAppSettings, requireRuntimeToo
     await fs.writeFile(previewTextPath, config.preview.text);
     let previewError = null;
     try {
+      const identity = await voiceInputIdentity(path.join(outputDir, 'adapters'), { referenceAudioPath: reference, referenceTextPath: referenceText });
+      if (identity.referenceAudioSha256 !== profile.referenceAudioSha256 || identity.referenceTextSha256 !== profile.referenceTextSha256) {
+        throw new Error('학습 중 대표 녹음이나 전사가 바뀌었습니다. 시험 음성을 생성하지 않습니다.');
+      }
       await runProcess('voice', python, ['-m', 'local_tts_engine.text_candidate',
         '--text-file', previewTextPath, '--reference', reference, '--reference-text', referenceText,
         '--model-path', model,
         '--adapter', path.join(outputDir, 'adapters'), '--adapter-scale', String(config.preview.scale),
         '--output', previewPath, '--metadata', path.join(outputDir, 'preview.json'), '--seed', String(config.preview.seed)]);
+      if (state.activeJob.cancelled) throw new Error('시험 음성 만들기를 중지했습니다.');
+      if (!voiceInputMatches(identity, await voiceInputIdentity(path.join(outputDir, 'adapters'), { referenceAudioPath: reference, referenceTextPath: referenceText }))) {
+        throw new Error('시험 음성을 만드는 동안 목소리 파일·대표 녹음·전사가 바뀌었습니다. 다시 만들어 주세요.');
+      }
+      await writeVoiceProfile(outputDir, { ...profile, trainingStatus: 'complete',
+        preview: { audioPath: 'preview.wav', audioSha256: await fileSha256(previewPath), scale: config.preview.scale,
+          ...identity, generatedAt: new Date().toISOString() } });
     } catch (error) {
       if (state.activeJob.cancelled) throw error;
       previewError = error.message;

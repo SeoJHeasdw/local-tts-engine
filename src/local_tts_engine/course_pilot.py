@@ -44,6 +44,7 @@ from .course.alignment import (
     entry_alignment_slices,
     load_or_create_alignment,
     merge_step_record_parts,
+    read_cached_alignment,
 )
 from .course.alignment_audit import audit_timeline, detect_silences, voiced_spans
 from .course.alignment_evidence import measure_speech_evidence
@@ -961,7 +962,10 @@ def _synthesize_excerpt(
         alignments_dir / f"{item['key']}--{item['hash'][:12]}.json"
         for item in selected_chunks
     ]
-    missing_alignment = not use_cache or any(not path.is_file() for path in aligner_paths)
+    missing_alignment = not use_cache or any(
+        read_cached_alignment(item["chunk"], item, path) is None
+        for item, path in zip(selected_chunks, aligner_paths)
+    )
     aligner = None
     aligner_revision = None
     alignment_load_ms = 0

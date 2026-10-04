@@ -1,48 +1,68 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createVoicesService } from '../../electron-app/main/voices.mjs';
 
 const {finding}=JSON.parse(await fs.readFile(new URL('../fixtures/ch02-l04-omission.json',import.meta.url),'utf8'));
 
-test('실제 페이지 후보 경로는 기존 누락 기록을 Python으로 보내고 후보당 한 번 정책을 유지한다',async()=>{
-  const calls=[],written=[];
-  const voices=createVoicesService({
-    chosenRecord:()=>({voiceFindings:[finding],timelinePath:'/timeline.json',pageRange:{start:196,end:196}}),emit(){},
-    requireRuntimeTool:()=>'/python',runProcess:async(stage,python,args)=>calls.push(args),
-    registerSelected:async files=>files.map((file,index)=>({token:`candidate-${index}`})),
-    fs:{mkdir:async()=>{},writeFile:async(file,text)=>written.push({file,text}),
-      readFile:async(file)=>{
-        if(file.endsWith('/run-state.json')) throw Object.assign(new Error('not found'),{code:'ENOENT'});
-        return JSON.stringify({audioPath:'/generated.wav',chunks:[{startMs:1300,endMs:31300}]});
-      }},
+async function fixture(t) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tts-replacement-evidence-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const timelinePath = path.join(directory, 'timeline.json');
+  const entry = { chapter: 'ch02', slideId: 'sample', slideNumber: 196, step: 0,
+    startMs: 0, endMs: 30000, sourceText: '페이지 대본' };
+  await fs.writeFile(timelinePath, JSON.stringify({ entries: [entry] }));
+  const calls = [], written = [];
+  const io = { ...fs, writeFile: async (file, text, ...args) => {
+    written.push({ file, text }); return fs.writeFile(file, text, ...args);
+  } };
+  const voices = createVoicesService({
+    chosenRecord: () => ({ voiceFindings: [finding], timelinePath, pageRange: { start: 196, end: 196 } }),
+    emit() {}, fs: io, requireRuntimeTool: () => '/python',
+    registerSelected: async (files, kind, extras) => files.map((file, index) => ({ token: `candidate-${index}`, ...extras[index] })),
+    runProcess: async (stage, python, args) => {
+      calls.push(args);
+      const flag = name => args[args.indexOf(name) + 1];
+      if (args.includes('local_tts_engine.text_candidate')) {
+        await fs.writeFile(flag('--output'), Buffer.alloc(100, 1));
+        await fs.writeFile(flag('--metadata'), JSON.stringify({ durationMs: 4200,
+          sourceText: (await fs.readFile(flag('--text-file'), 'utf8')).trim() }));
+      } else {
+        const output = flag('--output-dir'), audioPath = path.join(output, 'voice.wav');
+        await fs.mkdir(output, { recursive: true });
+        await fs.writeFile(audioPath, Buffer.alloc(100, 1));
+        await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({ audioPath, runId: 'candidate-run',
+          chunks: [{ startMs: 1300, endMs: 31300 }], entries: [entry] }));
+        await fs.writeFile(path.join(output, 'run-state.json'), JSON.stringify({ runId: 'candidate-run', status: 'complete' }));
+      }
+    },
   });
+  return { voices, calls, written, output: path.join(directory, 'output') };
+}
+
+test('실제 페이지 후보 경로는 기존 누락 기록을 Python으로 보내고 후보당 한 번 정책을 유지한다',async t=>{
+  const { voices, calls, written, output } = await fixture(t);
   await voices.runVoiceCandidates({videoToken:'original',name:'repair',startPage:196,endPage:196,candidateCount:2,
-    adapterScale:.6,recoveryFindings:[{expectedText:'caller supplied wrong hint'}]},'/output');
+    adapterScale:.6,recoveryFindings:[{expectedText:'caller supplied wrong hint'}]},output);
   assert.equal(calls.length,2);
   for(const [index,args] of calls.entries()){
     assert.equal(args[args.indexOf('--quality-attempts')+1],'1');
     assert.equal(args[args.indexOf('--adapter-scale')+1],'0.6');
     const recovery=args[args.indexOf('--recovery-findings')+1];
-    assert.equal(recovery,`/output/candidates/candidate-0${index+1}/recovery-findings.json`);
+    assert.equal(recovery,`${output}/candidates/candidate-0${index+1}/recovery-findings.json`);
     assert.deepEqual(JSON.parse(written.find(w=>w.file===recovery).text),[finding]);
   }
 });
 
-test('읽을 말을 적으면 그 말로 후보를 만들고 대본 재합성을 돌리지 않는다',async()=>{
+test('읽을 말을 적으면 그 말로 후보를 만들고 대본 재합성을 돌리지 않는다',async t=>{
   // 사전에 없는 식별자는 시드를 바꿔도 같은 자리에서 같게 읽힌다. 그때는
   // 사람이 적어 준 문장이 그 페이지의 발음문이 된다.
-  const calls=[],written=[];
-  const voices=createVoicesService({
-    chosenRecord:()=>({voiceFindings:[finding],timelinePath:'/timeline.json',pageRange:{start:196,end:196}}),emit(){},
-    requireRuntimeTool:()=>'/python',runProcess:async(stage,python,args)=>calls.push(args),
-    registerSelected:async(files,kind,extras)=>files.map((file,index)=>({token:`spoken-${index}`,...extras[index]})),
-    fs:{mkdir:async()=>{},writeFile:async(file,text)=>written.push({file,text}),
-      readFile:async()=>JSON.stringify({durationMs:4200})},
-  });
+  const { voices, calls, written, output } = await fixture(t);
 
   const candidates=await voices.runVoiceCandidates({videoToken:'original',name:'spoken',startPage:196,endPage:196,
-    candidateCount:2,adapterScale:.6,overrideText:'주문 에이 이공구일의 환불'},'/output');
+    candidateCount:2,adapterScale:.6,overrideText:'주문 에이 이공구일의 환불'},output);
 
   assert.equal(calls.length,2);
   for(const args of calls){

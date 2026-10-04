@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { assertVoiceAssetsReady, inspectCachedModel, inspectVoiceReadiness, localVoiceEnvironment } from '../../electron-app/main/voice-readiness.mjs';
 import { createRuntimeService } from '../../electron-app/main/runtime.mjs';
+import { voiceInputIdentity } from '../../electron-app/main/voice-profile.mjs';
 
 async function put(file, value = 'data') {
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -29,6 +30,22 @@ test('모델 준비 검사는 실제 가중치를 확인하고 다운로드하�
   assert.equal((await inspectCachedModel(repo, options)).state, 'ready');
   await fs.writeFile(path.join(snapshot, 'model.safetensors'), '');
   assert.equal((await inspectCachedModel(repo, options)).state, 'incomplete');
+});
+
+test('설정 조회 뒤 목소리 입력이 바뀌어도 제작 직전에는 승인 지문을 다시 대조한다', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'voice-approval-readiness-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const adapterPath = path.join(root, 'adapters');
+  const studio = { referenceAudioPath: path.join(root, 'reference.wav'), referenceTextPath: path.join(root, 'reference.txt') };
+  for (const file of [path.join(adapterPath, 'adapters.safetensors'), path.join(adapterPath, 'adapter_config.json'), studio.referenceAudioPath, studio.referenceTextPath]) await put(file);
+  const identity = await voiceInputIdentity(adapterPath, studio);
+  const settings = { modelId: 'qwen3-tts', adapterId: 'selected', adapters: [{ id: 'selected', path: adapterPath, voiceInputIdentity: identity }] };
+  const dependencies = { root, env: { HF_HUB_CACHE: path.join(root, 'hub') }, home: root };
+  assert.equal((await inspectVoiceReadiness(settings, studio, dependencies)).adapter.state, 'ready');
+  await fs.writeFile(studio.referenceAudioPath, 'unheard speaker');
+  const readiness = await inspectVoiceReadiness(settings, studio, dependencies);
+  assert.equal(readiness.adapter.state, 'incomplete');
+  await assert.rejects(assertVoiceAssetsReady(settings, studio, { quality: false }, dependencies), /청취 확인 뒤.*바뀌었습니다/);
 });
 
 test('분할 가중치 하나라도 비어 있으면 모델 파일을 준비됐다고 표시하지 않는다', async t => {

@@ -75,6 +75,34 @@ test('중간 레슨 실패 후 나머지 제작·부분 완료·실패 레슨 �
   await assert.rejects(fs.access(run.recordPath), { code: 'ENOENT' });
 });
 
+for (const deliverable of ['audio', 'captions']) {
+  test(`${deliverable} 챕터 이어하기도 다른 날의 완료 편을 보존하고 실패 편만 합성한다`, async t => {
+    const run = await productionFixture(t, { deliverable, productionDay: '2026-09-01' });
+    run.failures.set('test-ch03-l02', 'voice');
+    await run.service.runPipeline(run.options);
+    const record = await run.record();
+    assert.equal(record.options.productionDay, '2026-09-01');
+    const complete = run.events.at(-1).report.units;
+    const before = await Promise.all(complete.map(unit => fs.readFile(unit.audioPath)));
+    const units = record.unitNames.map(name => ({ ...record.options, name }));
+    assert.deepEqual(await run.service.finishedUnitNames(units, run.studio, 'fixed-input'), record.completed);
+    const protectedFile = deliverable === 'audio' ? complete[0].audioPath
+      : path.join(run.studio.captionOutputRoot, record.completed[0], 'captions.srt');
+    const protectedBytes = await fs.readFile(protectedFile);
+    await fs.writeFile(protectedFile, 'changed after verification');
+    assert.deepEqual(await run.service.finishedUnitNames(units, run.studio, 'fixed-input'), [record.completed[1]]);
+    await fs.writeFile(protectedFile, protectedBytes);
+    run.failures.clear(); run.calls.length = 0;
+    run.state.activeJob = { id: 'retry', state: 'running', cancelled: false };
+    await run.service.runPipeline({ ...record.options, resumeFrom: record.completed });
+    assert.deepEqual(run.calls.filter(call => call.stage === 'voice').map(call =>
+      path.basename(call.args[call.args.indexOf('--output-dir') + 1])), ['test-ch03-l02']);
+    assert.deepEqual(await Promise.all(complete.map(unit => fs.readFile(unit.audioPath))), before);
+    assert.equal(run.events.at(-1).report.units.length, 3);
+    assert.equal(run.events.at(-1).type, 'complete');
+  });
+}
+
 test('모든 레슨이 실패해도 전부 시도하고 성공 영상 없는 실패로 끝낸다', async t => {
   const run = await productionFixture(t);
   for (const n of [1, 2, 3]) run.failures.set(`test-ch03-l0${n}`, 'voice');

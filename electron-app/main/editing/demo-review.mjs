@@ -93,7 +93,8 @@ export function collectReview(outDir) {
         verb: step.verb, startMs: step.startMs, endMs: step.endMs, point: step.point ?? null,
       })),
     })),
-    captions: read(path.join(demoDir, "captions.json"))?.cues || [],
+    captions: report && Object.hasOwn(report, 'captions') && !report.captions
+      ? [] : read(path.join(demoDir, "captions.json"))?.cues || [],
     checks: report?.checks || [],
     warnings: report?.warnings || [],
     ok: report?.summary?.ok ?? null,

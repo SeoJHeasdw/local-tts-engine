@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createVoicePreviewService } from '../../electron-app/main/voice-preview.mjs';
 import { createSettingsService } from '../../electron-app/main/settings.mjs';
-import { readVoiceProfile, writeVoiceProfile } from '../../electron-app/main/voice-profile.mjs';
+import { readVoiceProfile, writeVoiceProfile, voiceInputIdentity } from '../../electron-app/main/voice-profile.mjs';
 import { readTrainingConfig } from '../../electron-app/main/training-config.mjs';
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -45,7 +45,8 @@ async function fixture(t, { legacy = false, modelState = 'ready', generate } = {
     paths: { outputRoot, voiceLibraryRoot: path.join(root, 'voice-library') } }));
   const legacyVoice = { adapterId: betaId, displayName: '기존 승인 목소리', adapterScale: 0.6,
     listeningStatus: 'approved', referenceAudioPath: path.join(betaRun, 'reference.wav'),
-    referenceTextPath: path.join(betaRun, 'reference.txt') };
+    referenceTextPath: path.join(betaRun, 'reference.txt'),
+    listeningApproval: await voiceInputIdentity(path.join(betaRun, 'adapters'), { referenceAudioPath: path.join(betaRun, 'reference.wav'), referenceTextPath: path.join(betaRun, 'reference.txt') }) };
   const settings = createSettingsService({ state: {}, adapterRoot, settingsPath,
     ...(legacy ? { legacyVoice } : {}) });
   const state = { activeJob: { kind: 'training', state: 'running', stage: 'voice', cancelled: false } };
@@ -89,6 +90,8 @@ test('새 강도의 시험 음성은 새 위치에 저장하고 기존 샘플과
   assert.equal(preview.audioSha256, digest(await fs.readFile(preview.audioPath)));
   assert.equal(preview.adapterWeightsSha256, digest(oldWeights));
   assert.equal(preview.adapterConfigSha256, digest(await fs.readFile(path.join(f.betaRun, 'adapters', 'adapter_config.json'))));
+  assert.equal(preview.referenceAudioSha256, digest(oldReference));
+  assert.equal(preview.referenceTextSha256, digest(await fs.readFile(path.join(f.betaRun, 'reference.txt'))));
   assert.ok(Number.isFinite(Date.parse(preview.generatedAt)));
   assert.match(path.basename(path.dirname(preview.audioPath)), /^profile-preview-[0-9a-f-]+$/);
   const current = await f.settings.readAppSettings();
@@ -179,6 +182,19 @@ test('시험 음성 생성의 실패·취소는 기존 프로필의 시험 음�
     assert.deepEqual(await fs.readFile(path.join(f.betaRun, 'voice-profile.json')), oldProfile);
     assert.deepEqual(await fs.readFile(f.settingsPath), oldSettings);
     assert.deepEqual(await fs.readFile(path.join(f.betaRun, 'preview.wav')), oldSample);
+    assert.equal(f.events.length, 0);
+  }
+});
+
+test('시험 음성 생성 중 어댑터·대표 녹음·전사가 바뀌면 새 샘플로 등록하지 않는다', async t => {
+  for (const relative of ['adapters/adapters.safetensors', 'adapters/adapter_config.json', 'reference.wav', 'reference.txt']) {
+    const f = await fixture(t, { generate: async ({ args }) => {
+      const adapterPath = args[args.indexOf('--adapter') + 1];
+      await fs.writeFile(path.join(path.dirname(adapterPath), relative), 'changed during synthesis');
+    } });
+    const before = await fs.readFile(path.join(f.betaRun, 'voice-profile.json'));
+    await assert.rejects(f.service.runVoicePreview({ adapterId: f.betaId, adapterScale: 0.72 }), /만드는 동안.*바뀌었습니다/);
+    assert.deepEqual(await fs.readFile(path.join(f.betaRun, 'voice-profile.json')), before);
     assert.equal(f.events.length, 0);
   }
 });

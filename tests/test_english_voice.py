@@ -164,6 +164,107 @@ def test_english_spelling_tolerance_keeps_real_word_errors(expected, recognized)
     assert not check['spellingVariants']
 
 
+@pytest.mark.parametrize(("expected", "recognized"), [
+    ("The balance is -3 dollars.", "The balance is 3 dollars."),
+    ("The balance is -3 dollars.", "The balance is plus three dollars."),
+    ("The threshold is 50%.", "The threshold is fifty."),
+    ("The threshold is 0.75.", "The threshold is zero point seven six."),
+    ("The threshold is 0.75.", "The threshold is seventy five."),
+])
+def test_english_numeric_sign_unit_and_decimal_value_cannot_disappear(expected, recognized):
+    check = english_reading_check(expected, recognized)
+    assert not check["passed"] and check["editCount"] > 0
+
+
+@pytest.mark.parametrize(("expected", "recognized"), [
+    ("The balance is -3 dollars.", "The balance is minus three dollars."),
+    ("The balance is −3 dollars.", "The balance is negative three dollars."),
+    ("The threshold is 50%.", "The threshold is fifty percent."),
+    ("The threshold is 50 %.", "The threshold is fifty per cent."),
+    ("The threshold is 0.75.", "The threshold is zero point seven five."),
+    ("The threshold is +0.75%.", "The threshold is plus zero point seven five percent."),
+    ("The value is 1,234.5.", "The value is one thousand two hundred thirty four point five."),
+])
+def test_english_numeric_spelling_variants_keep_the_complete_spoken_meaning(expected, recognized):
+    check = english_reading_check(expected, recognized)
+    assert check["passed"] and check["editCount"] == 0
+    assert check["spellingVariants"]
+
+
+def test_complete_candidate_keeps_a_numeric_sign_loss_warning_despite_zero_korean_distance(tmp_path):
+    from local_tts_engine.speech_quality import apply_english_checks, evaluate_candidate
+
+    rate = 24_000
+    audio = tmp_path / "english-number.wav"
+    sf.write(audio, 0.1 * np.sin(2 * np.pi * 190 * np.arange(rate) / rate), rate, subtype="PCM_24")
+    expected, recognized = "The balance is -3 dollars.", "The balance is 3 dollars."
+    result = evaluate_candidate(expected_text=expected, recognized_text=recognized, audio_path=audio,
+        speech_parts=[{"text": expected, "language": "English", "durationMs": 1000}])
+    result = apply_english_checks(result, [english_reading_check(expected, recognized)])
+    assert result["phoneticErrorRate"] == 0
+    assert not result["passed"]
+    assert "영어 구절 받아쓰기 확인 필요" in result["warnings"]
+
+
+@pytest.mark.parametrize(("expected", "recognized", "passed"), [
+    ("The threshold is .75.", "The threshold is 75.", False),
+    ("The threshold is -.75.", "The threshold is .75.", False),
+    ("The threshold is - .75.", "The threshold is .75.", False),
+    ("The threshold is .75.", "The threshold is 0.75.", True),
+    ("The threshold is -.75.", "The threshold is minus point seven five.", True),
+    ("The threshold is - .75.", "The threshold is minus zero point seven five.", True),
+    ("The threshold is .75 %.", "The threshold is zero point seven five percent.", True),
+])
+def test_leading_decimal_preserves_its_point_and_optional_separated_sign(expected, recognized, passed):
+    check = english_reading_check(expected, recognized)
+    assert check["passed"] is passed
+    assert (check["editCount"] == 0) is passed
+
+
+@pytest.mark.parametrize(("expected", "recognized", "passed"), [
+    ("The threshold is 0.75.", "The threshold is zero point seven five.", True),
+    ("The threshold is .75.", "The threshold is point seven five.", True),
+    ("The threshold is -.75%.", "The threshold is minus point seven five percent.", True),
+    ("The threshold is -.75%.", "The threshold is point seven five percent.", False),
+    ("The threshold is 0.75.", "The threshold is zero point seven six.", False),
+])
+def test_whole_candidate_uses_english_numeric_evidence_without_changing_the_transcript(tmp_path, expected, recognized, passed):
+    from local_tts_engine.speech_quality import apply_english_checks, evaluate_candidate
+
+    rate = 24_000
+    audio = tmp_path / "number.wav"
+    sf.write(audio, 0.1 * np.sin(2 * np.pi * 190 * np.arange(rate) / rate), rate, subtype="PCM_24")
+    result = evaluate_candidate(expected_text=expected, recognized_text=recognized, audio_path=audio,
+        speech_parts=[{"language": "English", "text": expected, "durationMs": 1000}])
+    result = apply_english_checks(result, [english_reading_check(expected, recognized)])
+    assert result["passed"] is passed
+    assert result["recognizedText"] == recognized
+    if passed:
+        assert result["phoneticErrorRate"] == 0
+        assert result["comparisonRecognizedText"] == expected
+
+
+def test_mixed_numeric_spelling_cannot_hide_a_korean_word_loss(tmp_path):
+    from local_tts_engine.speech_quality import apply_english_checks, evaluate_candidate
+
+    rate = 24_000
+    audio = tmp_path / "mixed-number.wav"
+    sf.write(audio, 0.1 * np.sin(2 * np.pi * 190 * np.arange(3 * rate) / rate), rate, subtype="PCM_24")
+    english, heard = '"The threshold is 0.75."', '"The threshold is zero point seven five."'
+    parts = [{"language": "Korean", "text": "기준입니다", "durationMs": 1000},
+             {"language": "English", "text": english, "durationMs": 1000},
+             {"language": "Korean", "text": "반드시 확인합니다", "durationMs": 1000}]
+    expected = f"기준입니다 {english} 반드시 확인합니다"
+    check = english_reading_check(english, heard)
+    good = evaluate_candidate(expected_text=expected, recognized_text=f"기준입니다 {heard} 반드시 확인합니다",
+        audio_path=audio, speech_parts=parts)
+    assert apply_english_checks(good, [check])["passed"]
+    bad = evaluate_candidate(expected_text=expected, recognized_text=f"기준입니다 {heard}",
+        audio_path=audio, speech_parts=parts)
+    assert not apply_english_checks(bad, [check])["passed"]
+    assert "반드시 확인합니다" not in bad["comparisonRecognizedText"]
+
+
 def test_english_check_normalizes_only_typography_and_preserves_evidence():
     check = english_reading_check('“We’ll use a tool.”', "WE'LL USE A TOOL!", startMs=120, durationMs=900)
     assert check['passed'] and check['editCount'] == 0

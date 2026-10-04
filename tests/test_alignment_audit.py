@@ -21,6 +21,31 @@ def word(text: str, start: float, end: float) -> dict:
     return {"text": text, "startMs": start, "endMs": end}
 
 
+@pytest.mark.parametrize("extra", [
+    {"startMs": 1000, "endMs": 2000, "text": "대본에 없는 자막"},
+    {"startMs": 500, "endMs": 1000, "text": "겹친 가짜 자막"},
+])
+def test_caption_audit_accounts_for_every_cue_after_the_last_source_token(extra):
+    timeline = {"entries": [entry(0, 0, 1000, [word("안녕하세요", 0, 1000)], sourceText="안녕하세요")]}
+    good = {"startMs": 0, "endMs": 1000, "text": "안녕하세요"}
+    assert audit_timeline(timeline, [good], [])["status"] == "passed"
+    report = audit_timeline(timeline, [good, extra], [])
+    assert report["status"] == "warning"
+    assert report["findings"]["captionTextMismatch"] == [{
+        "type": "extra-caption", "cueIndex": 1, **extra,
+    }]
+
+
+def test_word_overlap_is_a_warning_even_with_a_correct_last_word_and_caption():
+    timeline = {"entries": [entry(0, 0, 1500, [
+        word("정상", 0, 800), word("단어", 300, 1100), word("끝입니다", 600, 1400),
+    ], sourceText="정상 단어 끝입니다")]}
+    report = audit_timeline(timeline, [{"startMs": 0, "endMs": 1500, "text": "정상 단어 끝입니다"}], [])
+    assert report["status"] == "warning"
+    assert report["summary"]["overlappingWords"] == 2
+    assert [item["overlapMs"] for item in report["findings"]["overlappingWords"]] == [500, 500]
+
+
 def entry(step: int, start: float, end: float, words: list[dict], **extra) -> dict:
     return {
         "slideId": "sample", "step": step, "startMs": start, "endMs": end,

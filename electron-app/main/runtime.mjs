@@ -34,6 +34,8 @@ export function createRuntimeService({
       stage: state.activeJob.stage,
       startedAt: state.activeJob.startedAt,
       kind: state.activeJob.kind,
+      paused: Boolean(state.activeJob.paused || state.activeJob.state === 'paused'),
+      pauseRequested: Boolean(state.activeJob.pauseRequested),
       error: state.activeJob.error || null,
     };
   }
@@ -84,7 +86,11 @@ export function createRuntimeService({
     await assertVoiceReady({
       modelId: options.modelId || "qwen3-tts",
       adapterId: adapterPath ? "selected" : "none",
-      adapters: adapterPath ? [{ id: "selected", path: adapterPath }] : [],
+      adapters: adapterPath ? [{ id: "selected", path: adapterPath,
+        voiceInputIdentity: options.voiceInputIdentity,
+        referencePaths: { referenceAudioPath: studio.referenceAudioPath,
+          referenceTextPath: studio.referenceTextPath },
+      }] : [],
     }, studio, {
       quality: !options.overrideText,
       aligner: requirements.course !== false && !options.overrideText,

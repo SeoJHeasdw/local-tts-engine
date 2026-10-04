@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
 import { ROOT, dateFolder, runtimePaths } from "./paths.mjs";
-import { finishJobProcesses } from "./job-process.mjs";
+import { finishJobProcesses, jobIsActive } from "./job-process.mjs";
 import { listDisplays } from "./capture/displays.mjs";
 import { normalizeEditName } from "../shared/index.mjs";
 
@@ -46,7 +46,7 @@ export function createRecordingService({
   }
 
   async function startRecording(rawOptions) {
-    if (state.activeJob && ["running", "cancelling"].includes(state.activeJob.state)) {
+    if (jobIsActive(state.activeJob)) {
       throw new Error("이미 실행 중인 작업이 있습니다.");
     }
     const options = recordingOptions(rawOptions);
@@ -62,6 +62,7 @@ export function createRecordingService({
       throw new Error("같은 이름의 결과가 있습니다. 새 결과 이름을 사용해 주세요.");
     }
     await fs.mkdir(outputDir, { recursive: true });
+    if (jobIsActive(state.activeJob)) throw new Error("이미 실행 중인 작업이 있습니다.");
     state.activeJob = {
       id: crypto.randomUUID(),
       kind: "record",

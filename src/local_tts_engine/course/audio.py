@@ -228,6 +228,13 @@ def normalize_word_closures(
             if 25 <= length_ms <= CLOSURE_MAX_MS and voiced_before and voiced_after:
                 runs.append(((first + begin) * hop, (first + index) * hop, text))
             begin = None
+    # Overlapping aligner words can describe the same physical closure. Apply
+    # its fill and cut once; repeating a cut at the original coordinates would
+    # cut later speech after the first cut shifted the samples.
+    unique_runs: dict[tuple[int, int], tuple[int, int, str]] = {}
+    for begin, end, text in runs:
+        unique_runs.setdefault((begin, end), (begin, end, text))
+    runs = list(unique_runs.values())
     record["closures"] = len(runs)
 
     out = samples.copy()
@@ -253,7 +260,13 @@ def normalize_word_closures(
             cuts.append((begin + keep, end - keep))
             record["capped"].append({"word": text, "startMs": round(begin * 1000 / rate),
                                      "lengthMs": round(length * 1000 / rate)})
-    for begin, end in sorted(cuts, reverse=True):
+    merged_cuts: list[tuple[int, int]] = []
+    for begin, end in sorted(cuts):
+        if merged_cuts and begin <= merged_cuts[-1][1]:
+            merged_cuts[-1] = (merged_cuts[-1][0], max(end, merged_cuts[-1][1]))
+        else:
+            merged_cuts.append((begin, end))
+    for begin, end in reversed(merged_cuts):
         blend = min(round(rate * 0.004), begin, len(out) - end)
         joined = out[begin - blend:begin] * np.linspace(1, 0, blend) + out[end - blend:end] * np.linspace(0, 1, blend)
         out = np.concatenate([out[:begin - blend], joined.astype(np.float32), out[end:]])

@@ -16,6 +16,7 @@ from typing import Any
 
 
 CAPTION_TEXT_TOLERANCE_MS = 100
+WORD_OVERLAP_TOLERANCE_MS = 20
 _SILENCE_EVENT = re.compile(r"silence_(start|end):\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)")
 
 
@@ -203,10 +204,12 @@ def _caption_text_audit(
     mismatches: list[dict[str, Any]] = []
     cues = sorted(captions, key=lambda cue: (_time(cue, "startMs"), _time(cue, "endMs")))
     cursor = 0
+    has_source = False
     for entry in entries:
         want = _tokens(entry.get("sourceText", entry.get("source_text", "")))
         if not want:
             continue
+        has_source = True
         step = _step(entry)
         taken: list[tuple[dict[str, Any], list[str]]] = []
         got: list[str] = []
@@ -230,6 +233,10 @@ def _caption_text_audit(
             continue
         index, previous_end = 0, None
         for cue_index, (cue, cue_tokens) in enumerate(taken):
+            if not cue_tokens:
+                mismatches.append({"step": step, "type": "empty-caption", "cueIndex": cue_index,
+                                   "text": str(cue.get("text", ""))})
+                continue
             first, last = spans[index][0], spans[index + len(cue_tokens) - 1][1] - 1
             index += len(cue_tokens)
             if last < first:
@@ -250,6 +257,13 @@ def _caption_text_audit(
             if cue_start > speech_start + tolerance_ms:
                 issues.append({**record, "type": "late-start", "deltaMs": round(cue_start - speech_start, 3)})
             previous_end = speech_end
+    # Legacy waveform-only timelines have no source text to compare. Once a
+    # source was checked, every remaining cue must also be accounted for.
+    if has_source and not any(item["type"] == "text" for item in mismatches):
+        mismatches.extend({"type": "extra-caption", "cueIndex": index,
+                           "text": str(cue.get("text", "")),
+                           "startMs": _time(cue, "startMs"), "endMs": _time(cue, "endMs")}
+                          for index, cue in enumerate(cues[cursor:], cursor))
     return issues, mismatches
 
 
@@ -278,7 +292,8 @@ def audit_timeline(
     entries = timeline.get("entries", [])
     findings: dict[str, list[dict[str, Any]]] = {
         "alignmentEnd": [], "transitions": [], "captions": [], "captionCoverage": [],
-        "tinyWords": [], "collapsedWords": [], "implausibleWords": [], "legacyAlignment": [], "missingCaptions": [],
+        "tinyWords": [], "collapsedWords": [], "implausibleWords": [], "overlappingWords": [],
+        "legacyAlignment": [], "missingCaptions": [],
         "captionText": [], "captionTextMismatch": [],
     }
     measurements: list[dict[str, Any]] = []
@@ -303,6 +318,13 @@ def audit_timeline(
         tiny = []
         for word_index, word in enumerate(words):
             word_start, word_end = _time(word, "startMs"), _time(word, "endMs")
+            if word_index and word_start < _time(words[word_index - 1], "endMs") - WORD_OVERLAP_TOLERANCE_MS:
+                findings["overlappingWords"].append({
+                    "step": step, "wordIndex": word_index, "text": str(word.get("text", "")),
+                    "previousWord": str(words[word_index - 1].get("text", "")),
+                    "startMs": word_start, "previousEndMs": _time(words[word_index - 1], "endMs"),
+                    "overlapMs": round(_time(words[word_index - 1], "endMs") - word_start, 3),
+                })
             duration = word_end - word_start
             token = str(word.get("text", ""))
             normalized = unicodedata.normalize("NFC", token)
@@ -395,12 +417,13 @@ def audit_timeline(
         "tinyWords": len(findings["tinyWords"]),
         "collapsedWords": len(findings["collapsedWords"]),
         "implausibleWords": len(findings["implausibleWords"]),
+        "overlappingWords": len(findings["overlappingWords"]),
         "plausibleShortSyllables": len(findings["tinyWords"]) - len(findings["collapsedWords"]),
         "legacyAlignmentIssues": len(findings["legacyAlignment"]),
     }
     warning = any(findings[key] for key in (
         "alignmentEnd", "transitions", "captionCoverage", "collapsedWords", "implausibleWords", "missingCaptions",
-        "captionText", "captionTextMismatch",
+        "captionText", "captionTextMismatch", "overlappingWords",
     ))
     return {
         "schemaVersion": 1, "status": "not-checked" if not entries else "warning" if warning else "passed",
@@ -413,6 +436,7 @@ def audit_timeline(
             "captionVoicedTailToleranceMs": 20, "shortWordThresholdMs": 80,
             "minimumPlausibleShortSyllableMs": 40, "targetAlignmentEndPassRate": 0.98,
             "minimumKoreanMultisyllableMsPerSyllable": 60, "captionTextToleranceMs": CAPTION_TEXT_TOLERANCE_MS,
+            "wordOverlapToleranceMs": WORD_OVERLAP_TOLERANCE_MS,
         },
         "summary": summary, "findings": findings, "stepMeasurements": measurements,
         "limitations": [

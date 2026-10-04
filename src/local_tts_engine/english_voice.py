@@ -172,8 +172,14 @@ def english_words(text: str) -> list[str]:
     ``were``. Discarding non-ASCII letters also hid an extra Korean utterance
     after an otherwise correct English quote. Only typography is normalized.
     """
-    normalized = unicodedata.normalize("NFKC", text).casefold().replace("’", "'")
-    return re.findall(r"[^\W_]+(?:'[^\W_]+)*", normalized)
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("’", "'").replace("−", "-")
+    # A sign, decimal point or percent sign carries spoken numeric meaning.
+    # Keep each complete number together before the ordinary word tokenizer
+    # removes sentence punctuation and splits hyphenated English words.
+    pattern = (r"(?<![\w.])(?:[+-][ \t]*)?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
+               r"(?:[ \t]*%)?"
+               r"(?!\w)(?!\.\d)|[^\W_]+(?:'[^\W_]+)*")
+    return [re.sub(r"\s+", "", token) for token in re.findall(pattern, normalized)]
 
 
 def _word_edits(expected: list[str], heard: list[str]) -> list[dict[str, Any]]:
@@ -228,14 +234,35 @@ def _cardinal(number: int) -> str:
 
 def _spoken_forms(word: str) -> set[str]:
     """Space-free spellings of how a word can sound; digits become words."""
-    if not (word.isascii() and word.isdigit()) or len(word) > 12 or word != str(int(word)):
+    # A leading decimal point still denotes a fraction: .75 and -.75 are
+    # 0.75 and -0.75, including a separated sign in source math prose.
+    number_word = re.sub(r"^([+-]?)\.", r"\g<1>0.", word)
+    match = re.fullmatch(r"([+-]?)([0-9]+(?:,[0-9]{3})*)(?:\.([0-9]+))?(%)?", number_word)
+    if match is None:
         return {word}
-    number = int(word)
-    forms = {_cardinal(number)}
-    if 1100 <= number <= 2099 and number % 100:
+    sign, integer, decimal, percent = match.groups()
+    digits = integer.replace(",", "")
+    if len(digits) > 12 or digits != str(int(digits)):
+        return {word}
+    number = int(digits)
+    if decimal is not None:
+        # Decimal digits are pronounced individually, unlike the cardinal
+        # integer part. 0.75 is zero point seven five, never zero seventy-five.
+        fractional = "".join(_ONES[int(digit)] for digit in decimal)
+        forms = {_cardinal(number) + "point" + fractional}
+        if number == 0:
+            forms.add("point" + fractional)
+    else:
+        forms = {_cardinal(number)}
+    if decimal is None and 1100 <= number <= 2099 and number % 100:
         # Years are also read in pairs: 1999 nineteen ninety-nine, 2006 twenty oh six.
         rest = number % 100
         forms.add(_cardinal(number // 100) + ("oh" + _ONES[rest] if rest < 10 else _cardinal(rest)))
+    if sign:
+        prefixes = ("minus", "negative") if sign == "-" else ("plus", "positive")
+        forms = {prefix + form for prefix in prefixes for form in forms}
+    if percent:
+        forms = {form + "percent" for form in forms}
     return forms
 
 
@@ -288,6 +315,34 @@ def english_reading_check(expected: str, recognized: str, **timing) -> dict[str,
             "wordEdits": edits, "editCount": len(edits), "spellingVariants": variants,
             "wordErrorRate": round(len(edits) / max(1, len(expected_words)), 6),
             **timing}
+
+
+def comparison_transcript(recognized: str, speech_parts: list[dict[str, Any]] | None) -> str:
+    """Fold only lexically verified English spellings for the Korean distance gate.
+
+    Routed ASR wraps each English reading in quotes. The original transcript
+    remains evidence; this comparison-only copy substitutes the source spelling
+    when the English word check proves the reading equivalent, including the
+    complete numeric sign, decimal and unit. A mismatched or ambiguous span is
+    never excused by the Korean distance gate.
+    """
+    english = [part for part in speech_parts or [] if part.get("language") == "English"]
+    if not english:
+        return recognized
+    quoted = list(re.finditer(r'"([^\"]*)"', recognized))
+    if len(quoted) == len(english):
+        result = recognized
+        for match, part in reversed(list(zip(quoted, english))):
+            if not english_reading_check(part["text"], match.group(1))["passed"]:
+                continue
+            source = part["text"].strip().strip('"“”')
+            result = result[:match.start()] + f'"{source}"' + result[match.end():]
+        return result
+    if len(english) == len(speech_parts or []) == 1:
+        source = english[0]["text"]
+        if english_reading_check(source, recognized)["passed"]:
+            return source
+    return recognized
 
 
 def _audio_parts(path, routing):

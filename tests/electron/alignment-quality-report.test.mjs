@@ -29,8 +29,11 @@ async function fixture(t, { auditError = null, cancelAudit = false, omitAuditRep
     alignmentQuality: manifestQuality,
   };
   await fs.writeFile(path.join(sourceDir, 'manifest.json'), JSON.stringify(manifest));
+  await fs.writeFile(manifest.audioPath, 'stub voice bytes');
   await fs.writeFile(path.join(renderDir, 'timeline.json'), JSON.stringify({ totalMs: 1000, entries: [] }));
   await fs.writeFile(path.join(renderDir, 'captions.json'), JSON.stringify([{ startMs: 0, endMs: 900, text: '정렬입니다.' }]));
+  await fs.writeFile(path.join(renderDir, 'captions.srt'), 'stub captions');
+  await fs.writeFile(path.join(renderDir, 'captions.vtt'), 'WEBVTT');
   const quality = { status: 'warning', blocksAudioGeneration: false,
     summary: { alignmentEndBeyond250Ms: 1, transitions: 2, earlyCaptions: 0, earlyCaptionsOver20Ms: 3, collapsedWords: 4 } };
   const calls = [], events = [];

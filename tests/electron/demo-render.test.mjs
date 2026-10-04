@@ -29,6 +29,33 @@ const waitPlan = () => buildEditPlan(recorded([
   { id: 'wait', startMs: 4000, endMs: 24000, steps: [{ verb: 'waitFor', startMs: 4000, endMs: 24000 }] },
 ]), { narration: { ask: { durationMs: 2000, file: '/tmp/ask.wav' }, wait: { durationMs: 9000, file: '/tmp/wait.wav' } } });
 
+test('내레이션 선택을 모두 해제한 재렌더는 이전 자막 파일과 검수 오버레이를 비운다', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tts-demo-empty-captions-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const demo = path.join(directory, 'demo'), voice = path.join(demo, 'narration', 'a', 'take.wav');
+  await fs.mkdir(path.dirname(voice), { recursive: true });
+  await exec('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=blue:s=160x90:r=25:d=1.2',
+    '-c:v', 'libx264rgb', '-qp', '0', path.join(demo, 'raw.mkv')]);
+  await exec('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=sample_rate=48000:duration=0.2', voice]);
+  await fs.writeFile(path.join(demo, 'scenes.json'), JSON.stringify({ schemaVersion: 1, scenario: 'captions',
+    viewport: { width: 160, height: 90, scale: 1 }, frame: { width: 160, height: 90 }, fps: 25,
+    durationMs: 1200, scenes: [{ id: 'a', startMs: 0, endMs: 1200, steps: [] }] }));
+  const script = { scenes: [{ id: 'a', text: '기존 내레이션 자막', status: 'approved',
+    voice: { selected: 'narration/a/take.wav', text: '기존 내레이션 자막' } }] };
+  await fs.writeFile(path.join(demo, 'script.json'), JSON.stringify(script));
+  await renderAppDemo({ outDir: directory, name: 'sample', quality: 'standard' });
+  assert.equal(collectReview(directory).captions.length, 1);
+  script.scenes[0].status = 'draft'; script.scenes[0].voice.selected = null;
+  await fs.writeFile(path.join(demo, 'script.json'), JSON.stringify(script));
+  const report = await renderAppDemo({ outDir: directory, name: 'sample', quality: 'standard' });
+  assert.equal(report.scenes[0].narrationMs, 0);
+  assert.equal(report.captions, null);
+  assert.deepEqual(collectReview(directory).captions, []);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(demo, 'captions.json'), 'utf8')).cues, []);
+  assert.equal((await fs.readFile(path.join(demo, 'captions.srt'), 'utf8')).trim(), '');
+  assert.equal((await fs.readFile(path.join(demo, 'captions.vtt'), 'utf8')).trim(), 'WEBVTT');
+});
+
 test('색 경로는 덱 촬영과 같은 문자열 하나를 나눠 쓴다', () => {
   const deck = captureEncodingArgs(profile);
   assert.equal(deck[0], '-vf');

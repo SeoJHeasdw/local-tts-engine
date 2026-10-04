@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createSettingsService } from '../../electron-app/main/settings.mjs';
 import { createTrainingService } from '../../electron-app/main/training.mjs';
 import { LEGACY_VOICE } from '../../electron-app/main/training-config.mjs';
-import { readVoiceProfile, validateVoiceProfile, writeVoiceProfile } from '../../electron-app/main/voice-profile.mjs';
+import { readVoiceProfile, validateVoiceProfile, writeVoiceProfile, voiceInputIdentity } from '../../electron-app/main/voice-profile.mjs';
 import { trainingClipAssessment, recommendedTrainingReference } from '../../electron-app/shared/training-review.mjs';
 import crypto from 'node:crypto';
 
@@ -22,7 +22,9 @@ async function adapterFixture(root, id, profile) {
     await put(path.join(run, 'reference.wav'), `reference ${profile.displayName}`);
     await put(path.join(run, 'reference.txt'), `${profile.displayName} 참조 전사`);
     await writeVoiceProfile(run, { schemaVersion: 1, referenceAudioPath: 'reference.wav',
-      referenceTextPath: 'reference.txt', ...profile }, { exclusive: true });
+      referenceTextPath: 'reference.txt', ...profile,
+      ...(profile.listeningStatus === 'approved' ? { listeningApproval: { status: 'approved', adapterScale: profile.approvedScale,
+        ...await voiceInputIdentity(path.join(run, 'adapters'), { referenceAudioPath: path.join(run, 'reference.wav'), referenceTextPath: path.join(run, 'reference.txt') }) } } : {}) }, { exclusive: true });
   }
   return run;
 }
@@ -58,10 +60,13 @@ test('기존 승인 목소리는 정확한 실행 ID 하나만 기본값·프로
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'legacy-voice-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const adapterRoot = path.join(root, 'runs'), settingsPath = path.join(root, 'settings.json');
-  await adapterFixture(adapterRoot, LEGACY_VOICE.adapterId);
+  const run = await adapterFixture(adapterRoot, LEGACY_VOICE.adapterId);
+  const legacyVoice = { ...LEGACY_VOICE, referenceAudioPath: path.join(root, 'reference.wav'), referenceTextPath: path.join(root, 'reference.txt') };
+  await put(legacyVoice.referenceAudioPath, 'legacy reference'); await put(legacyVoice.referenceTextPath, 'legacy transcript');
+  legacyVoice.listeningApproval = await voiceInputIdentity(path.join(run, 'adapters'), legacyVoice);
   const sameNameId = `2099-12-31/${path.basename(LEGACY_VOICE.adapterId)}`;
   await adapterFixture(adapterRoot, sameNameId);
-  const service = createSettingsService({ state: {}, adapterRoot, settingsPath });
+  const service = createSettingsService({ state: {}, adapterRoot, settingsPath, legacyVoice });
   const settings = await service.readAppSettings();
   assert.equal(settings.adapterId, LEGACY_VOICE.adapterId);
   assert.equal(settings.adapterScale, 0.6);
@@ -69,8 +74,8 @@ test('기존 승인 목소리는 정확한 실행 ID 하나만 기본값·프로
   assert.equal(legacy.displayName, '내 목소리');
   assert.equal(legacy.listeningStatus, 'approved');
   assert.equal(legacy.profileError, null);
-  assert.deepEqual(legacy.referencePaths, { referenceAudioPath: LEGACY_VOICE.referenceAudioPath,
-    referenceTextPath: LEGACY_VOICE.referenceTextPath });
+  assert.deepEqual(legacy.referencePaths, { referenceAudioPath: legacyVoice.referenceAudioPath,
+    referenceTextPath: legacyVoice.referenceTextPath });
   const sameName = settings.adapters.find(item => item.id === sameNameId);
   assert.equal(sameName.referencePaths, null);
   assert.equal(sameName.listeningStatus, 'pending');
@@ -127,7 +132,7 @@ test('미완료·비교용 학습은 제작 선택에서 빠지고 잘못된 프
   await assert.rejects(service.saveAppSettings(settings), /참조 음성 경로/);
   const complete = adapters.find(item => item.label === 'complete');
   await fs.rm(complete.referencePaths.referenceAudioPath);
-  await assert.rejects(service.saveAppSettings({ ...settings, adapterId: complete.id }), /참조 음성 파일/);
+  await assert.rejects(service.saveAppSettings({ ...settings, adapterId: complete.id }), /참조 음성|대표 녹음|청취/);
 });
 
 async function trainingFixture(t) {
@@ -154,6 +159,8 @@ async function trainingFixture(t) {
       if (args.includes('local_tts_engine.finetune_mlx')) {
         const output = args[args.indexOf('--output-dir') + 1];
         await put(path.join(output, 'training-result.json'), JSON.stringify({ status: 'complete' }));
+        await put(path.join(output, 'adapters', 'adapters.safetensors'), 'trained weights');
+        await put(path.join(output, 'adapters', 'adapter_config.json'), '{"rank":16}');
       }
       if (args.includes('local_tts_engine.text_candidate')) await put(args[args.indexOf('--output') + 1], 'preview');
     } });
@@ -175,6 +182,19 @@ test('새 화자 학습은 선택한 데이터만 쓰며 참조를 고정하고 
   assert.equal(profile.trainingStatus, 'complete');
   assert.equal(profile.trainJsonl, 'train_raw.jsonl');
   assert.equal(profile.trainJsonlSha256, crypto.createHash('sha256').update('{}\n').digest('hex'));
+  assert.equal(profile.preview.referenceAudioSha256, profile.referenceAudioSha256);
+  assert.equal(profile.preview.referenceTextSha256, profile.referenceTextSha256);
+  assert.equal(profile.preview.adapterWeightsSha256, crypto.createHash('sha256').update('trained weights').digest('hex'));
+  assert.equal(profile.preview.adapterConfigSha256, crypto.createHash('sha256').update('{"rank":16}').digest('hex'));
+  const settingsPath = path.join(f.runRoot, 'app-settings.json');
+  await put(settingsPath, JSON.stringify({ modelId: 'qwen3-tts', adapterId: 'none', adapterScale: 0.6,
+    paths: { outputRoot: path.join(f.runRoot, 'output'), voiceLibraryRoot: path.join(f.runRoot, 'library'),
+      referenceAudioPath: path.join(output, 'reference.wav'), referenceTextPath: path.join(output, 'reference.txt') } }));
+  const settingsService = createSettingsService({ state: {}, adapterRoot: f.runRoot, settingsPath });
+  const adapterId = path.relative(f.runRoot, output);
+  const approved = await settingsService.saveAppSettings({ adapterId, adapterScale: profile.preview.scale,
+    listeningApproval: { audioSha256: profile.preview.audioSha256 } });
+  assert.deepEqual(approved.adapters.find(item => item.id === adapterId).approvedScales, [profile.preview.scale]);
   assert.equal(await fs.readFile(path.join(output, 'reference.wav'), 'utf8'), 'audio 2');
   await fs.writeFile(path.join(f.directory, 'reference.wav'), 'next reference');
   assert.equal(await fs.readFile(path.join(output, 'reference.wav'), 'utf8'), 'audio 2', '재학습이 예전 프로필의 참조를 바꾸지 않는다');
@@ -184,6 +204,38 @@ test('새 화자 학습은 선택한 데이터만 쓰며 참조를 고정하고 
   assert.equal(f.events.at(-1).type, 'training-complete');
   assert.match(f.events.at(-1).previewUrl, /preview\.wav$/);
   await assert.rejects(f.service.runFineTune(f.options), /EEXIST/);
+});
+
+test('최초 학습 샘플 생성 중 입력이 바뀌면 승인 가능한 샘플로 등록하지 않는다', async t => {
+  for (const relative of ['adapters/adapters.safetensors', 'adapters/adapter_config.json', 'reference.wav', 'reference.txt']) {
+  const f = await trainingFixture(t);
+  // Keep the same real service, replacing only its process boundary with a
+  // trainer/generator fixture that changes the newly created input files.
+  const service = createTrainingService({ datasetRoot: path.dirname(f.directory), runRoot: f.runRoot,
+    state: f.state, emit: event => f.events.push(event), readAppSettings: async () => f.settings,
+    requireRuntimeTool: () => 'fixture-python', inspectModel: async () => ({ state: 'ready', path: '/cached/model' }),
+    runProcess: async (stage, executable, args) => {
+      if (args.includes('export')) await put(path.join(f.directory, 'official', 'train_raw.jsonl'), '{}\n');
+      if (args.includes('local_tts_engine.finetune_mlx')) {
+        const output = args[args.indexOf('--output-dir') + 1];
+        await put(path.join(output, 'training-result.json'), '{"status":"complete"}');
+        await put(path.join(output, 'adapters', 'adapters.safetensors'), 'trained weights');
+        await put(path.join(output, 'adapters', 'adapter_config.json'), '{"rank":16}');
+      }
+      if (args.includes('local_tts_engine.text_candidate')) {
+        await put(args[args.indexOf('--output') + 1], 'preview');
+        await put(path.join(path.dirname(args[args.indexOf('--reference') + 1]), relative), 'changed while creating the sample');
+      }
+    } });
+  await service.runFineTune({ ...f.options, name: 'changed-training-preview' });
+  const event = f.events.at(-1);
+  assert.equal(event.type, 'training-complete'); assert.equal(event.previewUrl, null);
+  assert.match(event.previewError, /만드는 동안.*바뀌었습니다/);
+  const days = await fs.readdir(f.runRoot);
+  const profile = JSON.parse(await fs.readFile(path.join(f.runRoot, days[0], 'changed-training-preview', 'voice-profile.json'), 'utf8'));
+  assert.equal(profile.trainingStatus, 'complete'); assert.equal(profile.listeningStatus, 'pending');
+  assert.equal(profile.preview, undefined);
+  }
 });
 
 test('전사 준비는 학습·기본값 변경 없이 끝나며 확인 안 한 참조로 학습하지 않는다', async t => {

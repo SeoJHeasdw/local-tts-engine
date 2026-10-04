@@ -41,6 +41,9 @@ for (const quality of Object.values(VIDEO_QUALITIES)) {
     const config = { presets: {}, providers: {}, outputRoot: 'original' };
     await fs.writeFile(configPath, JSON.stringify(config));
     const audioPath = path.join(dir, 'track.wav');
+    await fs.writeFile(audioPath, 'fixture voice bytes');
+    await fs.writeFile(path.join(renderDir, 'captions.srt'), 'fixture captions');
+    await fs.writeFile(path.join(renderDir, 'captions.vtt'), 'WEBVTT');
     await fs.writeFile(path.join(sourceDir, 'manifest.json'), JSON.stringify({ audioPath, durationMs: 1000,
       entries: [{ chapter: 'ch00', slide_id: 'intro', step: 0 }] }));
     for (const [file, value] of Object.entries({ 'timeline.json': { totalMs: 1000, entries: [] },

@@ -81,6 +81,7 @@ let trainingResultAdapterId = null;
 let previewReturnDraft = null;
 let settingsSaveQueue = Promise.resolve();
 let settingsSaveRevision = 0;
+let settingsReadRevision = 0;
 let settingsSavingVoice = false;
 let settingsJobRunning = false;
 
@@ -1046,12 +1047,28 @@ async function openModelSettings(section = 'general') {
   if (!dialog.open) dialog.showModal();
   showSettingsSection(section);
   settingsStatus('설정을 불러오는 중입니다.');
+  const ticket = ++settingsReadRevision, saveRevision = settingsSaveRevision;
+  const draftAtRead = appSettings ? voiceDraft() : null;
+  const current = () => ticket === settingsReadRevision && saveRevision === settingsSaveRevision && dialog.open;
   let settings, status;
-  try { [settings, status] = await Promise.all([api.getSettings(), api.getStatus().catch(() => null)]); }
-  catch (error) { settingsStatus(`설정을 불러오지 못했습니다. 닫았다가 다시 열어 주세요. ${error.message}`, 'failed'); return; }
+  try {
+    await settingsSaveQueue.catch(() => {});
+    if (!current()) return;
+    [settings, status] = await Promise.all([api.getSettings(), api.getStatus().catch(() => null)]);
+  }
+  catch (error) { if (current()) settingsStatus(`설정을 불러오지 못했습니다. 닫았다가 다시 열어 주세요. ${error.message}`, 'failed'); return; }
+  if (!current()) return;
+  const latestDraft = draftAtRead ? voiceDraft() : null;
+  const latestListeningKey = listeningReviewKey, latestListeningChecked = $('#voice-listening-confirm').checked;
+  const changedWhileReading = latestDraft && (latestDraft.modelId !== draftAtRead.modelId || latestDraft.adapterId !== draftAtRead.adapterId
+    || !sameVoiceScale(latestDraft.adapterScale, draftAtRead.adapterScale)
+    || ['referenceAudioPath', 'referenceTextPath'].some(key => latestDraft.paths[key] !== draftAtRead.paths[key]));
   voiceReadiness = status?.readiness || null;
   runtimeReadiness = status?.runtime || null;
   renderSettings(settings);
+  if (changedWhileReading) applyVoiceDraft(latestDraft);
+  if (latestListeningKey === listeningReviewKey) $('#voice-listening-confirm').checked = latestListeningChecked;
+  renderVoiceCommit();
   training.load().catch(showTrainingError);
   $("#finetune-panel").classList.add("hidden");
   $("#finetune-error").classList.add("hidden");
@@ -1610,7 +1627,7 @@ async function initialize() {
   $("#open-model-settings").dataset.tooltip = runtimeLabel;
   for (const issue of status.setupIssues || []) appendLog(`[환경] ${issue}\n`);
   setBusy(false);
-  if (["running", "cancelling"].includes(status.activeJob?.state)) {
+  if (["running", "paused", "cancelling"].includes(status.activeJob?.state)) {
     runningView = jobView(status.activeJob.kind);
     runningKind = runningView ? status.activeJob.kind : null;
     if (status.activeJob.kind === "edit") {
@@ -1631,11 +1648,14 @@ async function initialize() {
       openJobDialog("텍스트 목소리 후보 생성 중");
       $("#start-text-voices").disabled = true;
     } else {
-      creationState = status.activeJob.state;
+      creationState = status.activeJob.state === 'paused' ? 'running' : status.activeJob.state;
       showJobView("active");
       setBusy(true);
       setJobState("실행 중", "running");
       updateStages(status.activeJob.stage);
+      if (status.activeJob.state === 'paused' || status.activeJob.paused || status.activeJob.pauseRequested) {
+        handleJobEvent({ type: 'paused', immediate: Boolean(status.activeJob.state === 'paused' || status.activeJob.paused), jobKind: 'create' });
+      }
       if (creationState === "cancelling") handleJobEvent({ type: "cancelling", jobKind: "create" });
     }
   }
@@ -1848,6 +1868,7 @@ $("#open-model-settings").addEventListener("click", openModelSettings);
 // 적용하지 않고 닫은 목소리 편집은 저장되지 않는다. 조용히 사라지면 다음에
 // 열었을 때 왜 그대로인지 알 수 없으므로, 버렸다는 사실을 말하고 되돌려 둔다.
 $("#model-settings-dialog").addEventListener("close", () => {
+  ++settingsReadRevision;
   $('#voice-profile-preview').pause();
   if (!voiceDirty()) return;
   applyVoiceDraft({

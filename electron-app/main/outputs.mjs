@@ -3,7 +3,7 @@ import path from "node:path";
 import { LEGACY_OUTPUT_PATHS, runtimePaths } from "./paths.mjs";
 import { clearedFindingKeys, clearedOutputReviewWarningKeys, isInside, outputReviewWarnings,
   withClearedFindings, withClearedOutputReviewWarnings, withOutputReview } from "../shared/index.mjs";
-import { existingFile, findVideo, listDirectories, renameMediaFile, repointReport, safeStat, writeReport } from "./files.mjs";
+import { existingFile, fileSha256, findVideo, listDirectories, renameMediaFile, reportDescribesVideo, repointReport, safeStat, writeReport } from "./files.mjs";
 import { isCurrentCourseReport } from "./course-run-state.mjs";
 
 export function createOutputsService({
@@ -13,6 +13,12 @@ export function createOutputsService({
   shell,
   state,
 }) {
+  async function currentVideoReport(report, videoPath) {
+    if (!report || (report.videoPath && videoPath && await reportDescribesVideo(report.videoPath, videoPath, report))) return report;
+    return { ...report, summary: null, needsReview: [], listenSuggested: [], voiceFindings: [],
+      review: { status: 'pending', clearedFindings: [], clearedReviewWarnings: [] } };
+  }
+
   async function resolveOutputFile(target) {
     const settings = await readAppSettings();
     const studio = runtimePaths(settings.paths);
@@ -43,11 +49,12 @@ export function createOutputsService({
       const dir = path.join(studio.captionOutputRoot, entry.name);
       const stat = await safeStat(dir);
       const reportPath = path.join(dir, "validation-report.json");
-      const report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
+      let report = await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null);
       const videoPath = await findVideo(path.join(studio.videoOutputRoot, entry.name), entry.name)
         || await existingFile(report?.videoPath)
         || await findVideo(dir, entry.name);
       if (!videoPath && !report) continue;
+      report = await currentVideoReport(report, videoPath);
       result.push({
         key: `${storeId}:render:${entry.name}`,
         store: storeId,
@@ -156,10 +163,11 @@ export function createOutputsService({
       const dayRoot = path.join(studio.editOutputRoot, dayEntry.name);
       for (const entry of await listDirectories(dayRoot)) {
         const dir = path.join(dayRoot, entry.name);
-        const report = await fs.readFile(path.join(dir, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
+        let report = await fs.readFile(path.join(dir, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
         if (!report) continue;
         const stat = await safeStat(dir);
         const videoPath = await existingFile(report.videoPath) || await findVideo(dir, entry.name);
+        report = await currentVideoReport(report, videoPath);
         result.push({
           key: `${storeId}:edit:${dayEntry.name}:${entry.name}`,
           store: storeId,
@@ -234,7 +242,19 @@ export function createOutputsService({
     if (target.root === "pilot" && !await isCurrentCourseReport({ ...report, sourceDir: directory }, fs)) {
       throw new Error("최신 음성 제작이 완료되지 않아 이전 검수 기록을 승인할 수 없습니다.");
     }
-    const reviewed = await writeReport(reportPath, withOutputReview(report, status), "review");
+    const { file } = await resolveOutputFile(target);
+    if (!file) throw new Error('검수할 결과 파일을 찾지 못했습니다.');
+    // An explicit fresh listening approval can bind an old exact-path report
+    // without a fingerprint. It cannot override a conflicting existing digest.
+    const approvalCandidate = { ...report, review: { ...(report.review || {}), status: 'pending' } };
+    const approvedFileSha256 = status === 'approved' ? await fileSha256(file) : null;
+    if (status === 'approved' && ['render', 'edit'].includes(target.root)
+        && !await reportDescribesVideo(report.videoPath, file, approvalCandidate, approvedFileSha256)) {
+      throw new Error('영상 파일이 검수 기록과 다릅니다. 현재 영상의 검수 기록을 다시 만들어 주세요.');
+    }
+    const updated = withOutputReview(report, status);
+    if (status === 'approved') updated.review.fileSha256 = approvedFileSha256;
+    const reviewed = await writeReport(reportPath, updated, "review");
     return reviewed.review;
   }
 

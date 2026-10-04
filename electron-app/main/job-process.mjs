@@ -4,6 +4,24 @@ const CANCELLED = "사용자가 작업을 중지했습니다.";
 const stageLabels = { voice: "목소리 생성", snapshot: "제작 입력 준비", export: "영상 자료 연결",
   captions: "자막 생성", capture: "화면 촬영", record: "화면 녹화", verify: "결과 검증", edit: "영상 편집", training: "학습" };
 
+export function jobIsActive(job) {
+  return Boolean(job && ["running", "paused", "cancelling"].includes(job.state));
+}
+
+// Acquire before the first asynchronous preflight. Every start channel shares
+// this reservation, including starts that have not created an active job yet.
+export async function withJobStartReservation(state, start) {
+  if (state.startReservation || jobIsActive(state.activeJob)) {
+    throw new Error("이미 실행 중인 작업이 있습니다.");
+  }
+  const reservation = Symbol("job-start");
+  state.startReservation = reservation;
+  try { return await start(); }
+  finally {
+    if (state.startReservation === reservation) delete state.startReservation;
+  }
+}
+
 export function stopJobProcesses(job, signal = "SIGTERM") {
   let signalled = 0;
   for (const child of job?.children || []) {
@@ -65,10 +83,11 @@ export function finishJobProcesses(job, signal = "SIGUSR1") {
 }
 
 export function cancelJobProcesses(job, { forceAfterMs = 3000, onForce = () => {} } = {}) {
-  if (!job || !["running", "cancelling"].includes(job.state)) return false;
+  if (!jobIsActive(job)) return false;
   if (job.cancelled) return true;
   job.cancelled = true;
   job.state = "cancelling";
+  job.pauseRequested = false;
   // 멈춰 있는 프로세스는 SIGTERM 을 처리할 기회를 얻지 못한다. 먼저 깨운다.
   if (job.paused) resumeJobProcesses(job);
   stopJobProcesses(job);

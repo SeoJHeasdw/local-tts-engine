@@ -7,5 +7,15 @@
   "referenceAudioPath": "artifacts/benchmarks/2026-08-23/reference.wav",
   "referenceTextPath": "artifacts/benchmarks/2026-08-23/reference.txt",
   "listeningStatus": "approved",
-  "adapterScale": 0.6
+  "adapterScale": 0.6,
+  "listeningApproval": {
+    "status": "approved",
+    "adapterScale": 0.6,
+    "adapterWeightsSha256": "da66f67e4cac9f4dadcd35d8101674909c44106f07cc6e5ee98cbc20059a93de",
+    "adapterConfigSha256": "8a521013edbfb715b021960e59a077298c8d075762e3204b912b5ca8e4688ea4",
+    "referenceAudioSha256": "5ffb184318c0fb427270fd1753d59b077926c86258681619d6e4b0dd95999319",
+    "referenceTextContentSha256": "d92926835c149334350d9261ed55c4904529f79193284baa515a520c64677724",
+    "source": "existing-human-approved-production-voice",
+    "evidence": "output/tts/2026-09-28/studio-20260928-210855-ch00-full/manifest.json"
+  }
 }

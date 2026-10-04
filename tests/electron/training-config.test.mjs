@@ -38,7 +38,11 @@ async function fixture(t) {
       calls.push(args);
       const value = flag => args[args.indexOf(flag) + 1];
       if (args.includes('export')) await put(path.join(value('--dataset-dir'), 'official/train_raw.jsonl'), '{"text":"accepted"}\n');
-      if (args.includes('local_tts_engine.finetune_mlx')) await put(path.join(value('--output-dir'), 'training-result.json'), '{"status":"complete"}');
+      if (args.includes('local_tts_engine.finetune_mlx')) {
+        await put(path.join(value('--output-dir'), 'training-result.json'), '{"status":"complete"}');
+        await put(path.join(value('--output-dir'), 'adapters', 'adapters.safetensors'), 'trained weights');
+        await put(path.join(value('--output-dir'), 'adapters', 'adapter_config.json'), '{"rank":8}');
+      }
       if (args.includes('local_tts_engine.text_candidate')) await put(value('--output'), 'preview');
     } });
   return { root, datasetRoot, config, trainingConfigPath, legacyVoice, service, calls, events, models, settings };

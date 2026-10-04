@@ -1,5 +1,7 @@
 import nativeFs from "node:fs/promises";
 import path from "node:path";
+import crypto from 'node:crypto';
+import { fileSha256 } from './files.mjs';
 
 export const VOICE_PROFILE_FILE = "voice-profile.json";
 
@@ -63,4 +65,23 @@ export async function writeVoiceProfile(runDirectory, raw, { fs = nativeFs, excl
   await fs.writeFile(path.join(runDirectory, VOICE_PROFILE_FILE), `${JSON.stringify(profile, null, 2)}\n`,
     { encoding: "utf8", flag: exclusive ? "wx" : "w" });
   return profile;
+}
+
+export async function voiceInputIdentity(adapterPath, referencePaths, { fs = nativeFs } = {}) {
+  const digest = fs === nativeFs ? fileSha256 : async file => crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
+  const [adapterWeightsSha256, adapterConfigSha256, referenceAudioSha256, referenceTextSha256, text] = await Promise.all([
+    digest(path.join(adapterPath, 'adapters.safetensors')), digest(path.join(adapterPath, 'adapter_config.json')),
+    digest(referencePaths.referenceAudioPath), digest(referencePaths.referenceTextPath), fs.readFile(referencePaths.referenceTextPath, 'utf8'),
+  ]);
+  return { adapterWeightsSha256, adapterConfigSha256, referenceAudioSha256, referenceTextSha256,
+    referenceTextContentSha256: crypto.createHash('sha256').update(text.trim()).digest('hex') };
+}
+
+// An old approval may bind the stripped transcript used by course_pilot. New
+// samples bind the full file; neither format can acquire approval from new bytes.
+export function voiceInputMatches(expected, current) {
+  return Boolean(expected && current && ['adapterWeightsSha256', 'adapterConfigSha256', 'referenceAudioSha256']
+    .every(key => typeof expected[key] === 'string' && expected[key] === current[key])
+    && (typeof expected.referenceTextSha256 === 'string' ? expected.referenceTextSha256 === current.referenceTextSha256
+      : typeof expected.referenceTextContentSha256 === 'string' && expected.referenceTextContentSha256 === current.referenceTextContentSha256));
 }

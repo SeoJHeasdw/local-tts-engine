@@ -15,6 +15,20 @@ def word(text, start, end):
     return {"text": text, "startMs": start, "endMs": end}
 
 
+def test_plausible_but_overlapping_words_are_repaired_between_sound_anchors():
+    words = [word("정상", 0, 800), word("단어", 300, 1100), word("끝입니다", 600, 1400)]
+    timeline = {"totalMs": 1500, "entries": [entry(words, end=1500)]}
+    fixed, report = repair_timeline(timeline, [])
+    revised = fixed["entries"][0]["alignment"]["words"]
+    assert revised[0] == words[0]
+    assert all(left["endMs"] <= right["startMs"] for left, right in zip(revised, revised[1:]))
+    assert revised[-1]["endMs"] == 1500
+    assert fixed["entries"][0]["alignment"]["rawWords"] == words
+    assert fixed["entries"][0]["alignment"]["correction"]["interpolatedSpans"]
+    assert not report["warnings"]
+    assert timeline["entries"][0]["alignment"]["words"] == words
+
+
 def test_collapsed_phrase_and_final_sentence_return_to_separate_speech_islands():
     words = [word('클로드', 0, 400), word('코드나', 400, 800), word('코덱스라면', 800, 1600),
              word('서브에이전트', 1632, 1664), word('셋입니다', 1696, 1728),

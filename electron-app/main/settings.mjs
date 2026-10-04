@@ -4,7 +4,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { APP_SETTINGS_PATH, FINETUNE_RUN_ROOT, normalizeStudioPaths, runtimePaths } from "./paths.mjs";
 import { settingsAdapterScale } from "../shared/index.mjs";
 import { LEGACY_VOICE } from "./training-config.mjs";
-import { readVoiceProfile, writeVoiceProfile } from "./voice-profile.mjs";
+import { readVoiceProfile, writeVoiceProfile, voiceInputIdentity, voiceInputMatches } from "./voice-profile.mjs";
 import { fileSha256 } from './files.mjs';
 import { sameVoiceScale } from '../shared/voice-profile-view.mjs';
 
@@ -46,29 +46,77 @@ export function createSettingsService({
             }
           }
           if (profile && profile.trainingStatus !== "complete") continue;
-          const approvedScale = profile?.approvedScale ?? profile?.listeningApproval?.adapterScale
+          const recordedScale = profile?.approvedScale ?? profile?.listeningApproval?.adapterScale
             ?? (profile?.listeningStatus === 'approved' ? profile?.comparisonScale : null)
             ?? (legacy ? legacyVoice.adapterScale : null);
-          const approvedScales = [...new Set([approvedScale, ...(profile?.listeningApprovals || [])
-            .filter(item => item.status === 'approved').map(item => item.adapterScale)].filter(value => Number.isFinite(value)))];
           let previewUrl = null, previewAudioSha256 = null, previewScale = null;
           let previewAdapterWeightsSha256 = null, previewAdapterConfigSha256 = null;
+          let previewReferenceAudioSha256 = null, previewReferenceTextSha256 = null, metadata = null;
           const previewPath = profile?.preview?.audioPath
             ? path.resolve(runDirectory, profile.preview.audioPath) : path.join(runDirectory, 'preview.wav');
           if ((await safeStat(previewPath))?.size > 0) {
             try {
-              const metadata = await fs.readFile(path.join(runDirectory, 'preview.json'), 'utf8').then(JSON.parse).catch(() => null);
+              metadata = await fs.readFile(path.join(path.dirname(previewPath), 'preview.json'), 'utf8').then(JSON.parse).catch(() => null)
+                || await fs.readFile(path.join(runDirectory, 'preview.json'), 'utf8').then(JSON.parse).catch(() => null);
               const digest = await fileSha256(previewPath);
-              if (!profile?.preview?.audioSha256 || profile.preview.audioSha256 === digest) {
+              const recordedAudioHash = profile?.preview?.audioSha256 || metadata?.audioSha256;
+              if (recordedAudioHash && recordedAudioHash === digest) {
+                const sampleMetadata = metadata?.audioSha256 === digest ? metadata : null;
                 previewUrl = pathToFileURL(previewPath).href;
                 previewAudioSha256 = digest;
-                previewScale = profile?.preview?.scale ?? metadata?.adapter?.scale
+                previewScale = profile?.preview?.scale ?? sampleMetadata?.adapter?.scale
                   ?? profile?.trainingConfig?.preview?.scale ?? profile?.comparisonScale ?? null;
-                previewAdapterWeightsSha256 = profile?.preview?.adapterWeightsSha256 ?? metadata?.adapter?.weightsSha256 ?? null;
-                previewAdapterConfigSha256 = profile?.preview?.adapterConfigSha256 ?? metadata?.adapter?.configSha256 ?? null;
+                previewAdapterWeightsSha256 = profile?.preview?.adapterWeightsSha256 ?? sampleMetadata?.adapter?.weightsSha256 ?? null;
+                previewAdapterConfigSha256 = profile?.preview?.adapterConfigSha256 ?? sampleMetadata?.adapter?.configSha256 ?? null;
+                previewReferenceAudioSha256 = profile?.preview?.referenceAudioSha256 ?? sampleMetadata?.referenceAudioSha256 ?? null;
+                previewReferenceTextSha256 = profile?.preview?.referenceTextSha256 ?? sampleMetadata?.referenceTextSha256 ?? null;
               }
             } catch { /* An unavailable sample never counts as listening approval. */ }
           }
+          let currentIdentity = null;
+          try { if (referencePaths) currentIdentity = await voiceInputIdentity(adapterPath, referencePaths, { fs }); }
+          catch { /* Missing inputs remain usable for general settings, never production. */ }
+          const recordedStatus = profile?.listeningStatus || (legacy && !profileError ? legacyVoice.listeningStatus : 'pending');
+          const previewIdentity = { adapterWeightsSha256: previewAdapterWeightsSha256, adapterConfigSha256: previewAdapterConfigSha256,
+            referenceAudioSha256: previewReferenceAudioSha256, referenceTextSha256: previewReferenceTextSha256 };
+          const plan = profile?.reviewPlan
+            ? await fs.readFile(path.resolve(runDirectory, profile.reviewPlan), 'utf8').then(JSON.parse).catch(() => null) : null;
+          const previewPlanBound = metadata?.audioSha256 === previewAudioSha256 && previewAudioSha256
+            && metadata?.adapter?.weightsSha256 === previewAdapterWeightsSha256
+            && metadata?.adapter?.configSha256 === previewAdapterConfigSha256
+            && sameVoiceScale(metadata?.adapter?.scale, previewScale);
+          const records = [...(profile?.listeningApprovals || (profile?.listeningApproval ? [profile.listeningApproval] : []))];
+          if (!records.length && legacy && recordedStatus === 'approved' && Number.isFinite(recordedScale)) {
+            records.push({ ...legacyVoice.listeningApproval, status: 'approved', adapterScale: recordedScale, source: 'legacy-approved-voice' });
+          }
+          const listeningApprovals = await Promise.all(records.map(async record => {
+            const sampleBound = record.audioSha256 && record.audioSha256 === previewAudioSha256
+              && sameVoiceScale(record.adapterScale, previewScale);
+            const approvalMetadata = record.audioPath
+              ? await fs.readFile(path.join(path.dirname(path.resolve(runDirectory, record.audioPath)), 'preview.json'), 'utf8').then(JSON.parse).catch(() => null)
+                || await fs.readFile(path.join(runDirectory, 'preview.json'), 'utf8').then(JSON.parse).catch(() => null) : metadata;
+            const comparisonBound = record.audioSha256 && approvalMetadata?.audioSha256 === record.audioSha256
+              && sameVoiceScale(record.adapterScale, approvalMetadata?.adapter?.scale)
+              && record.adapterWeightsSha256 === approvalMetadata?.adapter?.weightsSha256
+              && record.adapterConfigSha256 === approvalMetadata?.adapter?.configSha256;
+            const historical = legacy && sameVoiceScale(record.adapterScale, legacyVoice.adapterScale) ? legacyVoice.listeningApproval : null;
+            return { ...record,
+              adapterWeightsSha256: record.adapterWeightsSha256 || historical?.adapterWeightsSha256 || (sampleBound ? previewIdentity.adapterWeightsSha256 : null),
+              adapterConfigSha256: record.adapterConfigSha256 || historical?.adapterConfigSha256 || (sampleBound ? previewIdentity.adapterConfigSha256 : null),
+              referenceAudioSha256: record.referenceAudioSha256 || historical?.referenceAudioSha256 || (sampleBound ? previewIdentity.referenceAudioSha256 : null)
+                || (comparisonBound ? approvalMetadata?.referenceAudioSha256 || plan?.referenceAudioSha256 : null),
+              referenceTextSha256: record.referenceTextSha256 || historical?.referenceTextSha256 || (sampleBound ? previewIdentity.referenceTextSha256 : null)
+                || (comparisonBound ? approvalMetadata?.referenceTextSha256 || plan?.referenceTextSha256 : null),
+              referenceTextContentSha256: record.referenceTextContentSha256 || historical?.referenceTextContentSha256,
+            };
+          }));
+          const approvedScales = recordedStatus === 'approved' ? [...new Set(listeningApprovals
+            .filter(record => record.status === 'approved' && Number.isFinite(record.adapterScale) && voiceInputMatches(record, currentIdentity))
+            .map(record => record.adapterScale))] : [];
+          const listeningStatus = recordedStatus === 'approved' && !approvedScales.length ? 'pending' : recordedStatus;
+          const approvalError = recordedStatus === 'approved' && !approvedScales.length
+            ? '청취 확인 당시의 목소리 파일·대표 녹음·전사를 확인할 수 없습니다. 시험 음성을 다시 만들어 듣고 확인해 주세요.' : null;
+          const approvedScale = approvedScales.find(value => sameVoiceScale(value, recordedScale)) ?? approvedScales[0] ?? null;
           adapters.push({
             id,
             label: run.name,
@@ -77,9 +125,11 @@ export function createSettingsService({
             displayName: profile?.displayName || (legacy ? legacyVoice.displayName : run.name),
             referencePaths,
             profileError,
-            listeningStatus: profile?.listeningStatus || (legacy && !profileError ? legacyVoice.listeningStatus : "pending"),
+            listeningStatus, approvalError, voiceInputIdentity: approvedScales.length ? currentIdentity : null, listeningApprovals,
             legacy, runDirectory, previewUrl, previewAudioSha256, previewScale,
             previewAdapterWeightsSha256, previewAdapterConfigSha256,
+            previewReferenceAudioSha256: previewReferenceAudioSha256 || (previewPlanBound ? plan?.referenceAudioSha256 : null),
+            previewReferenceTextSha256: previewReferenceTextSha256 || (previewPlanBound ? plan?.referenceTextSha256 : null),
             approvedScale, approvedScales,
           });
         }
@@ -127,7 +177,7 @@ export function createSettingsService({
     }
     if (voiceChanged && adapter && !raw.listeningApproval
         && (adapter.listeningStatus !== 'approved' || !adapter.approvedScales.some(value => sameVoiceScale(value, scale)))) {
-      throw new Error('선택한 강도의 시험 음성을 듣고 확인한 뒤 적용해 주세요.');
+      throw new Error(adapter.approvalError || '선택한 강도의 시험 음성을 듣고 확인한 뒤 적용해 주세요.');
     }
     const settings = {
       modelId,
@@ -159,20 +209,23 @@ export function createSettingsService({
       if (await fileSha256(audioPath) !== adapter.previewAudioSha256) {
         throw new Error('시험 음성이 바뀌었습니다. 다시 들어 보고 확인해 주세요.');
       }
-      const weightsHash = await fileSha256(path.join(adapter.path, 'adapters.safetensors'));
-      const configHash = await fileSha256(path.join(adapter.path, 'adapter_config.json'));
-      if ((adapter.previewAdapterWeightsSha256 && adapter.previewAdapterWeightsSha256 !== weightsHash)
-          || (adapter.previewAdapterConfigSha256 && adapter.previewAdapterConfigSha256 !== configHash)) {
+      const identity = await voiceInputIdentity(adapter.path, adapter.referencePaths, { fs });
+      const expected = { adapterWeightsSha256: adapter.previewAdapterWeightsSha256, adapterConfigSha256: adapter.previewAdapterConfigSha256,
+        referenceAudioSha256: adapter.previewReferenceAudioSha256, referenceTextSha256: adapter.previewReferenceTextSha256 };
+      if (!expected.adapterWeightsSha256 || !expected.adapterConfigSha256 || !expected.referenceAudioSha256 || !expected.referenceTextSha256) {
+        throw new Error('시험 음성의 목소리 파일·대표 녹음·전사 확인 기록이 없습니다. 시험 음성을 다시 만들어 주세요.');
+      }
+      if (expected.adapterWeightsSha256 !== identity.adapterWeightsSha256 || expected.adapterConfigSha256 !== identity.adapterConfigSha256) {
         throw new Error('시험 음성을 만든 뒤 목소리 학습 파일이 바뀌었습니다. 시험 음성을 다시 만들어 주세요.');
       }
+      if (!voiceInputMatches(expected, identity)) throw new Error('시험 음성을 만든 뒤 대표 녹음이나 전사가 바뀌었습니다. 시험 음성을 다시 만들어 주세요.');
       const approval = { status: 'approved', date: new Date().toISOString(),
           source: 'settings-listening-confirmation', adapterScale: scale,
           audioPath: fileURLToPath(audioPath), audioSha256: adapter.previewAudioSha256,
-          adapterWeightsSha256: weightsHash, adapterConfigSha256: configHash };
-      const previous = profile.listeningApprovals || (profile.listeningApproval ? [profile.listeningApproval]
-        : adapter.listeningStatus === 'approved' && Number.isFinite(adapter.approvedScale)
-          ? [{ status: 'approved', adapterScale: adapter.approvedScale, source: 'pre-existing-listening-approval' }] : []);
+          ...identity };
+      const previous = adapter.listeningApprovals;
       await writeVoiceProfile(adapter.runDirectory, { ...profile, listeningStatus: 'approved', approvedScale: scale,
+        referenceAudioSha256: identity.referenceAudioSha256, referenceTextSha256: identity.referenceTextSha256,
         listeningApproval: approval, listeningApprovals: [...previous, approval] }, { fs });
     }
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });
@@ -196,6 +249,9 @@ export function createSettingsService({
     }
     if (adapter?.profileError) throw new Error(adapter.profileError);
     if (adapter?.listeningStatus === 'rejected') throw new Error('사용을 보류한 목소리입니다. 설정에서 다시 들어 보고 확인해 주세요.');
+    if (adapter && (adapter.listeningStatus !== 'approved' || !adapter.approvedScales?.some(value => sameVoiceScale(value, settings.adapterScale)))) {
+      throw new Error(adapter.approvalError || '선택한 강도의 시험 음성을 듣고 확인한 뒤 적용해 주세요.');
+    }
     return {
       ...options,
       modelId: settings.modelId,
@@ -204,6 +260,7 @@ export function createSettingsService({
       adapterLabel: adapter?.label || null,
       adapterPath: adapter?.path || null,
       adapterScale: settings.adapterScale,
+      voiceInputIdentity: adapter?.voiceInputIdentity || null,
       voiceParallelism: settings.voiceParallelism,
       paths: normalizeStudioPaths({ ...settings.paths, ...adapter?.referencePaths }),
     };

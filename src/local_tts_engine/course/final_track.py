@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import subprocess
 import tempfile
 from pathlib import Path
@@ -48,16 +47,16 @@ def _comparison_samples(source: np.ndarray, source_rate: int, output_rate: int) 
 
 
 def _waveform_similarity(source: np.ndarray, output: np.ndarray, source_rate: int,
-                         output_rate: int) -> tuple[float, float | None]:
+                         output_rate: int) -> tuple[float, float | None, float | None]:
     """Compare the whole clip and its audible quarter-second spans."""
     if len(source) < 100 or len(output) < 100:
-        return 0.0, None
+        return 0.0, None, None
     source = _comparison_samples(source, source_rate, output_rate)
     # The reference is now on the same sample grid as the delivered waveform.
-    # Bound comparison vectors while retaining the existing local audit windows.
-    stride = max(1, math.ceil(len(output) / 200_000))
-    positions = np.arange(0, len(output), stride, dtype=np.float64)
-    output_view = np.asarray(output[::stride], dtype=np.float64)
+    # Every output sample participates. Strided sampling can hide corruption
+    # entirely when the damaged samples fall between the inspected positions.
+    positions = np.arange(len(output), dtype=np.float64)
+    output_view = np.asarray(output, dtype=np.float64)
     best = -1.0
     best_source_view: np.ndarray | None = None
     for delay in range(-8, 9, 2):
@@ -72,9 +71,10 @@ def _waveform_similarity(source: np.ndarray, output: np.ndarray, source_rate: in
             if similarity > best:
                 best, best_source_view = similarity, source_view
     if best_source_view is None:
-        return best, None
-    window = max(100, round(0.25 * output_rate / stride))
+        return best, None, None
+    window = max(100, round(0.25 * output_rate))
     local_similarities: list[float] = []
+    audible_gains: list[float] = []
     for start in range(0, len(output_view), window):
         source_part = best_source_view[start:start + window]
         output_part = output_view[start:start + window]
@@ -82,7 +82,16 @@ def _waveform_similarity(source: np.ndarray, output: np.ndarray, source_rate: in
             continue
         denominator = np.linalg.norm(source_part) * np.linalg.norm(output_part)
         local_similarities.append(float(np.dot(source_part, output_part) / denominator) if denominator else 0.0)
-    return best, min(local_similarities) if local_similarities else None
+        audible_gains.append(_rms(output_part) / _rms(source_part))
+    # Constant normalization gain is legitimate, but a locally near-muted
+    # spoken span is signal loss even when its cosine similarity stays one.
+    # Use the best constant normalization gain over all samples, weighted by
+    # source energy. A median over windows can itself become near-zero when
+    # most quiet spoken windows disappear behind one retained louder phrase.
+    source_energy = float(np.dot(best_source_view, best_source_view))
+    reference_gain = float(np.dot(best_source_view, output_view)) / source_energy if source_energy else 0.0
+    gain_ratio = min(audible_gains) / reference_gain if audible_gains and reference_gain > 0 else None
+    return best, min(local_similarities) if local_similarities else None, gain_ratio
 
 
 def _gap_has_signal(file: sf.SoundFile, start: int, stop: int) -> bool:
@@ -127,8 +136,9 @@ def inspect_final_track(native_track: Path, final_track: Path, chunks: list[dict
             if len(assembled) != len(source) or not np.array_equal(assembled, source):
                 issues.append({"code": "assembly-mismatch", "chunkKey": key})
             native_rms, final_rms = _rms(source), _rms(rendered)
-            similarity, local_similarity = (_waveform_similarity(source, rendered, source_rate, output_rate)
-                                            if native_rms >= 0.001 and final_rms >= 0.001 else (None, None))
+            similarity, local_similarity, local_gain_ratio = (
+                _waveform_similarity(source, rendered, source_rate, output_rate)
+                if native_rms >= 0.001 and final_rms >= 0.001 else (None, None, None))
             if native_rms >= 0.001 and final_rms < 0.001:
                 issues.append({"code": "missing-speech", "chunkKey": key})
             elif similarity is not None and similarity < 0.85:
@@ -136,6 +146,9 @@ def inspect_final_track(native_track: Path, final_track: Path, chunks: list[dict
             elif local_similarity is not None and local_similarity < 0.95:
                 issues.append({"code": "local-waveform-changed", "chunkKey": key,
                                "similarity": round(local_similarity, 4)})
+            elif local_gain_ratio is not None and local_gain_ratio < 0.1:
+                issues.append({"code": "local-signal-loss", "chunkKey": key,
+                               "minimumGainRatio": round(local_gain_ratio, 6)})
             if not np.all(np.isfinite(rendered)):
                 issues.append({"code": "invalid-samples", "chunkKey": key})
             records.append({
@@ -144,6 +157,7 @@ def inspect_final_track(native_track: Path, final_track: Path, chunks: list[dict
                 "nativeRms": round(native_rms, 6), "finalRms": round(final_rms, 6),
                 "similarity": round(similarity, 4) if similarity is not None else None,
                 "minimumLocalSimilarity": round(local_similarity, 4) if local_similarity is not None else None,
+                "minimumLocalGainRatio": round(local_gain_ratio, 6) if local_gain_ratio is not None else None,
             })
             if native_start > previous_end:
                 gap_start = round(previous_end * output_rate / source_rate)

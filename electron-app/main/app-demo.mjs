@@ -11,6 +11,7 @@ import { cameraSetting } from "../shared/demo-camera.mjs";
 import { createDemoCameraPreview } from "./editing/demo-camera-preview.mjs";
 import { collectReview } from "./editing/demo-review.mjs";
 import { isRetryableDemoFailure } from "./capture/record-app.mjs";
+import { jobIsActive } from "./job-process.mjs";
 
 // 앱 데모 촬영을 화면에서 돌린다. 세 단계(촬영 → 목소리 → 렌더)는 CLI와 같은
 // 작업자(`workers/demo.mjs`)를 별도 프로세스로 실행한다. 한 가지 일에 두 벌의
@@ -38,7 +39,7 @@ export function createAppDemoService({
     return previewCamera(options);
   }
 
-  const busy = () => state.activeJob && ["running", "cancelling"].includes(state.activeJob.state);
+  const busy = () => jobIsActive(state.activeJob);
 
   function assertIdle() {
     if (busy()) throw new Error("이미 실행 중인 작업이 있습니다.");

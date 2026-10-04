@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
-import { RENDERER_DIR, runtimePaths } from "./paths.mjs";
+import { ADAPTER, RENDERER_DIR, dateFolder, runtimePaths } from "./paths.mjs";
 import { audioEnvelope, makeRegionPreview, newPreviewDirectory } from "./editing/review-media.mjs";
-import { cancelJobProcesses, pauseJobProcesses, resumeJobProcesses } from "./job-process.mjs";
+import { cancelJobProcesses, jobIsActive, pauseJobProcesses, resumeJobProcesses, withJobStartReservation } from "./job-process.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isInside, normalizeEditName, normalizeOptions, normalizeVoiceText, pendingUnits } from "../shared/index.mjs";
 import { renameMediaFile, repointReportFile, safeStat } from "./files.mjs";
@@ -99,17 +99,25 @@ export function createIpcService({
     if (!senderIsLocal(event)) throw new Error("허용되지 않은 화면 요청입니다.");
   }
 
+  function startHandler(handler) {
+    return async (event, ...args) => {
+      guard(event);
+      return withJobStartReservation(state, () => handler(event, ...args));
+    };
+  }
+
   function launchSettingsJob(options, run) {
-    if (state.activeJob && ['running', 'cancelling'].includes(state.activeJob.state)) {
+    if (jobIsActive(state.activeJob)) {
       throw new Error('다른 작업이 진행 중입니다. 끝난 뒤 다시 시도해 주세요.');
     }
     state.activeJob = { id: crypto.randomUUID(), kind: 'training', options, state: 'running',
       stage: 'training', child: null, children: new Set(), cancelled: false, startedAt: new Date().toISOString() };
+    const job = state.activeJob;
     emit({ type: 'training-started', options });
     run().catch(error => {
-      if (!state.activeJob) return;
-      state.activeJob.state = state.activeJob.cancelled ? 'cancelled' : 'failed';
-      emit({ type: 'training-failed', mode: options.mode, cancelled: state.activeJob.cancelled, message: error.message });
+      if (state.activeJob !== job) return;
+      job.state = job.cancelled ? 'cancelled' : 'failed';
+      emit({ type: 'training-failed', mode: options.mode, cancelled: job.cancelled, message: error.message });
     });
     return jobSnapshot();
   }
@@ -356,7 +364,7 @@ export function createIpcService({
       return { token, name: path.basename(path.dirname(selection.path)) + ' / ' + path.basename(selection.path) };
     });
 
-    ipcMain.handle("studio:start-edit", async (event, rawOptions = {}) => {
+    ipcMain.handle("studio:start-edit", startHandler(async (event, rawOptions = {}) => {
       guard(event);
       if (state.activeJob && ["running", "paused", "cancelling"].includes(state.activeJob.state)) {
         throw new Error("이미 실행 중인 작업이 있습니다.");
@@ -429,19 +437,20 @@ export function createIpcService({
         cancelled: false,
         startedAt: new Date().toISOString(),
       };
+      const job = state.activeJob;
       const snapshot = jobSnapshot();
       emit({ type: "edit-started", job: snapshot, options });
       runVideoEdit(options).catch((error) => {
-        if (!state.activeJob) return;
-        state.activeJob.state = state.activeJob.cancelled ? "cancelled" : "failed";
-        emit({ type: "edit-failed", cancelled: state.activeJob.cancelled, message: error.message });
+        if (state.activeJob !== job) return;
+        job.state = job.cancelled ? "cancelled" : "failed";
+        emit({ type: "edit-failed", cancelled: job.cancelled, message: error.message });
       });
       return snapshot;
-    });
+    }));
 
-    ipcMain.handle("studio:start-text-voices", async (event, rawOptions = {}) => {
+    ipcMain.handle("studio:start-text-voices", startHandler(async (event, rawOptions = {}) => {
       guard(event);
-      if (state.activeJob && ["running", "cancelling"].includes(state.activeJob.state)) {
+      if (jobIsActive(state.activeJob)) {
         throw new Error("이미 실행 중인 작업이 있습니다.");
       }
       const text = normalizeVoiceText(rawOptions.text);
@@ -465,15 +474,16 @@ export function createIpcService({
         cancelled: false,
         startedAt: new Date().toISOString(),
       };
+      const job = state.activeJob;
       const snapshot = jobSnapshot();
       emit({ type: "text-voice-started", job: snapshot, options });
       runTextVoiceCandidates(options).catch((error) => {
-        if (!state.activeJob) return;
-        state.activeJob.state = state.activeJob.cancelled ? "cancelled" : "failed";
-        emit({ type: "text-voice-failed", cancelled: state.activeJob.cancelled, message: error.message });
+        if (state.activeJob !== job) return;
+        job.state = job.cancelled ? "cancelled" : "failed";
+        emit({ type: "text-voice-failed", cancelled: job.cancelled, message: error.message });
       });
       return snapshot;
-    });
+    }));
 
     ipcMain.handle("studio:select-text-voice", async (event, token) => {
       guard(event);
@@ -494,11 +504,11 @@ export function createIpcService({
       guard(event);
       return listTrainingDatasets();
     });
-    ipcMain.handle('studio:import-training-dataset', async (event, raw = {}) => {
+    ipcMain.handle('studio:import-training-dataset', startHandler(async (event, raw = {}) => {
       guard(event);
       const displayName = String(raw.displayName || '').trim();
       if (!displayName || displayName.length > 80) throw new Error('먼저 새 목소리 이름을 1~80자로 입력해 주세요.');
-      if (state.activeJob && ['running', 'cancelling'].includes(state.activeJob.state)) {
+      if (jobIsActive(state.activeJob)) {
         throw new Error('다른 작업이 진행 중입니다. 끝난 뒤 녹음을 불러와 주세요.');
       }
       const result = await dialog.showOpenDialog({ title: '같은 사람의 녹음 불러오기',
@@ -511,8 +521,8 @@ export function createIpcService({
         state.activeJob.stage = 'done';
         emit({ type: 'training-prepared', mode: 'import', dataset });
       });
-    });
-    ipcMain.handle('studio:start-voice-preview', async (event, raw = {}) => {
+    }));
+    ipcMain.handle('studio:start-voice-preview', startHandler(async (event, raw = {}) => {
       guard(event);
       const settings = await readAppSettings();
       const adapter = settings.adapters.find(item => item.id === raw.adapterId);
@@ -522,14 +532,14 @@ export function createIpcService({
       }
       return launchSettingsJob({ name: adapter.displayName, mode: 'preview', adapterId: adapter.id, adapterScale: scale },
         () => runVoicePreview({ adapterId: adapter.id, adapterScale: scale }));
-    });
+    }));
     ipcMain.handle("studio:read-training-dataset", async (event, id) => {
       guard(event);
       return readTrainingDataset(id);
     });
-    ipcMain.handle("studio:start-finetune", async (event, rawOptions = {}) => {
+    ipcMain.handle("studio:start-finetune", startHandler(async (event, rawOptions = {}) => {
       guard(event);
-      if (state.activeJob && ["running", "cancelling"].includes(state.activeJob.state)) {
+      if (jobIsActive(state.activeJob)) {
         throw new Error("이미 실행 중인 작업이 있습니다.");
       }
       const dataset = await readTrainingDataset(rawOptions.datasetId);
@@ -557,18 +567,19 @@ export function createIpcService({
         cancelled: false,
         startedAt: new Date().toISOString(),
       };
+      const job = state.activeJob;
       emit({ type: "training-started", options });
       runFineTune(options).catch((error) => {
-        if (!state.activeJob) return;
-        state.activeJob.state = state.activeJob.cancelled ? "cancelled" : "failed";
-        emit({ type: "training-failed", cancelled: state.activeJob.cancelled, message: error.message });
+        if (state.activeJob !== job) return;
+        job.state = job.cancelled ? "cancelled" : "failed";
+        emit({ type: "training-failed", cancelled: job.cancelled, message: error.message });
       });
       return jobSnapshot();
-    });
+    }));
 
-    ipcMain.handle("studio:start", async (event, rawOptions) => {
+    ipcMain.handle("studio:start", startHandler(async (event, rawOptions) => {
       guard(event);
-      if (state.activeJob && ["running", "cancelling"].includes(state.activeJob.state)) {
+      if (jobIsActive(state.activeJob)) {
         throw new Error("이미 실행 중인 작업이 있습니다.");
       }
       const settings = await readAppSettings();
@@ -588,11 +599,11 @@ export function createIpcService({
       options.inputStartId = catalog.pages.find((p) => p.page === options.startPage)?.slideId;
       options.inputEndId = catalog.pages.find((p) => p.page === options.endPage)?.slideId;
       return launchPipeline(options);
-    });
+    }));
 
-    ipcMain.handle("studio:resume-job", async (event) => {
+    ipcMain.handle("studio:resume-job", startHandler(async (event) => {
       guard(event);
-      if (state.activeJob && ["running", "cancelling"].includes(state.activeJob.state)) {
+      if (jobIsActive(state.activeJob)) {
         throw new Error("이미 실행 중인 작업이 있습니다.");
       }
       const record = await readActiveJob();
@@ -601,24 +612,33 @@ export function createIpcService({
       const studio = runtimePaths(settings.paths);
       // 지난 실행에서 이미 정규화하고 카탈로그로 확인한 옵션이다. 그때 얼려 둔
       // 입력을 그대로 쓰므로 페이지를 다시 풀지 않는다. 도구만 다시 확인한다.
-      const options = { ...record.options, resumeFrom: record.completed || [] };
+      let options = { ...record.options, resumeFrom: record.completed || [] };
+      if (options.voiceMode === 'finetuned') {
+        const adapterPath = path.resolve(options.adapterPath || ADAPTER);
+        const adapter = settings.adapters?.find(item => path.resolve(item.path) === adapterPath);
+        if (!adapter) throw new Error('이전 제작 목소리의 청취 확인 기록이 없습니다. 설정에서 다시 확인해 주세요.');
+        const approved = applyVoiceSettings(options, { ...settings,
+          modelId: options.modelId || 'qwen3-tts', adapterId: adapter.id,
+          adapterScale: options.adapterScale ?? .6, paths: options.paths || settings.paths });
+        options = { ...options, voiceInputIdentity: options.voiceInputIdentity || approved.voiceInputIdentity };
+      }
       await assertRuntime(options, studio, {
         node: true,
         productionInput: true,
         ffmpeg: options.deliverable === "video",
       });
       return launchPipeline(options);
-    });
+    }));
 
     ipcMain.handle("studio:list-displays", async (event) => {
       guard(event);
       return listRecordingSources();
     });
 
-    ipcMain.handle("studio:start-recording", async (event, rawOptions = {}) => {
+    ipcMain.handle("studio:start-recording", startHandler(async (event, rawOptions = {}) => {
       guard(event);
       return startRecording(rawOptions);
-    });
+    }));
 
     // 앱 데모는 촬영 → 목소리 → 렌더 세 단계다. 화면과 CLI가 같은 작업자·같은 결과
     // 폴더를 쓰므로, 어느 쪽에서 시작했든 다른 쪽에서 이어갈 수 있다.
@@ -657,20 +677,20 @@ export function createIpcService({
       return readDemoCameraPreview({ outDir: String(options.outDir || ""), sceneId: String(options.sceneId || ""), atMs: options.atMs });
     });
 
-    ipcMain.handle("studio:start-demo-record", async (event, options = {}) => {
+    ipcMain.handle("studio:start-demo-record", startHandler(async (event, options = {}) => {
       guard(event);
       return startDemoRecord(options);
-    });
+    }));
 
-    ipcMain.handle("studio:start-demo-voice", async (event, options = {}) => {
+    ipcMain.handle("studio:start-demo-voice", startHandler(async (event, options = {}) => {
       guard(event);
       return startDemoVoice(options);
-    });
+    }));
 
-    ipcMain.handle("studio:start-demo-render", async (event, options = {}) => {
+    ipcMain.handle("studio:start-demo-render", startHandler(async (event, options = {}) => {
       guard(event);
       return startDemoRender(options);
-    });
+    }));
 
     // 녹화의 정지는 결과를 남기는 정상 완료다. 결과를 버리는 중지(studio:cancel)와 다르다.
     ipcMain.handle("studio:finish-recording", async (event) => {
@@ -707,12 +727,15 @@ export function createIpcService({
     // 이어할 것이 없다.
     ipcMain.handle("studio:get-resumable", async (event) => {
       guard(event);
-      if (state.activeJob && ["running", "cancelling"].includes(state.activeJob.state)) return null;
+      if (state.startReservation || jobIsActive(state.activeJob)) return null;
       const record = await readActiveJob();
       if (!record?.options?.name) return null;
       const settings = await readAppSettings();
       const studio = runtimePaths(record.options.paths || settings.paths);
-      const units = (record.unitNames || []).map((name) => ({ name, videoQuality: record.options.videoQuality }));
+      const units = (record.unitNames || []).map((name) => ({ name, videoQuality: record.options.videoQuality,
+        deliverable: record.options.deliverable,
+        productionDay: record.options.productionDay || (record.startedAt ? dateFolder(new Date(record.startedAt)) : undefined),
+      }));
       const finished = units.length ? await finishedUnitNames(units, studio, record.options.inputFingerprint) : [];
       const remaining = units.length ? pendingUnits(units, finished).length : 1;
       if (units.length && remaining === 0) { await clearActiveJob(); return null; }
@@ -739,7 +762,7 @@ export function createIpcService({
 
     ipcMain.handle("studio:cancel", async (event) => {
       guard(event);
-      if (!state.activeJob || !["running", "cancelling"].includes(state.activeJob.state)) return false;
+      if (!jobIsActive(state.activeJob)) return false;
       if (state.activeJob.state === "cancelling") return true;
       const job = state.activeJob;
       const accepted = cancelJobProcesses(job, {
@@ -787,8 +810,7 @@ export function createIpcService({
       const { file, directory } = await resolveOutputFile(target);
       if (!file || !/\.mp4$/i.test(file)) throw new Error("이 결과에는 편집할 영상이 없습니다.");
       const [registered] = await registerSelected([file], "video");
-      const report = await fs.readFile(path.join(directory, "validation-report.json"), "utf8").then(JSON.parse).catch(() => null);
-      return { ...registered, voiceFindings: report?.voiceFindings || [] };
+      return registered;
     });
 
   }
