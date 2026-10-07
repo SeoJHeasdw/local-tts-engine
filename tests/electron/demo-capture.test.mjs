@@ -398,4 +398,11 @@ test('붙은 앱은 촬영이 끝나도 살아 있고 커서·에뮬레이션을
   const mismatched = { ...scenario, viewport: { width: 640, height: 360, scale: 1 } };
   await assert.rejects(launchDemoApp(normalizeScenario(mismatched), { workDir: base }), /창 크기를 맞춰/);
   assert.ok(owner.isConnected() && !page.isClosed());
+
+  // 사람이 누를 일이 없다고 밝히면 창과 다른 크기로 찍고, 끝나면 창 크기를 돌려 놓는다.
+  const emulated = { ...mismatched, app: { ...scenario.app, emulateSize: true } };
+  const wide = await launchDemoApp(normalizeScenario(emulated), { workDir: base });
+  assert.deepEqual(await wide.page.evaluate(() => [innerWidth, innerHeight]), [640, 360]);
+  await wide.close();
+  assert.deepEqual(await page.evaluate(() => [innerWidth, innerHeight]), [800, 450], '에뮬레이션을 걷는다');
 });

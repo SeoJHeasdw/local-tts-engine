@@ -244,7 +244,7 @@ k/fps다. 녹화 중의 기다림은 `pacer`로 페이지 시간을 넘기며 �
 ```text
 demo record  앱 띄우기 → 동사 실행 + RGB 무손실 녹화 → demo/scenes.json
 에이전트·사용자  scenes.json의 화면 글을 근거로 demo/script.json 대본, status=approved
-demo voice   장면마다 목소리 후보 → 사람이 듣고 voice.selected에 적는다
+demo voice   장면마다 목소리 후보 → 사람이 듣고 voice.selected에 적는다 (`--voice <ID>`는 앱의 선택값을 두고 이번 실행에만 다른 승인 목소리를 쓴다)
 demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 ```
 
@@ -270,7 +270,8 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 
 `app.kind: "attach"`는 사람이 원격 디버깅 포트로 띄운 창에 붙는다(`cdp`는 이 기계 주소만,
 `window`는 창 URL 앞부분). 실제 마우스를 막지 않고, 창 크기와 viewport가 다르면 멈추며
-`scale`은 1만 받는다. 끝나면 에뮬레이션과 커서를 걷은 뒤 연결만 끊는다 — 정리는 한꺼번에
+`scale`은 1만 받는다. 사람이 그 창을 누를 일이 없으면 `emulateSize: true`로 밝혀 창보다 큰
+viewport(내장 화면의 1920×1080)를 에뮬레이션으로 찍는다. 끝나면 에뮬레이션과 커서를 걷은 뒤 연결만 끊는다 — 정리는 한꺼번에
 돌므로 걷는 일을 연결 끊기 앞에 묶었다. 근거는 [APP-DEMO-DESIGN](APP-DEMO-DESIGN.md#8-bob-사람이-띄운-앱에-붙는다-2026-09-30).
 
 **앱을 아는 것은 시나리오 파일뿐이다.** 촬영 엔진은 앱 이름을 모른다. 덱 고유의 조작이

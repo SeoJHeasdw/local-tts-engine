@@ -210,9 +210,10 @@ export async function launchDemoApp(scenario, { workDir, onLog = () => {}, signa
       }
       listen(page);
       // 창과 다른 크기로 에뮬레이션하면 실제 창에는 잘리거나 밀린 화면이 보여 사람이
-      // 누를 자리가 어긋난다. 크기는 창에 맞추고 배율만 정한다.
+      // 누를 자리가 어긋난다. 크기는 창에 맞추고 배율만 정한다. 사람이 누를 일이 없다고
+      // 시나리오가 밝힌 경우(emulateSize)만 창보다 큰 크기로도 찍는다.
       const [width, height] = await wait(page.evaluate(() => [innerWidth, innerHeight]));
-      if (width !== scenario.viewport.width || height !== scenario.viewport.height) {
+      if (!app.emulateSize && (width !== scenario.viewport.width || height !== scenario.viewport.height)) {
         throw new Error(`붙은 창의 화면은 ${width}×${height}인데 시나리오 viewport는 `
           + `${scenario.viewport.width}×${scenario.viewport.height}입니다. 창 크기를 맞춰 주세요.`);
       }

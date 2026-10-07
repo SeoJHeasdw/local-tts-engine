@@ -64,6 +64,22 @@
   다시 고칠 때: 덱은 `bob/level3-demo/deck/motion.html` → `demo/motion-capture.mjs <원래 결과> <새 결과>`, Bob 화면은
   `demo/direct-camera.py`, 굽기는 `npm run demo -- render <폴더> --quality standard --burn-captions`, 잇기는
   `bob-level3-final/parts-v4.txt`로 `ffmpeg -f concat -safe 0 -c copy`. 첫 판·v2·v3도 같은 폴더에 있다.
+- **watsonx.data Stand & Deliver 영상(팀장님 목소리) — 데모 대신 설명 장면 2개 추가 중:** 작업 폴더는
+  `/Users/jaehoseo/Desktop/vswrk/ibm/watsonx-data-demo/`(`STORYBOARD.md`가 대본·구성·확인 목록). 데모를 뺀 7장면(S1~S5·S8·S9)은
+  밝은 에디토리얼 덱 + 밝은 스튜디오 3D(Blender, 라벨은 3D 점을 따라다님)로 만들고 있고, Bob 영상과 겹치지 않는 디자인이 조건이다.
+  음성은 `demo voice --voice 2026-10-02/kkh-ko-r16-092309-b6bcaa-s20`(앱 선택값은 그대로)으로 장면당 후보 3개를 만들었고
+  **자동 검사로 고른 것이라 사람이 들어 고르는 일이 남았다**: `output/reviews/2026-10-07/watsonx-voice/listen.html`.
+  자동 검사의 '받아쓰기 불일치'는 받아쓰기가 영어 용어를 한글로 적은 탓이 대부분이다(아래 발음 오차율 문제와 같다).
+  후보를 바꾸면 그 장면의 길이가 달라져 `deck/3d`의 해당 장면을 다시 렌더한다(`demo/events.mjs` → `deck/3d/render-all.sh`).
+  팀장님이 실습(라이브 데모)은 필요 없다고 했다(2026-10-07). 빠진 평가 항목 4개(federated query·web interface·engine
+  lifecycle·engine별 fit)는 화면 촬영 없이 3D 설명 장면 `s6-fed`·`s7-engines`로 채워 4분 30초~5분으로 맞춘다
+  (데모 제외 v2는 3분 37초, 두 장면은 약 70초). 대본은 `output/edits/2026-10-07/watsonx-data-deck-mid/demo/script.json`에
+  확정했다. 사전의 `Red Hat` → 레드햇은 반영했다. 음성(mid의 s6·s7, open의 `s1-open`(문구를 "…시나리오를 중심으로 살펴보겠습니다"로
+  고침), close의 `s8-deploy`)은 2026-10-07 밤에 합성과 자동 선택(`demo/pick-new.py`, 결과 `demo/last-picks.txt`)을 걸어 뒀다.
+  자동 검사로 고른 것이라 사람의 청취 승인은 아니다. 이어서 할 일: ① `demo/last-picks.txt`로 선택이 끝났는지 확인
+  ② `deck/3d/s6.py`·`s7.py` 작성, `deck/motion.html`(EV·LABELS·SCENES·마크업)과 `demo/events.mjs`·`render3d.mjs`·
+  `motion-capture.mjs`의 장면 표, `demo/build.sh`에 mid 구간(open → mid → close) 추가 ③ `demo/build.sh v3`.
+  디버깅 Chrome(`.chrome-profile`)에 개인 계정 로그인 세션이 있으니 쓰지 않으면 닫고 폴더를 지운다.
 - **다음: 한국어 문장 속 영어 낱말 한 번 더:** 사용자가 제출 수준은 충분하지만 한글+영어 조합을 다음에 다시 보자고
   했다. 남은 약점은 받아쓰기가 영어 철자로 적으면 소리를 못 가린다는 것('봅'·'래브스'가 `Bob`·`Lab's`로 적혔다)과
   아래 발음 오차율 문제다. Bob 영상의 `javax`(제치셔틀·ZX)·`PoX`(팍스·PUCS)도 흔들렸다.

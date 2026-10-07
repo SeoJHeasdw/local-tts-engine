@@ -1465,5 +1465,27 @@
   {
     "from": "Guard",
     "to": "가드"
+  },
+  {
+    "from": "watsonx.data",
+    "to": "왓슨엑스 데이터",
+    "caseSensitive": true
+  },
+  {
+    "from": "On-premises",
+    "to": "온프레미스"
+  },
+  {
+    "from": "Db2",
+    "to": "디비투",
+    "caseSensitive": true
+  },
+  {
+    "from": "Warehouse",
+    "to": "웨어하우스"
+  },
+  {
+    "from": "Red Hat",
+    "to": "레드햇"
   }
 ]

@@ -225,6 +225,10 @@ function normalizeApp(app) {
       fail(where, "cdp는 http://127.0.0.1:<포트> 모양이어야 합니다.");
     }
     normalized.window = app.window === undefined ? null : requireText(app.window, where, "window");
+    // 사람이 그 창을 누를 일이 없을 때만 true로 둔다. 창이 viewport보다 작아도(내장 화면에서
+    // 1920×1080 창은 만들 수 없다) 에뮬레이션 크기로 찍는다. 그동안 실제 창은 건드리지 않는다.
+    if (app.emulateSize !== undefined && typeof app.emulateSize !== "boolean") fail(where, "emulateSize는 true·false여야 합니다.");
+    normalized.emulateSize = app.emulateSize === true;
   } else {
     normalized.url = requireText(app.url ?? app.window, where, "url");
   }

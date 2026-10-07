@@ -132,6 +132,11 @@ test('붙는 앱은 이 기계의 원격 디버깅 주소만 받는다', () => {
   assert.throws(() => normalizeScenario({ ...attach, app: { kind: 'attach', cdp: 'ws://127.0.0.1:9333' } }), /127\.0\.0\.1/);
   // 사람이 띄운 창의 스크린캐스트는 배율 에뮬레이션을 무시한다.
   assert.throws(() => normalizeScenario({ ...base, app: { kind: 'attach', cdp: 'http://127.0.0.1:9333' } }), /scale 1/);
+  // 창 크기와 달라도 찍겠다는 선언은 기본이 꺼져 있고 참·거짓만 받는다.
+  const open = app => normalizeScenario({ ...attach, app: { kind: 'attach', cdp: 'http://127.0.0.1:9333', ...app } }).app.emulateSize;
+  assert.equal(open({}), false);
+  assert.equal(open({ emulateSize: true }), true);
+  assert.throws(() => open({ emulateSize: 'yes' }), /emulateSize/);
 });
 
 test('frame 대상은 iframe 선택자 목록과 선택자·role·placeholder·text 하나로 적는다', () => {

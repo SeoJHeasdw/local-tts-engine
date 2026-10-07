@@ -114,6 +114,7 @@ TTS를 실행하지 않으며 원본 음성·대본·덱을 수정하지 않는�
 ```bash
 npm run demo -- record ../../bob/rice/demo/scenarios/rice-core-flow.json   # 앱 띄우기 → 조작 → 무손실 녹화
 npm run demo -- voice  output/edits/<날짜>/<이름>          # 장면마다 목소리 후보
+                                                  # 설정을 바꾸지 않고 다른 목소리로: --voice <목소리 ID> (청취 승인된 강도만)
 npm run demo -- render output/edits/<날짜>/<이름>          # 한 번 인코딩 → 자막 → 검증
 ```
 

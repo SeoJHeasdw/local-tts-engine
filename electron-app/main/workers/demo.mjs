@@ -2,7 +2,7 @@
 // 않고 대본·목소리·계획만 바꿔 렌더만 다시 돌 수 있는 것이 이 나눔의 목적이다.
 //
 //   npm run demo -- record <시나리오.json> [--name <이름>] [--out-dir <폴더>]
-//   npm run demo -- voice  <결과 폴더> [--candidates 3] [--adapter-scale 0.6] [--scene <id>]
+//   npm run demo -- voice  <결과 폴더> [--candidates 3] [--adapter-scale 0.6] [--scene <id>] [--voice <목소리 ID>]
 //   npm run demo -- render <결과 폴더> [--quality high|ultra|standard] [--max-speed 4] [--no-open]
 //
 // render는 결과 폴더에 `review.html`(영상·구간·배율·확대·대본·검증을 한 쪽에 모은
@@ -22,7 +22,7 @@ import { settingsAdapterScale } from "../../shared/index.mjs";
 import { parseFlags } from "../capture/cli.mjs";
 import { recordAppDemo } from "../capture/record-app.mjs";
 import { renderAppDemo } from "../editing/demo-render.mjs";
-import { regenerateDemoVoices } from "./demo-voice-state.mjs";
+import { regenerateDemoVoices, resolveDemoVoice } from "./demo-voice-state.mjs";
 
 // 중지는 작업 묶음 전체에 SIGTERM으로 온다. 기본 동작대로 곧장 죽으면 렌더의 임시 파일(.part)과
 // 촬영의 작업 폴더·반쯤 쓴 원본·앱 서버를 치우는 finally가 돌지 못한다. 촬영에는 AbortSignal을
@@ -156,9 +156,14 @@ if (command === "record") {
   const adapterScale = flags["adapter-scale"] !== undefined
     ? Number(flags["adapter-scale"])
     : settingsAdapterScale(settings.adapterScale);
-  const adapter = settings.modelId === "qwen3-tts"
-    ? settings.adapters.find((item) => item.id === settings.adapterId) || null
-    : null;
+  // --voice는 이번 실행에만 다른 목소리를 쓴다(앱의 선택값은 그대로). 대표 녹음·전사도 그 목소리 것이다.
+  const adapter = typeof flags.voice === "string" ? resolveDemoVoice(settings, flags.voice, adapterScale)
+    : settings.modelId === "qwen3-tts"
+      ? settings.adapters.find((item) => item.id === settings.adapterId) || null
+      : null;
+  const reference = typeof flags.voice === "string"
+    ? adapter.referencePaths
+    : { referenceAudioPath: studio.referenceAudioPath, referenceTextPath: studio.referenceTextPath };
   if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error("--candidates는 1~8이어야 합니다.");
   if (!tools.trainPython) throw new Error("음성 생성 Python(.venv-train)을 찾지 못했습니다.");
   // 한 문장만 고쳐 쓰는 일이 잦다. 그때 나머지 장면까지 다시 합성하지 않는다.
@@ -185,8 +190,8 @@ if (command === "record") {
         "-m", "local_tts_engine.text_candidate",
         "--model", settings.modelId || "qwen3-tts",
         "--text-file", textFile,
-        "--reference", studio.referenceAudioPath,
-        "--reference-text", studio.referenceTextPath,
+        "--reference", reference.referenceAudioPath,
+        "--reference-text", reference.referenceTextPath,
         "--output", audioPath,
         "--metadata", metadataPath,
         "--seed", String(seed),

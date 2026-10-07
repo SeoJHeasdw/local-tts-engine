@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { regenerateDemoVoices } from "../../electron-app/main/workers/demo-voice-state.mjs";
+import { regenerateDemoVoices, resolveDemoVoice } from "../../electron-app/main/workers/demo-voice-state.mjs";
 
 async function fixture(t, scenes) {
   const demoDir = await fs.mkdtemp(path.join(os.tmpdir(), "demo-voice-"));
@@ -150,4 +150,17 @@ test("옛 프로젝트의 input.txt가 같은 대본이면 선택 후보를 유�
   const next = await runVoice(f, ["open"], 1);
   assert.equal(next.scenes[0].voice.selected, oldRelative);
   assert.equal(next.scenes[0].voice.candidates.length, 2);
+});
+
+test("이번 실행에만 쓸 목소리는 청취 승인된 강도만 받는다", () => {
+  const settings = { adapters: [
+    { id: "a/approved", listeningStatus: "approved", approvedScales: [0.6], referencePaths: { referenceAudioPath: "r.wav" } },
+    { id: "a/pending", listeningStatus: "pending", approvedScales: [] },
+    { id: "a/broken", profileError: "목소리 프로필이 없습니다." },
+  ] };
+  assert.equal(resolveDemoVoice(settings, "a/approved", 0.6).referencePaths.referenceAudioPath, "r.wav");
+  assert.throws(() => resolveDemoVoice(settings, "a/approved", 0.7), /승인된 강도가 아닙니다/);
+  assert.throws(() => resolveDemoVoice(settings, "a/pending", 0.6), /승인된 강도가 아닙니다/);
+  assert.throws(() => resolveDemoVoice(settings, "a/broken", 0.6), /프로필이 없습니다/);
+  assert.throws(() => resolveDemoVoice(settings, "a/none", 0.6), /그런 목소리가 없습니다/);
 });

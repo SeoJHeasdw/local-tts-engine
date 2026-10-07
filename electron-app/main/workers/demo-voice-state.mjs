@@ -5,6 +5,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { inspectDemoCandidate } from "../demo-voice-integrity.mjs";
 
+/**
+ * 이번 실행에만 쓸 목소리를 고른다. 앱의 선택값은 건드리지 않는다.
+ *
+ * 설정에서 바꾸지 않고 다른 사람의 영상을 만들 때 쓴다. 승인되지 않은 목소리나 강도는
+ * 설정의 적용과 같은 이유로 받지 않는다.
+ */
+export function resolveDemoVoice(settings, voiceId, scale) {
+  const adapter = settings.adapters.find(item => item.id === voiceId);
+  if (!adapter) {
+    throw new Error(`--voice ${voiceId}: 그런 목소리가 없습니다. (${settings.adapters.map(item => item.id).join(", ")})`);
+  }
+  if (adapter.profileError) throw new Error(`--voice ${voiceId}: ${adapter.profileError}`);
+  if (adapter.listeningStatus !== "approved"
+      || !adapter.approvedScales?.some(value => Math.abs(Number(value) - scale) < 0.0005)) {
+    throw new Error(adapter.approvalError || `--voice ${voiceId}: 강도 ${scale}는 청취 승인된 강도가 아닙니다.`);
+  }
+  return adapter;
+}
+
 function priorVoiceText(scene, sceneDir) {
   if (typeof scene.voice?.text === "string") return scene.voice.text;
   // Older projects recorded the spoken input beside candidate-01.wav.
