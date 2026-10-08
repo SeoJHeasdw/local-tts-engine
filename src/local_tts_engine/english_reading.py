@@ -126,6 +126,7 @@ def reading_lattice(phonemes: list[str], spelling: str = "") -> list[tuple[str, 
     vowel_index = 0
     segments: list[tuple[str, ...]] = []
     onset = ""
+    single_l = False
     glide: str | None = None
     ends_in_vowel = False
     index = 0
@@ -144,8 +145,10 @@ def reading_lattice(phonemes: list[str], spelling: str = "") -> list[tuple[str, 
                 nuclei = tuple(nucleus for nucleus in nuclei if not nucleus.startswith(("ㅗ", "ㅛ")))
             if symbol == "AA" and following in {"N", "M"}:
                 nuclei += ("ㅓ",)
-            segments.append(tuple((onset or "ㅇ") + nucleus for nucleus in nuclei))
-            onset, glide, ends_in_vowel = "", None, True
+            # 모음 사이 l을 ㄹ 하나로 적은 받아쓰기도 같은 소리다(데일리·데이리).
+            segments.append(tuple((start or "ㅇ") + nucleus for start in dict.fromkeys(
+                [onset, *(["ㄹ"] if single_l else [])]) for nucleus in nuclei))
+            onset, single_l, glide, ends_in_vowel = "", False, None, True
             if symbol == "ER" and following in VOWELS:
                 # r 음색 모음 뒤 모음은 r을 초성으로 받는다(바운더리·필터링).
                 onset = "ㄹ"
@@ -166,6 +169,7 @@ def reading_lattice(phonemes: list[str], spelling: str = "") -> list[tuple[str, 
                 segments.append(("", "ㅇㅓ"))
             # 모음 사이의 l은 ㄹㄹ(폴리시·플랜).
             onset = "ㄹㄹ" if symbol == "L" and ends_in_vowel else ONSET.get(symbol, "")
+            single_l = onset == "ㄹㄹ"
             if symbol == "NG":
                 segments.append(("ㅇ",))
                 onset = ""

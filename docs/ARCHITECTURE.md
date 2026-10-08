@@ -34,6 +34,8 @@
 | `src/local_tts_engine/course/` | 대본 입력·청킹·오디오·정렬·직렬화 |
 | `src/local_tts_engine/realign_course.py` | 완성 제작본의 음성 보존 재정렬·전후 비교, 읽기 전용 정렬 검사 |
 | `src/local_tts_engine/text_candidate.py` | 자유 텍스트·앱 데모의 청크 합성·후보 검수·최종 WAV 기록 |
+| `src/local_tts_engine/language_spans.py` | 어디가 영어인지 정하는 유일한 곳(발음 보호·음성 라우팅·검수가 함께 쓴다) |
+| `src/local_tts_engine/word_timing.py` | 입력 문장의 단어별 시각(후보 따라 읽기용) 계산 |
 | `src/local_tts_engine/course_catalog.py` | 생성 모델을 로드하지 않는 목록 CLI |
 | `src/local_tts_engine/finetune_analysis.py` | 선택한 데이터의 전사·녹음·화자 일관성 분석 |
 | `src/local_tts_engine/finetune_comparison.py` | 검수한 데이터의 학습 계획 고정·후보 학습·기본 복제와 비교 |
@@ -187,6 +189,20 @@ k/fps다. 녹화 중의 기다림은 `pacer`로 페이지 시간을 넘기며 �
 표시한다. 완성된 후보만 나중에 다시 열어 선택할 수 있다.
 새 제작도 같은 이름의 이전 결과가 있으면 새 폴더를 예약한다.
 `validation-report.json`의 `sourceCandidates`가 그 새 결과의 후보 출처를 가리킨다.
+
+후보 JSON의 `wordTimings`는 후보 비교 창이 재생 중인 단어를 칠하는 근거다. 강제 정렬기가
+각 청크의 선택된 음성에서 발음문 낱말의 시각을 잡고, `word_timing.py`가 이를 사용자가 입력한
+문장의 공백 단위 단어로 옮긴다(발음문과 같은 낱말이 기준점이고, `Bob → 밥`·`Runtime → Run time`처럼
+낱말 수가 다른 구간은 그 구간의 시간을 글자 수 비율로 나눈다). `words`의 항목은
+`[start, end, startMs, endMs]`로 `sourceText`의 글자 범위와 후보 음성 안의 시각이며, 구두점뿐이라
+읽지 않는 단어의 시각은 `null`이다. `status`는 `ok`·`partial`(일부 청크 정렬 실패)·`unavailable`
+(정렬기 없음·실패)이고 표시 보조일 뿐이라 실패해도 후보 생성은 실패하지 않는다. 앱은
+`audioSha256`이 있는 후보의 기록만 `shared/candidate-reading.mjs`로 검증해 화면에 준다 —
+범위가 겹치거나 시각이 되감기면 기록 전체를 버린다. 같은 모듈이 `reading.match`(받아쓰기 일치율:
+청크별 `phoneticErrorRate`를 글자 수로 가중, 정확히 0일 때만 100%)와 `reading.heard`(검수 모델이
+들은 말), `reading.englishSpans`(`voiceRouting`의 영어 구간)를 만든다. 일치율은 자동 검수의 한
+측면일 뿐 음질·자연스러움이나 청취 승인이 아니다. 이 기록이 없는 옛 후보는 입력 문장만 보이고
+따라 읽기는 하지 않는다.
 
 ## 새로 만들기 화면
 

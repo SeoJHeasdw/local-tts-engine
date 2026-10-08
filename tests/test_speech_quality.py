@@ -689,3 +689,85 @@ def test_english_evidence_only_breaks_ties_the_korean_checks_leave() -> None:
     assert choose_best_candidate([unheard, heard])["attempt"] == 2
     korean_warning = {**heard, "attempt": 3, "warnings": ["단어 발음 확인 필요"]}
     assert choose_best_candidate([unheard, korean_warning])["attempt"] == 1, "한국어가 먼저다"
+
+
+def test_hangul_spelling_of_a_well_read_english_word_is_not_an_error() -> None:
+    from local_tts_engine.speech_quality import fold_hangul_english, phonetic_error_rate
+
+    expected = "요즘은 digital transformation이 빠르게 이루어지고 있습니다."
+    heard = "요즘은 디지털 트랜스포메이션이 빠르게 이루어지고 있습니다"
+
+    folded = fold_hangul_english(expected, heard, [])
+
+    assert "digital" in folded and "transformation" in folded
+    assert folded.rstrip().endswith("이루어지고 있습니다") and "이 빠르게" in folded.replace("digitaltransformation", "X ")
+    assert phonetic_error_rate(expected, folded) < 0.02 < phonetic_error_rate(expected, heard)
+
+
+def test_folding_keeps_particles_and_leaves_misheard_or_ambiguous_words_as_errors() -> None:
+    from local_tts_engine.speech_quality import fold_hangul_english
+
+    # A word the reader wrote in English, or wrote wrongly, is not rewritten.
+    assert fold_hangul_english("이건 digital 입니다", "이건 digital 입니다", []) == "이건 digital 입니다"
+    assert fold_hangul_english("이건 digital 입니다", "이건 파이널 입니다", []) == "이건 파이널 입니다"
+    # 밥 is also a Korean word: if the Korean around the English word already says it, nothing is folded.
+    assert fold_hangul_english("밥을 먹고 Bob 을 만납니다", "밥을 먹고 밥을 만납니다", []) == "밥을 먹고 밥을 만납니다"
+    assert fold_hangul_english("이름은 Bob 입니다", "이름은 밥입니다", []).startswith("이름은 Bob")
+    # Only the Korean voice's part is compared; an English segment has its own check.
+    parts = [{"text": "이건", "language": "Korean"}, {"text": "digital", "language": "English"}]
+    assert fold_hangul_english("이건 digital", "이건 디지털", [], parts) == "이건 디지털"
+
+
+def test_a_take_heavy_with_hangul_spelled_english_terms_passes_on_what_was_said(tmp_path) -> None:
+    import soundfile as sf
+    import numpy as np
+    from local_tts_engine.speech_quality import MAX_PHONETIC_ERROR_RATE, evaluate_candidate
+
+    path = tmp_path / "take.wav"
+    sf.write(path, np.full(24000 * 5, .05, dtype=np.float32), 24000)
+    expected = "요즘은 AI technology의 발전으로 digital transformation이 빠르게 이루어지고 있습니다. 퇴근 후에는 exercise나 music을 들으며 쉬세요."
+    heard = "요즘은 AI 테크놀로지의 발전으로 디지털 트랜스포메이션이 빠르게 이루어지고 있습니다 퇴근 후에는 엑서사이즈나 뮤직을 들으며 쉬세요"
+
+    result = evaluate_candidate(expected_text=expected, recognized_text=heard, audio_path=path)
+
+    assert result["phoneticErrorRate"] <= MAX_PHONETIC_ERROR_RATE
+    assert "받아쓰기 불일치" not in result["failures"]
+    assert result["recognizedText"] == heard, "the transcript stays as evidence; only the comparison copy is folded"
+    assert "digital" in result["comparisonRecognizedText"]
+
+
+def test_in_word_pause_check_still_runs_when_english_terms_are_written_in_hangul() -> None:
+    from local_tts_engine.prosody import pause_checks
+    from local_tts_engine.speech_quality import fold_timed_english
+
+    expected = "요즘은 digital transformation이 빠르게 이루어지고 있습니다."
+    heard = ["요즘은", "디지털", "트랜스포메이션이", "빠르게", "이루어", "지고", "있습니다"]
+    words = [{"text": text, "startMs": 400 * index, "endMs": 400 * index + 350, "probability": 0.9}
+             for index, text in enumerate(heard)]
+    # A pause in the middle of 이루어지고, which the reading cannot explain.
+    pauses = [{"startMs": 400 * 4 + 360, "endMs": 400 * 5 - 10, "durationMs": 30 + 330}]
+
+    before = pause_checks(expected, words, pauses)
+    folded = fold_timed_english(expected, words)
+    after = pause_checks(expected, folded, pauses)
+
+    assert before["status"] == "text-unmatched"
+    assert [word["text"] for word in folded][1:3] == ["digital", "transformation이"]
+    assert [word["startMs"] for word in folded] == [word["startMs"] for word in words]
+    assert after["status"] == "checked" and after["mappedWords"] > 0
+
+
+def test_a_term_written_once_is_not_expected_twice_because_english_words_spell_it_by_accident() -> None:
+    # The letter names of digital·transformation·exercise contain 에이아이, so the
+    # sound search counted a second AI in a chunk that says it once.
+    dictionary = [{"from": "AI", "to": "AI", "literal": True, "comparisonReading": "에이아이"}]
+    expected = ("요즘은 AI technology의 발전으로 digital transformation이 빠르게 이루어지고 있습니다. "
+                "퇴근 후에는 exercise나 music을 들으며 daily stress를 풀어보세요.")
+    heard = "요즘은 AI 테크놀로지의 발전으로 디지털 트랜스포메이션이 빠르게 이루어지고 있습니다 퇴근 후에는 엑서사이즈나 뮤직을 들으며 데이리 스트레스를 풀어보세요"
+
+    check = check_pronunciation("AI", expected, heard, dictionary)
+
+    assert check["expectedCount"] == 1 and check["status"] == "ok"
+    # A term that really is said twice and heard once is still reported.
+    twice = check_pronunciation("AI", "AI가 AI를 씁니다", "AI가 씁니다", dictionary)
+    assert twice["expectedCount"] == 2 and twice["status"] == "warning"

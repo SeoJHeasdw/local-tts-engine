@@ -66,6 +66,7 @@ from .speech_quality import (
     review_transcriptions,
     take_settled,
 )
+from .word_timing import WORD_TIMING_SCHEMA, build_word_timings
 
 
 MAX_TEXT_CHARS = 20_000
@@ -205,51 +206,78 @@ def _paragraphs(text: str, dictionary: list[dict[str, Any]]) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
+def _english_chunk(source: str) -> dict[str, Any]:
+    """An English chunk is spoken exactly as written; no Korean reading applies."""
+    return {
+        "sourceText": source, "ttsText": source, "changed": False,
+        "dictionaryMatches": [], "naturalnessChecks": [],
+        "naturalnessWarnings": [], "normalizedNumbers": [],
+        "requiredPronunciations": [], "unresolvedAscii": [],
+        "unresolvedNumbers": [],
+    }
+
+
 def plan_text_chunks(source_text: str, dictionary: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Split only at speech-safe boundaries, then derive each pronunciation.
 
     A chunk never spans a line break, so the paragraph pause lands where the
     writer put it instead of being read as one more sentence break.
+
+    Language is decided per sentence: a sentence with no Korean and at least
+    three English words is English prose, and English prose never shares a
+    chunk with Korean. A chunk is spoken by one voice (English when it holds no
+    Korean at all), so merging an English sentence into a Korean chunk would
+    hand it to the Korean voice and let Korean pronunciation rules rewrite it
+    (the article "a" became 에이). A sentence that mixes both languages stays
+    Korean, and English terms inside it keep their dictionary readings.
     """
-    groups: list[tuple[list[str], bool]] = []
+    whole_english = is_english_sentence(source_text)
+    groups: list[tuple[list[str], bool, bool]] = []  # sentences, paragraph end, English
     for paragraph in _paragraphs(source_text, dictionary):
-        units = [part for sentence in _split_at_punctuation(paragraph, dictionary, clauses=False)
+        units = [(part, english)
+                 for sentence in _split_at_punctuation(paragraph, dictionary, clauses=False)
+                 for english in (whole_english or is_english_sentence(sentence),)
                  for part in _split_long_unit(sentence, dictionary)]
         current: list[str] = []
-        for unit in units:
+        current_english = False
+        for unit, english in units:
             combined = " ".join([*current, unit])
-            if current and len(combined) > TARGET_CHUNK_CHARS and (
-                len(" ".join(current)) >= 80 or len(combined) > MAX_CHUNK_CHARS
-            ):
-                groups.append((current, False))
+            if current and (english != current_english or (
+                len(combined) > TARGET_CHUNK_CHARS and (
+                    len(" ".join(current)) >= 80 or len(combined) > MAX_CHUNK_CHARS))):
+                groups.append((current, False, current_english))
                 current = []
             current.append(unit)
+            current_english = english
         if current:
-            groups.append((current, True))
+            groups.append((current, True, current_english))
     if not groups:
         raise ValueError("읽을 문장이 없습니다.")
     chunks = []
-    whole_english = is_english_sentence(source_text)
-    for group, paragraph_end in groups:
+    for group, paragraph_end, english in groups:
         source = " ".join(group)
-        if whole_english:
-            # The pronunciation layer protects an entire English passage from
-            # Korean dictionary replacements. A short trailing chunk such as
-            # "Tool." is still English even though it has fewer than the three
-            # words needed to identify a standalone English passage.
-            chunk = {
-                "sourceText": source, "ttsText": source, "changed": False,
-                "dictionaryMatches": [], "naturalnessChecks": [],
-                "naturalnessWarnings": [], "normalizedNumbers": [],
-                "requiredPronunciations": [], "unresolvedAscii": [],
-                "unresolvedNumbers": [],
-            }
-        else:
-            chunk = pronunciation_preflight(source, dictionary)
-        chunks.append({**chunk, "paragraphEnd": paragraph_end})
+        # The pronunciation layer protects an entire English passage from
+        # Korean dictionary replacements. A short trailing chunk such as
+        # "Tool." is still English even though it has fewer than the three
+        # words needed to identify a standalone English passage.
+        chunk = _english_chunk(source) if english else pronunciation_preflight(source, dictionary)
+        chunks.append({**chunk, "paragraphEnd": paragraph_end, "english": english})
     if " ".join(" ".join(chunk["sourceText"] for chunk in chunks).split()) != " ".join(source_text.split()):
         raise RuntimeError("청크 분할 중 읽을 텍스트가 달라졌습니다.")
-    expected_reading = " ".join(apply_pronunciation(source_text, dictionary).split())
+    # Splitting must not change how any text is read. Compare each run of
+    # same-language sentences in one paragraph read whole, which is exactly the
+    # span a chunk boundary may cut. English prose is protected verbatim, so a
+    # whole-text reading that treated it as Korean would be the wrong reference.
+    runs: list[tuple[list[str], bool]] = []
+    previous_end = True
+    for group, paragraph_end, english in groups:
+        if runs and not previous_end and runs[-1][1] == english:
+            runs[-1][0].extend(group)
+        else:
+            runs.append((list(group), english))
+        previous_end = paragraph_end
+    expected_reading = " ".join(
+        " ".join(apply_pronunciation(" ".join(run), dictionary).split()) for run, _ in runs)
     actual_reading = " ".join(" ".join(chunk["ttsText"] for chunk in chunks).split())
     if actual_reading != expected_reading:
         raise RuntimeError("청크 분할 중 발음문이 달라졌습니다. 문장 경계를 추가해 주세요.")
@@ -347,6 +375,41 @@ def _read_local_independent_word_times(audio_path: Path, text: str,
         result = aligner.generate(audio=str(audio_path), text=text, language="English")
         return [{"text": item.text, "startMs": round(item.start_time * 1000),
                  "endMs": round(item.end_time * 1000)} for item in result.items]
+    finally:
+        del aligner
+        gc.collect()
+        mx.clear_cache()
+
+
+def _timed_source_words(aligner_path: Path | None, source_text: str,
+                        chunks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Typed-word times for following the take while it plays; never raises.
+
+    The aligner is loaded once for every chunk. A display aid can fail without
+    costing the listener a voice, so any failure is recorded as unavailable.
+    """
+    def unavailable(reason: str) -> dict[str, Any]:
+        return {"schemaVersion": WORD_TIMING_SCHEMA, "status": "unavailable",
+                "reason": reason, "aligner": None, "words": []}
+
+    if aligner_path is None:
+        return unavailable("aligner-not-installed")
+    try:
+        import mlx.core as mx
+        from mlx_audio.stt.utils import load_model
+        aligner = load_model(aligner_path)
+    except Exception as error:
+        return unavailable(f"{type(error).__name__}: {error}")
+
+    def align(audio_path: str, text: str) -> list[dict[str, Any]]:
+        # Space tokenization is deterministic for mixed Korean/English, so the
+        # language stays "English" exactly as in the course alignment.
+        result = aligner.generate(audio=audio_path, text=text, language="English")
+        return [{"text": item.text, "startMs": round(item.start_time * 1000),
+                 "endMs": round(item.end_time * 1000)} for item in result.items]
+
+    try:
+        return build_word_timings(source_text, chunks, align, aligner=ALIGNER_REPOSITORY)
     finally:
         del aligner
         gc.collect()
@@ -507,6 +570,8 @@ def generate_candidate(
     refine_closures = (closure_refiner(reference_path, lambda path, text: _read_local_independent_word_times(
         path, text, aligner_path)) if aligner_path is not None else None)
     sentence_gap_ms = SENTENCE_PAUSE_MS["English" if is_english_sentence(source_text) else "Korean"] - 2 * EDGE_PAD_MS
+    # A sentence ends with the pause of the language it was spoken in.
+    sentence_gap_by_language = {language: pause - 2 * EDGE_PAD_MS for language, pause in SENTENCE_PAUSE_MS.items()}
     paragraph_gap_ms = PARAGRAPH_PAUSE_MS - 2 * EDGE_PAD_MS
     chunk_dir = output_path.with_name(f"{output_path.stem}-chunks")
     chunk_dir.mkdir(parents=True, exist_ok=True)
@@ -569,7 +634,8 @@ def generate_candidate(
             raise RuntimeError("음성 청크의 샘플레이트가 서로 다릅니다.")
         gap_ms = 0
         if pieces:
-            gap_ms = paragraph_gap_ms if chunks[index - 1]["paragraphEnd"] else sentence_gap_ms
+            gap_ms = paragraph_gap_ms if chunks[index - 1]["paragraphEnd"] else sentence_gap_by_language[
+                "English" if chunks[index - 1]["english"] else "Korean"]
             gap = np.zeros(round(gap_ms * rate / 1000), dtype=np.float32)
             pieces.append(gap)
             cursor += len(gap)
@@ -625,10 +691,12 @@ def generate_candidate(
         "shortenedSilenceCount": sum(value["shortenedSilenceCount"] for value in selected_cleanups),
         "shortenedSilenceMs": sum(value["shortenedSilenceMs"] for value in selected_cleanups),
         "chunkGapMs": sentence_gap_ms,
+        "chunkGapMsByLanguage": sentence_gap_by_language,
         "paragraphGapMs": paragraph_gap_ms,
     }
     voice_routing = ({**route_identity, "sampleRate": sample_rate, "segments": route_segments}
                      if route_identity else None)
+    word_timings = _timed_source_words(aligner_path, source_text, selected_chunks)
     findings = [{"chunkIndex": chunk["index"], "startMs": chunk["startMs"],
                  "endMs": chunk["endMs"], "severity": chunk["severity"],
                  "sourceText": chunk["sourceText"], "ttsText": chunk["ttsText"],
@@ -651,7 +719,7 @@ def generate_candidate(
         "reference": str(reference_path.resolve()), "output": str(output_path.resolve()),
         "audioSha256": sha256_file(output_path),
         "chunks": selected_chunks,
-        "cleanup": cleanup, "voiceRouting": voice_routing,
+        "cleanup": cleanup, "voiceRouting": voice_routing, "wordTimings": word_timings,
         "qualityReview": {
             "enabled": quality_review, "status": quality_status,
             "scope": "selected-chunk-audio-before-final-normalization",

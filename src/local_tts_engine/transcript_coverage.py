@@ -12,6 +12,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from .korean_phonetics import phonetic_variants
+from .language_spans import english_prose_spans
 from .pronunciation import QUOTED_ENGLISH_PATTERN, apply_pronunciation, is_english_sentence
 
 COVERAGE_POLICY = "ko-clause-omission-v1"
@@ -145,8 +146,9 @@ def omission_recovery_parts(text: str, checks: list[dict[str, Any]]) -> list[str
     # Use them." invites — hands both halves back to the Korean voice with the
     # Korean adapter, silently undoing the approved English routing and the
     # word-level English check along with it. Those positions are not cuts.
-    protected = [match.span() for match in QUOTED_ENGLISH_PATTERN.finditer(text)
-                 if is_english_sentence(match.group(1))]
+    # English written without quotation marks is one utterance in the English voice too.
+    protected = [*[match.span() for match in QUOTED_ENGLISH_PATTERN.finditer(text)
+                   if is_english_sentence(match.group(1))], *english_prose_spans(text)]
     outside = lambda position: not any(begin < position < end for begin, end in protected)
     sentences = [0, *[m.end() for m in re.finditer(r"[.!?。！？]\s+", text) if outside(m.end())], len(text)]
     cuts = {0, len(text)}

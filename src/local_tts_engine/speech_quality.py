@@ -22,6 +22,7 @@ of being told the production failed.
 from __future__ import annotations
 
 import difflib
+from functools import lru_cache
 import re
 import math
 import tempfile
@@ -167,6 +168,109 @@ ENGLISH_WORD_MATCH_RATIO = 0.85
 ENGLISH_WORD_ATTEMPTS = 3
 
 
+def _korean_speech(expected_text: str, speech_parts: list[dict[str, Any]] | None) -> str:
+    """The part of the reading the Korean voice speaks, compounds written as one word."""
+    korean_text = (" ".join(part["text"] for part in speech_parts if part["language"] != "English")
+                   if speech_parts else expected_text)
+    # 발음문이 띄어 쓴 합성어(Run time)는 한 낱말로 본다. 낱말마다 보면 체크포인트의 체크를
+    # check 혼자의 읽기(첵)로 재게 된다.
+    return join_compound_words(korean_text)
+
+
+def _english_words_in_korean(korean_text: str, dictionary: list[dict[str, Any]] | None):
+    """Each English word left in Korean speech, in order: ``(as written, lower case)``."""
+    covered: list[tuple[int, int]] = []
+    for item in merge_pronunciation_dictionaries(dictionary or []):
+        covered.extend(match.span() for match in _dictionary_pattern(item).finditer(korean_text))
+    for match in LATIN_TOKEN_PATTERN.finditer(korean_text):
+        token = match.group(0).strip(".-'’")
+        file_name = FILE_NAME_PATTERN.fullmatch(token)
+        if file_name:
+            token = file_name.group(1)
+        elif re.search(r"[0-9_./]", token):
+            continue
+        if any(start < match.end() and match.start() < end for start, end in covered):
+            continue
+        for part in filter(None, token.split("-")):
+            word = re.sub(r"['’]", "", part).lower()
+            if len(word) >= MIN_ENGLISH_WORD_LETTERS:
+                yield part, word
+
+
+@lru_cache(maxsize=16384)
+def _says_reading(word: str, text: str) -> bool:
+    """Whether ``text`` writes some Hangul reading of ``word`` jamo for jamo."""
+    match = reading_match(word, text)
+    return match is not None and match[0] == 0.0 and match[1] > 0
+
+
+def _leading_reading(word: str, text: str) -> int | None:
+    """Length of the shortest start of ``text`` that writes a reading of ``word``.
+
+    The reading must begin where ``text`` does: 이름은 followed by 밥 is not
+    the word Bob at the start, and the stretch before it is never replaced.
+    """
+    if not _says_reading(word, text):
+        return None
+    for size in range(1, len(text) + 1):
+        if _says_reading(word, text[:size]):
+            return None if _says_reading(word, text[1:size]) else size
+    return None
+
+
+def fold_hangul_english(
+    expected_text: str,
+    recognized_text: str,
+    dictionary: list[dict[str, Any]] | None = None,
+    speech_parts: list[dict[str, Any]] | None = None,
+) -> str:
+    """Write each English word the transcript spelled in Hangul back as the word.
+
+    The reader transcribes ``digital transformation`` read well as
+    ``디지털 트랜스포메이션``. Compared with the Latin words in the reading, that
+    one sound counted as an error, and a chunk heavy with English terms failed
+    on spelling (0.32 against a gate of 0.10 for a take heard to be fine). A
+    Hangul spelling is accepted only when it writes a reading of the word jamo
+    for jamo, the same test as :func:`english_word_checks`, and never when the
+    Korean around it already contains that reading (밥 is not Bob). Particles
+    stay where they are. The transcript itself is kept as evidence; only the
+    copy used for comparison is folded.
+    """
+    if not HANGUL_WORD_PATTERN.search(recognized_text):
+        return recognized_text
+    korean_text = _korean_speech(expected_text, speech_parts)
+    context = LATIN_TOKEN_PATTERN.sub(" ", comparison_pronunciation(korean_text, dictionary or []))
+    spelled = set(re.findall(r"[a-z]+", re.sub(r"['’]", "", recognized_text).lower()))
+    tokens = [(match.start(), match.group()) for match in re.finditer(r"\S+", recognized_text)]
+    edits: list[tuple[int, int, str]] = []
+    cursor = 0
+    for part, word in _english_words_in_korean(korean_text, dictionary):
+        if word in spelled or _says_reading(part, context):
+            continue
+        for index in range(cursor, len(tokens)):
+            start, token = tokens[index]
+            if not HANGUL_WORD_PATTERN.search(token):
+                continue
+            # The reading may be written as two words (웹 스피어): try the next token too.
+            candidates = [(token, 1)]
+            if index + 1 < len(tokens) and HANGUL_WORD_PATTERN.search(tokens[index + 1][1]):
+                candidates.append((token + tokens[index + 1][1], 2))
+            hit = next(((text, count, cut) for text, count in candidates
+                        if (cut := _leading_reading(part, text)) is not None), None)
+            if hit is None:
+                continue
+            text, count, cut = hit
+            second = tokens[index + 1][0] if count == 2 else None
+            end = start + cut if count == 1 or cut <= len(token) else second + cut - len(token)
+            edits.append((start, end, part))
+            cursor = index + (1 if end <= start + len(token) else 2)
+            break
+    result = recognized_text
+    for start, end, word in reversed(edits):
+        result = result[:start] + word + result[end:]
+    return result
+
+
 def english_word_checks(
     expected_text: str,
     recognized_text: str,
@@ -184,14 +288,7 @@ def english_word_checks(
     are left to those. Words shorter than three letters are acronyms or
     particles the reader spells either way.
     """
-    korean_text = (" ".join(part["text"] for part in speech_parts if part["language"] != "English")
-                   if speech_parts else expected_text)
-    # 발음문이 띄어 쓴 합성어(Run time)는 한 낱말로 본다. 낱말마다 보면 체크포인트의 체크를
-    # check 혼자의 읽기(첵)로 재게 된다.
-    korean_text = join_compound_words(korean_text)
-    covered: list[tuple[int, int]] = []
-    for item in merge_pronunciation_dictionaries(dictionary or []):
-        covered.extend(match.span() for match in _dictionary_pattern(item).finditer(korean_text))
+    korean_text = _korean_speech(expected_text, speech_parts)
     context = LATIN_TOKEN_PATTERN.sub(" ", comparison_pronunciation(korean_text, dictionary or []))
     # 받아쓰기는 붙여 쓰기도(OpenLiberty, Java21) 띄어 쓰기도(web sphere) 한다.
     spoken = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", re.sub(r"['’]", "", recognized_text))
@@ -199,31 +296,57 @@ def english_word_checks(
     heard_words = words + [first + second for first, second in zip(words, words[1:])]
     checks: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for match in LATIN_TOKEN_PATTERN.finditer(korean_text):
-        token = match.group(0).strip(".-'’")
-        file_name = FILE_NAME_PATTERN.fullmatch(token)
-        if file_name:
-            token = file_name.group(1)
-        elif re.search(r"[0-9_./]", token):
+    for part, word in _english_words_in_korean(korean_text, dictionary):
+        if word in seen:
             continue
-        if any(start < match.end() and match.start() < end for start, end in covered):
-            continue
-        for part in filter(None, token.split("-")):
-            word = re.sub(r"['’]", "", part).lower()
-            if len(word) < MIN_ENGLISH_WORD_LETTERS or word in seen:
-                continue
-            seen.add(word)
-            ratio = max((difflib.SequenceMatcher(None, word, heard).ratio() for heard in heard_words),
-                        default=0.0)
-            # 짧은 낱말은 한 글자 차이가 다른 낱말이다(pom/pam).
-            needed = 1.0 if len(word) <= 4 else ENGLISH_WORD_MATCH_RATIO
-            check: dict[str, Any] = {"word": part, "heard": ratio >= needed, "ratio": round(ratio, 3)}
-            match = None if check["heard"] else reading_match(part, recognized_text)
-            if match is not None:
-                check["hangulDistance"] = round(match[0], 3)
-                check["heard"] = match[1] > reading_match(part, context)[1]
-            checks.append(check)
+        seen.add(word)
+        ratio = max((difflib.SequenceMatcher(None, word, heard).ratio() for heard in heard_words),
+                    default=0.0)
+        # 짧은 낱말은 한 글자 차이가 다른 낱말이다(pom/pam).
+        needed = 1.0 if len(word) <= 4 else ENGLISH_WORD_MATCH_RATIO
+        check: dict[str, Any] = {"word": part, "heard": ratio >= needed, "ratio": round(ratio, 3)}
+        match = None if check["heard"] else reading_match(part, recognized_text)
+        if match is not None:
+            check["hangulDistance"] = round(match[0], 3)
+            check["heard"] = match[1] > reading_match(part, context)[1]
+        checks.append(check)
     return checks
+
+
+def fold_timed_english(
+    expected_text: str,
+    words: list[dict[str, Any]],
+    dictionary: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """The pause check's timed words, with Hangul-spelled English written as the word.
+
+    The check maps the timed words onto the reading and stands down when the two
+    differ too much (``text-unmatched``), so a chunk heavy with English terms
+    that the reader writes in Hangul lost its in-word pause check altogether.
+    Only the text of a word changes; its times stay. Same acceptance as
+    :func:`fold_hangul_english`: a Hangul reading of the word, jamo for jamo.
+    """
+    # Each timed word is one spoken word, so the reading's words stay apart here.
+    korean_text = expected_text
+    context = LATIN_TOKEN_PATTERN.sub(" ", comparison_pronunciation(korean_text, dictionary or []))
+    texts = [str(word.get("text", "")) for word in words]
+    spelled = set(re.findall(r"[a-z]+", re.sub(r"['’]", "", " ".join(texts)).lower()))
+    folded = list(texts)
+    cursor = 0
+    for part, word in _english_words_in_korean(korean_text, dictionary):
+        if word in spelled or _says_reading(part, context):
+            continue
+        for index in range(cursor, len(folded)):
+            text = folded[index].strip()
+            if not HANGUL_WORD_PATTERN.search(text):
+                continue
+            cut = _leading_reading(part, text)
+            if cut is None:
+                continue
+            folded[index] = part + text[cut:]
+            cursor = index + 1
+            break
+    return [{**word, "text": text} for word, text in zip(words, folded)]
 
 
 def english_words_unheard(candidate: dict[str, Any]) -> int:
@@ -386,6 +509,13 @@ def check_pronunciation(
 
     expected_count = occurrences(expected_keys)
     heard_count = occurrences(recognized_keys)
+    # The reading is searched as sounds, and a variant that spells every English
+    # word by its letters (digital → 디아이지아이티에이엘) can contain 에이아이 by
+    # accident. The synthesis text holds the term exactly as often as it was
+    # written, so that bounds how many times it can have been expected.
+    written = len(_dictionary_pattern({"from": term}).findall(expected_text))
+    if written:
+        expected_count = min(expected_count, written)
 
     if distance > PRONUNCIATION_WARNING_DISTANCE:
         status, reason = "failed", "지정 발음 불일치"
@@ -616,7 +746,8 @@ def evaluate_candidate(
     speech_parts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Score one TTS candidate and return a serializable quality record."""
-    comparison_recognized = comparison_transcript(recognized_text, speech_parts)
+    comparison_recognized = fold_hangul_english(
+        expected_text, comparison_transcript(recognized_text, speech_parts), dictionary, speech_parts)
     expected = comparison_text(expected_text, dictionary)
     recognized = comparison_text(comparison_recognized, dictionary)
     cer = character_error_rate(expected, recognized)
@@ -776,8 +907,9 @@ def review_candidate_prosody(
     path = Path(evaluation["audioPath"])
     pauses = interior_silences(path)
     first = pause_checks(
-        evaluation["expectedText"], read_timings(path, 0.0) if pauses else [], pauses,
-        duration_ms=int(evaluation["waveform"]["durationMs"]),
+        evaluation["expectedText"],
+        fold_timed_english(evaluation["expectedText"], read_timings(path, 0.0), dictionary) if pauses else [],
+        pauses, duration_ms=int(evaluation["waveform"]["durationMs"]),
     )
     restart_candidates = acoustic_restarts(path)
     targets = boundary_targets(

@@ -626,3 +626,17 @@ def test_watsonx_listening_terms_use_the_production_dictionary() -> None:
     assert apply_pronunciation("Red Hat 기반 standalone을 씁니다.", dictionary) == "레드햇 기반 스탠드얼론을 씁니다."
     # 낱말 일부나 하이픈 합성어는 건드리지 않는다.
     assert "카탈로그" not in apply_pronunciation("catalogue", dictionary)
+
+
+def test_coffee_is_read_as_the_established_korean_spelling() -> None:
+    """청취에서 'coffee'가 "코피"로 읽혀, 사전의 한글 읽기로 합성한다."""
+    import json
+    from pathlib import Path
+
+    dictionary = json.loads(
+        (Path(__file__).parents[1] / "config/production-pronunciation.ko.json").read_text(encoding="utf-8")
+    )
+
+    assert apply_pronunciation("따뜻한 coffee 한 잔과 Coffee를 마십니다.", dictionary) == "따뜻한 커피 한 잔과 커피를 마십니다."
+    # 낱말 일부는 건드리지 않는다.
+    assert "커피" not in apply_pronunciation("coffeehouse", dictionary)

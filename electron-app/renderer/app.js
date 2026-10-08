@@ -11,6 +11,7 @@ import { VIDEO_QUALITIES, DEFAULT_VIDEO_QUALITY, videoQuality } from "../shared/
 
 import { CREATE_VIEWS, buildChapterRanges, createViewHistory, completionFindings, completionSummary, renderCompletionWarnings, etaLabel, shortPath, summarizePageRange, summarizeVoiceFindings, jobActivity, jobView, unitLabel, voiceFindingReason } from "./view-utils.mjs";
 import { createJobPace } from "./job-pace.mjs";
+import { candidateTextElement } from "./candidate-follow.mjs";
 
 const api = window.ttsStudio;
 const $ = (selector) => document.querySelector(selector);
@@ -690,7 +691,12 @@ function openJobDialog(title) {
   if (!dialog.open) dialog.showModal();
 }
 
-function renderVoiceCandidates(candidates) {
+const CANDIDATE_INTRO = "각 후보를 재생해 보고 가장 마음에 드는 목소리를 고르세요.";
+const MATCH_EXPLANATION = "생성한 음성을 별도 받아쓰기 모델이 다시 듣고 입력한 문장과 비교한 값입니다. "
+  + "발음이 같은 표기 차이는 같은 것으로 봅니다. 음질이나 자연스러움 점수가 아닙니다.";
+
+// fallbackText: 후보에 읽기 기록이 없을 때(옛 후보) 글만이라도 보여 줄 입력 문장.
+function renderVoiceCandidates(candidates, { fallbackText = "" } = {}) {
   voiceCandidates = candidates;
   selectedCandidateToken = null;
   $("#apply-voice-candidate").disabled = true;
@@ -704,8 +710,19 @@ function renderVoiceCandidates(candidates) {
     radio.value = candidate.token;
     radio.checked = false;
     const copy = document.createElement("div");
+    const head = document.createElement("div");
+    head.className = "candidate-head";
     const title = document.createElement("strong");
     title.textContent = candidate.name;
+    head.append(title);
+    const reading = candidate.reading;
+    if (reading?.match) {
+      const badge = document.createElement("span");
+      badge.className = "candidate-match";
+      badge.textContent = `일치율 ${reading.match.percent}%`;
+      badge.title = MATCH_EXPLANATION;
+      head.append(badge);
+    }
     const meta = document.createElement("small");
     // Every take is read back by the independent reviewer, so the listener is
     // told what the machine heard before deciding what their own ear prefers.
@@ -739,7 +756,30 @@ function renderVoiceCandidates(candidates) {
     audio.addEventListener("play", () => {
       $$("#candidate-list audio").forEach((other) => { if (other !== audio) other.pause(); });
     });
-    copy.append(title, meta, audio);
+    copy.append(head, meta);
+    const shown = reading || (fallbackText ? { sourceText: fallbackText, words: null } : null);
+    if (shown?.sourceText) {
+      copy.append(candidateTextElement(document, shown, {
+        audio, requestFrame: (callback) => requestAnimationFrame(callback), cancelFrame: (id) => cancelAnimationFrame(id),
+      }));
+      if (reading?.words && reading.englishSpans?.length) {
+        const legend = document.createElement("small");
+        legend.className = "candidate-legend";
+        legend.textContent = "점선 밑줄은 영어 음성으로 읽은 구간입니다.";
+        copy.append(legend);
+      }
+    }
+    copy.append(audio);
+    if (reading?.heard) {
+      const heard = document.createElement("details");
+      heard.className = "candidate-heard";
+      const summary = document.createElement("summary");
+      summary.textContent = "받아쓰기 모델이 들은 말";
+      const text = document.createElement("p");
+      text.textContent = reading.heard;
+      heard.append(summary, text);
+      copy.append(heard);
+    }
     card.append(radio, copy);
     radio.addEventListener("change", () => {
       selectedCandidateToken = radio.value;
@@ -748,6 +788,12 @@ function renderVoiceCandidates(candidates) {
     });
     return card;
   }));
+  const intro = $("#candidate-gallery > p");
+  if (intro) {
+    intro.textContent = candidates.some((candidate) => candidate.reading?.words)
+      ? `${CANDIDATE_INTRO} 재생하면 읽는 단어가 따라 표시되고, 단어를 누르면 그 위치부터 들립니다.`
+      : CANDIDATE_INTRO;
+  }
 }
 
 function handleEditEvent(event) {
@@ -851,7 +897,7 @@ function handleTextVoiceEvent(event) {
     trackBatchProgress(event);
   } else if (event.type === "text-voices-ready") {
     candidatePurpose = "text";
-    renderVoiceCandidates(event.candidates);
+    renderVoiceCandidates(event.candidates, { fallbackText: event.options?.text || "" });
     setIconStatus("#voice-top-status", "생성된 후보를 비교하고 있습니다");
     $("#start-text-voices").disabled = false;
     $("#edit-dialog-title").textContent = "목소리 후보 비교";
@@ -894,7 +940,7 @@ async function reopenTextVoiceCandidates(target) {
   renderVoiceCandidates(saved.candidates.map((candidate) => ({
     ...candidate,
     token: String(candidate.index),
-  })));
+  })), { fallbackText: saved.text });
   $('#edit-dialog-spinner').classList.add('hidden');
   $('#candidate-gallery').classList.remove('hidden');
   $('#cancel-edit-button').classList.add('hidden');

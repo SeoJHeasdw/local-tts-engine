@@ -4,6 +4,7 @@ import path from "node:path";
 import { ADAPTER, DEFAULT_QUALITY_ATTEMPTS, LEGACY_OUTPUT_PATHS, dateFolder, runtimePaths } from "./paths.mjs";
 import { assertPageReplaceable, isInside, mapWithConcurrency, timeRangeForPages, voiceQualityFindings } from "../shared/index.mjs";
 import { pathToFileURL } from "node:url";
+import { candidateReading } from "../shared/candidate-reading.mjs";
 import { assertCurrentCourseManifest } from "./course-run-state.mjs";
 import { bindPageVoiceCandidate } from './page-voice-integrity.mjs';
 
@@ -303,6 +304,7 @@ export function createVoicesService({
       // 보고 답할 수 있어야 하므로 없을 때도 null로 남긴다.
       voiceRouting: item.metadata.voiceRouting ?? null,
       qualityReview: candidateEvidence(item.metadata).qualityReview,
+      reading: candidateReading(item.metadata),
       audioUrl: pathToFileURL(item.audioPath).href,
     }));
     job.state = "done";
@@ -419,6 +421,7 @@ export function createVoicesService({
         durationMs: metadata?.audioSha256 ? metadata?.durationMs || item.durationMs || null : null,
         voiceRouting: metadata?.voiceRouting ?? item.voiceRouting ?? null,
         qualityReview: candidateEvidence(metadata).qualityReview,
+        reading: candidateReading(metadata),
         audioUrl: pathToFileURL(audioPath).href,
         audioPath,
         metadata,

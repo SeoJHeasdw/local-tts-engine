@@ -10,26 +10,48 @@ import re
 from typing import Any
 import unicodedata
 
+from .language_spans import english_runs
 from .pronunciation import (
     QUOTED_ENGLISH_PATTERN, _dictionary_pattern, merge_pronunciation_dictionaries,
     is_english_sentence,
 )
 
-ENGLISH_VOICE_POLICY = "english-speaker-only-v1"
+ENGLISH_VOICE_POLICY = "english-speaker-only-v2"
+# Silence the script places between two language segments, on top of the room
+# tone each trimmed segment keeps at its edges. How long depends on what the
+# written text puts between them: nothing (a switch inside a clause), a comma,
+# or a sentence end, which pauses like any sentence in that language.
 LANGUAGE_GAP_MS = 120
+CLAUSE_GAP_MS = 200
+SENTENCE_GAP_MS = {"English": 370, "Korean": 290}
 _HANGUL = re.compile(r"[가-힣ㄱ-ㅎㅏ-ㅣ]")
 _WORD = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
+_CLOSERS = "\"”’)」』"
+
+
+def language_gap_ms(previous_text: str, previous_language: str) -> int:
+    """Silence between a segment and the next one in the other language."""
+    tail = previous_text.rstrip().rstrip(_CLOSERS)[-1:]
+    if tail and tail in ".!?。！？…":
+        return SENTENCE_GAP_MS["English" if previous_language == "English" else "Korean"]
+    if tail and tail in ",;:，；：":
+        return CLAUSE_GAP_MS
+    return LANGUAGE_GAP_MS
 
 
 def speech_segments(text: str, dictionary: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Split protected/quoted English sentences, or a wholly English input.
 
+    ``text`` is one chunk, so a chunk with no Korean is English as a whole; the
+    text candidate planner keeps English sentences out of Korean chunks.
     Unmapped Latin terms inside Korean do not trigger a voice change. Preserve
     every non-whitespace character, including quote punctuation, in order.
     """
     if not _HANGUL.search(text) and _WORD.search(text):
         return [{"text": text, "language": "English"}]
-    intervals = []
+    # English written without quotation marks: a clause or sentence of three or
+    # more words (see .language_spans). Single English terms stay with the Korean voice.
+    intervals = list(english_runs(text))
     for item in merge_pronunciation_dictionaries(dictionary):
         if not item.get("literal") or item.get("inline"):
             continue
@@ -92,6 +114,8 @@ def routing_identity(text: str, dictionary: list[dict[str, Any]]) -> dict[str, A
         return {}
     return {"policy": ENGLISH_VOICE_POLICY, "englishAdapter": None,
             "englishReferenceMode": "speaker-only", "gapMs": LANGUAGE_GAP_MS,
+            "gaps": {"word": LANGUAGE_GAP_MS, "clause": CLAUSE_GAP_MS,
+                     "sentence": dict(SENTENCE_GAP_MS)},
             "englishLoudness": "match-korean-active-rms-constant-gain",
             "accentTarget": "General American", "accentEnforced": False,
             "segments": segments}
@@ -126,6 +150,9 @@ class EnglishVoiceRouter:
 
     def identity(self, text: str) -> dict[str, Any]:
         return routing_identity(text, self.dictionary)
+
+    def segments(self, text: str) -> list[dict[str, str]]:
+        return speech_segments(text, self.dictionary)
 
     def generate(self, generate: Any, arguments: dict[str, Any], language: str):
         if language != "English":

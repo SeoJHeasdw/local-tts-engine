@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .english_reading import compound_parts
+from .language_spans import QUOTED_ENGLISH_PATTERN, english_prose_spans, is_english_sentence  # noqa: F401
 from .korean_naturalness import (
     KOREAN_COUNTER_BOUNDARY,
     MIXED_IDENTIFIER_PATTERN,
@@ -266,14 +267,6 @@ def _dictionary_pattern(item: dict[str, Any]) -> re.Pattern[str]:
 # rules run.  They are category ``Co``: no pattern in this module matches them,
 # so a protected span cannot be split, read as a number, or partially replaced.
 PROTECTED_PLACEHOLDER_START = 0xE000
-QUOTED_ENGLISH_PATTERN = re.compile(r'''["“]([^"“”\n]+)["”]''')
-
-
-def is_english_sentence(text: str) -> bool:
-    """Conservatively recognize prose, not an isolated technical identifier."""
-    return not re.search(r"[가-힣ㄱ-ㅎㅏ-ㅣ\ue000-\uf8ff]", text) and sum(
-        bool(re.search(r"[A-Za-z]", token)) for token in text.split()
-    ) >= 3
 
 
 def _protect_literal_spans(
@@ -309,6 +302,22 @@ def _protect_literal_spans(
     if is_english_sentence(output):
         kept.append(output)
         output = chr(PROTECTED_PLACEHOLDER_START + len(kept) - 1)
+    # English prose written without quotation marks inside Korean text keeps its
+    # spelling too, and is spoken by the English voice (see .language_spans).
+    # The Korean rules otherwise rewrite it: the article "a" became 에이.
+    # A dictionary entry that covers the whole stretch (Agent to Agent → 에이전트
+    # 투 에이전트) marks a registered term, not prose: its reading stays. An
+    # entry on a word or two inside a longer stretch does not, as in a quote.
+    entries = [item for item in dictionary if not item.get("literal")]
+    named = [match.span() for item in entries for match in _dictionary_pattern(item).finditer(output)]
+    pieces, cursor = [], 0
+    for start, end in english_prose_spans(output):
+        if any(begin <= start and end <= finish for begin, finish in named):
+            continue
+        kept.append(output[start:end])
+        pieces += [output[cursor:start], chr(PROTECTED_PLACEHOLDER_START + len(kept) - 1)]
+        cursor = end
+    output = "".join([*pieces, output[cursor:]])
     # Keep complete English prose intact before protecting an inline term.
     # A longer ordinary entry still wins, as it would without the inline form:
     # Claude spoken as English must not turn Claude Opus 5 into Claude 오퍼스 파이브.

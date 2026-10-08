@@ -81,8 +81,11 @@ def test_language_parts_use_measured_sample_offsets_and_recovery_can_coexist(tmp
     segments = route["segments"]
     assert [c["lang_code"] for c in calls] == ["Korean", "English", "Korean"]
     assert segments[-1]["endSample"] == len(result["audio"])
+    # Each switch pauses as long as the text between the segments calls for: a
+    # Korean sentence end (290ms) and then an English sentence end (370ms).
+    assert [following["startSample"] - previous["endSample"] for previous, following in zip(segments, segments[1:])] == [
+        290 * 24, 370 * 24]
     for previous, following in zip(segments, segments[1:]):
-        assert following["startSample"] - previous["endSample"] == 2880
         assert np.all(result["audio"][previous["endSample"]:following["startSample"]] == 0)
     assert "recovery" in result["cleanup"]
     path = tmp_path / "mixed.wav"
@@ -379,3 +382,72 @@ def test_one_good_english_seed_stops_the_retries():
     result = resolve_chunk_take(CourseChunk((entry,)), attempt_limit=MAX_AUTOMATIC_ATTEMPTS,
                                 synthesize=synthesize, review=review)
     assert made == [1, 2] and result["severity"] == "ok"
+
+
+CLAUSE = "We all know that consistent effort is key to success,"
+MIXED = f"Today는 새로운 project를 시작합니다. {CLAUSE} 하지만 rest와 relaxation도 중요합니다."
+
+
+def test_an_english_clause_in_korean_text_goes_to_the_english_voice_in_three_parts() -> None:
+    from local_tts_engine.english_voice import speech_segments
+
+    segments = speech_segments(MIXED, [])
+
+    assert [segment["language"] for segment in segments] == ["Korean", "English", "Korean"]
+    assert segments[1]["text"] == CLAUSE
+    assert " ".join(segment["text"] for segment in segments).split() == MIXED.split()
+
+
+def test_gaps_follow_what_the_text_puts_between_two_languages() -> None:
+    from local_tts_engine.english_voice import language_gap_ms
+
+    assert language_gap_ms("좋은 날입니다.", "Korean") == 290
+    assert language_gap_ms("Have a nice day!", "English") == 370
+    assert language_gap_ms('"Do my Bots share one computer?"', "English") == 370
+    assert language_gap_ms("success,", "English") == 200
+    assert language_gap_ms("새로운", "Korean") == 120
+
+
+def test_identity_records_the_gaps_so_a_changed_policy_changes_the_clip() -> None:
+    from local_tts_engine.english_voice import routing_identity
+
+    identity = routing_identity(MIXED, [])
+
+    assert identity["policy"] == "english-speaker-only-v2"
+    assert identity["gaps"] == {"word": 120, "clause": 200, "sentence": {"English": 370, "Korean": 290}}
+    assert [s["language"] for s in identity["segments"]] == ["Korean", "English", "Korean"]
+    assert routing_identity("한국어 문장입니다.", []) == {}
+
+
+def test_single_english_terms_inside_korean_stay_with_the_korean_voice() -> None:
+    from local_tts_engine.english_voice import speech_segments
+
+    assert speech_segments("새로운 project를 coffee 한 잔과 digital transformation이 좋습니다", []) == [
+        {"text": "새로운 project를 coffee 한 잔과 digital transformation이 좋습니다", "language": "Korean"}]
+
+
+def test_pronunciation_leaves_an_unquoted_english_clause_alone_but_reads_the_korean_around_it() -> None:
+    article = [{"from": "A", "to": "에이"}]
+    text = "계획을 세웁니다. Have a wonderful and productive day, 그리고 A 팀이 갑니다."
+
+    reading = apply_pronunciation(text, article)
+
+    assert "Have a wonderful and productive day," in reading
+    assert "에이 팀" in reading
+
+
+def test_a_registered_term_list_keeps_its_korean_reading() -> None:
+    # No grammar words, so this is a list of terms and not English prose.
+    dictionary = [{"from": "Authorization", "to": "어서라이제이션"}, {"from": "Attention Budget", "to": "어텐션 버짓"}]
+
+    assert apply_pronunciation("Authentication과 Authorization, Attention Budget과 입니다.", dictionary) \
+        == "Authentication과 어서라이제이션, 어텐션 버짓과 입니다."
+
+
+def test_a_registered_term_that_is_a_whole_english_phrase_keeps_its_korean_reading() -> None:
+    dictionary = [{"from": "Agent to Agent", "to": "에이전트 투 에이전트"}, {"from": "Guardrails", "to": "가드레일즈"}]
+
+    assert apply_pronunciation("에이투에이는 Agent to Agent입니다.", dictionary) == "에이투에이는 에이전트 투 에이전트입니다."
+    # An entry on one word inside a longer English phrase does not turn it into a term.
+    assert apply_pronunciation("그 아래 Guardrails and approvals를 보세요.", dictionary) \
+        == "그 아래 Guardrails and approvals를 보세요."

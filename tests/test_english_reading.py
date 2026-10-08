@@ -94,3 +94,15 @@ def fresh_dictionary():
 def test_no_dictionary_means_no_hangul_judgment(monkeypatch: pytest.MonkeyPatch, tmp_path, fresh_dictionary) -> None:
     monkeypatch.setattr(english_reading, "CMUDICT_PATH", tmp_path / "missing.dict")
     assert reading_match("traditional", "트래디셔널") is None
+
+
+def test_a_single_l_between_vowels_is_an_accepted_spelling_of_the_same_sound() -> None:
+    from local_tts_engine.english_reading import reading_match
+
+    # The loanword form doubles it (데일리), and the transcript often writes one.
+    assert reading_match("daily", "데일리") == (0.0, 1)
+    assert reading_match("daily", "데이리") == (0.0, 1)
+    assert reading_match("polish", "폴리시")[0] == 0.0
+    # Only that spelling is added: a different consonant or vowel is still a misreading.
+    assert reading_match("daily", "데이니")[0] > 0
+    assert reading_match("daily", "데이")[0] > 0

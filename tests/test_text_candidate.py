@@ -14,6 +14,7 @@ from local_tts_engine.pronunciation import apply_pronunciation
 from local_tts_engine.text_candidate import (
     CandidateAudioError,
     _read_local_independent_word_times,
+    _timed_source_words,
     candidate_seed,
     generate_candidate,
     load_text,
@@ -124,6 +125,69 @@ def test_short_tail_of_english_passage_keeps_english_voice_and_spelling() -> Non
     assert chunks[-1]["unresolvedAscii"] == []
     assert " ".join(chunk["ttsText"] for chunk in chunks) == apply_pronunciation(source, dictionary)
     assert speech_segments(chunks[-1]["ttsText"], dictionary)[0]["language"] == "English"
+
+
+ARTICLE_A = [{"from": "A", "to": "에이"}]
+
+
+def test_english_sentence_never_shares_a_chunk_with_korean() -> None:
+    # A chunk is spoken by one voice, and the Korean rules read the article "a" as 에이.
+    source = "요즘은 날씨가 좋습니다. Have a wonderful and productive day! 내일 또 봐요."
+
+    chunks = plan_text_chunks(source, ARTICLE_A)
+
+    assert [(chunk["sourceText"], chunk["english"]) for chunk in chunks] == [
+        ("요즘은 날씨가 좋습니다.", False),
+        ("Have a wonderful and productive day!", True),
+        ("내일 또 봐요.", False),
+    ]
+    assert chunks[1]["ttsText"] == "Have a wonderful and productive day!"
+    assert chunks[1]["unresolvedAscii"] == []
+    assert [speech_segments(chunk["ttsText"], ARTICLE_A)[0]["language"] for chunk in chunks] == [
+        "Korean", "English", "Korean"]
+    assert [chunk["paragraphEnd"] for chunk in chunks] == [False, False, True]
+
+
+def test_consecutive_english_sentences_share_one_english_chunk() -> None:
+    source = ("오늘은 쉬어 갑니다. It is important to rest. Take a short walk after lunch. "
+              "Drink enough water. 그럼 다음에 만나요.")
+
+    chunks = plan_text_chunks(source, ARTICLE_A)
+
+    assert [(chunk["sourceText"], chunk["english"]) for chunk in chunks] == [
+        ("오늘은 쉬어 갑니다.", False),
+        ("It is important to rest. Take a short walk after lunch. Drink enough water.", True),
+        ("그럼 다음에 만나요.", False),
+    ]
+
+
+def test_sentence_that_mixes_the_languages_or_has_two_english_words_stays_korean() -> None:
+    mixed = "We all know that effort is key, 하지만 쉬는 것도 중요합니다."
+    assert [(c["sourceText"], c["english"]) for c in plan_text_chunks(mixed, ARTICLE_A)] == [(mixed, False)]
+    # Two words could be a term or a name; only prose of three or more words changes voice.
+    short = "감사합니다. Thank you. 또 만나요."
+    assert [(c["sourceText"], c["english"]) for c in plan_text_chunks(short, [])] == [(short, False)]
+
+
+def test_mixed_paragraphs_with_an_english_paragraph_plan_without_a_reading_mismatch() -> None:
+    # Pasted example: the English-only paragraph made the whole-text reading differ
+    # (a → 에이, single → Single) from the protected chunk and stopped generation.
+    source = (
+        "Today는 새로운 project를 시작하기에 딱 좋은 날입니다. We all know that consistent effort is key to "
+        "success, 하지만 때로는 충분한 rest와 relaxation도 그만큼 중요합니다.\n"
+        "It is always important to maintain a healthy balance between your personal life and career goals. "
+        "Taking step-by-step actions every single day will eventually bring you closer to your dreams.\n"
+        "요즘은 AI technology의 발전으로 digital transformation이 빠르게 이루어지고 있습니다. "
+        "Have a wonderful and productive day!"
+    )
+
+    chunks = plan_text_chunks(source, ARTICLE_A)
+
+    assert [chunk["english"] for chunk in chunks] == [False, True, False, True]
+    assert chunks[1]["ttsText"] == chunks[1]["sourceText"]
+    assert chunks[1]["ttsText"].count(" a ") == 1 and "에이" not in chunks[1]["ttsText"]
+    assert chunks[3]["ttsText"] == "Have a wonderful and productive day!"
+    assert [chunk["paragraphEnd"] for chunk in chunks] == [True, True, False, True]
 
 
 def test_chunk_never_spans_a_paragraph_but_keeps_a_quoted_line_break() -> None:
@@ -315,6 +379,9 @@ def test_full_text_candidate_assembles_real_sample_gaps_and_truthful_metadata(
     assert generated_texts[0] == generated_texts[1]
     assert metadata["qualityReview"]["status"] == "not-checked"
     assert metadata["qualityReview"]["findings"] == []
+    # The follow-along timeline is a display aid: no aligner in this test, and the
+    # voice is still produced.
+    assert metadata["wordTimings"]["status"] == "unavailable" and metadata["wordTimings"]["words"] == []
     assert metadata["finalTrack"]["status"] == "ok"
     assert len(metadata["finalTrack"]["chunks"]) == len(metadata["chunks"])
     assert metadata["chunks"][0]["selectedAttempt"] == 2
@@ -337,6 +404,18 @@ def test_full_text_candidate_assembles_real_sample_gaps_and_truthful_metadata(
     assert paragraphs["chunks"][1]["gapBeforeMs"] == 670
     assert paragraphs["chunks"][1]["startMs"] - paragraphs["chunks"][0]["endMs"] == 670
     assert paragraphs["cleanup"]["chunkGapMs"] == 370
+
+    # Each sentence ends with the pause of the language it was spoken in:
+    # Korean 420ms, English 500ms, minus the 65ms room tone kept at each trimmed edge.
+    text.write_text("요즘은 날씨가 좋습니다. Have a wonderful and productive day! 내일 또 봐요.", encoding="utf-8")
+    mixed = generate_candidate(
+        model_key="qwen3-tts", text_path=text, reference_path=tmp_path / "reference.wav",
+        reference_text_path=reference_text, output_path=tmp_path / "mixed.wav",
+        metadata_path=tmp_path / "mixed.json", seed=42,
+    )
+    assert [chunk["gapBeforeMs"] for chunk in mixed["chunks"]] == [0, 290, 370]
+    assert mixed["cleanup"]["chunkGapMsByLanguage"] == {"English": 370, "Korean": 290}
+    assert mixed["cleanup"]["chunkGapMs"] == 290
 
     monkeypatch.setattr(target, "inspect_final_track", lambda *_args: {
         "status": "failed", "issues": [{"code": "missing-speech"}],
@@ -383,6 +462,47 @@ def test_independent_alignment_uses_only_the_prechecked_local_path(
 
     assert seen == [path]
     assert words == [{"text": "안녕", "startMs": 100, "endMs": 400}]
+
+
+def test_word_timings_load_the_local_aligner_once_for_every_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mlx = ModuleType("mlx")
+    mlx.__path__ = []
+    core = ModuleType("mlx.core")
+    core.clear_cache = lambda: None
+    monkeypatch.setitem(sys.modules, "mlx", mlx)
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    mlx_audio = ModuleType("mlx_audio")
+    mlx_audio.__path__ = []
+    stt = ModuleType("mlx_audio.stt")
+    stt.__path__ = []
+    stt_utils = ModuleType("mlx_audio.stt.utils")
+    loads, heard = [], []
+    tokens = {"a": [("오늘은", 0.0, 0.4), ("밥", 0.4, 0.8)], "b": [("다음", 0.0, 0.3)]}
+
+    def generate(**kwargs):
+        heard.append((kwargs["audio"], kwargs["text"], kwargs["language"]))
+        return SimpleNamespace(items=[SimpleNamespace(text=text, start_time=start, end_time=end)
+                                      for text, start, end in tokens[kwargs["audio"]]])
+
+    stt_utils.load_model = lambda path: (loads.append(path), SimpleNamespace(generate=generate))[1]
+    for name, module in (("mlx_audio", mlx_audio), ("mlx_audio.stt", stt), ("mlx_audio.stt.utils", stt_utils)):
+        monkeypatch.setitem(sys.modules, name, module)
+    chunks = [{"index": 1, "sourceText": "오늘은 Bob", "ttsText": "오늘은 밥", "startMs": 0, "selectedAudioPath": "a"},
+              {"index": 2, "sourceText": "다음", "ttsText": "다음", "startMs": 1000, "selectedAudioPath": "b"}]
+
+    result = _timed_source_words(tmp_path / "aligner", "오늘은 Bob\n다음", chunks)
+
+    assert loads == [tmp_path / "aligner"]
+    assert heard == [("a", "오늘은 밥", "English"), ("b", "다음", "English")]
+    assert result["status"] == "ok"
+    assert result["words"] == [[0, 3, 0, 400], [4, 7, 400, 800], [8, 10, 1000, 1300]]
+
+    stt_utils.load_model = lambda _path: (_ for _ in ()).throw(RuntimeError("weights missing"))
+    broken = _timed_source_words(tmp_path / "aligner", "오늘은 Bob\n다음", chunks)
+    assert broken["status"] == "unavailable" and "weights missing" in broken["reason"]
+    assert _timed_source_words(None, "다음", chunks)["reason"] == "aligner-not-installed"
 
 
 def test_text_voice_spends_takes_on_english_that_came_back_in_hangul() -> None:

@@ -121,7 +121,7 @@ from .course.settings import (
 from .course.types import CourseChunk, CourseEntry
 from .english_voice import (
     EnglishVoiceRouter,
-    LANGUAGE_GAP_MS,
+    language_gap_ms,
     match_english_level,
     read_routed_timings,
     read_routed_transcript,
@@ -313,11 +313,11 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
         raise ValueError("누락 복구 조각이 원래 발음문과 다릅니다.")
     routing = voice_router.identity(arguments["text"]) if voice_router else {}
     segments = [segment for text in texts for segment in (
-        speech_segments(text, voice_router.dictionary) if routing else [{"text": text, "language": arguments.get("lang_code", "Korean")}]
+        voice_router.segments(text) if routing else [{"text": text, "language": arguments.get("lang_code", "Korean")}]
     )]
     pieces, cleanups, part_records, closures = [], [], [], []
     rate, generation_ms, peak, cursor = None, 0, 0.0, 0
-    previous_language = None
+    previous_language, previous_text = None, ""
     for segment in segments:
         text, language = segment["text"], segment["language"]
         started = time.perf_counter()
@@ -337,7 +337,8 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
             audio, closure = refine(audio, rate, text)
             audio = validate_candidate_audio(audio, rate)
         if pieces:
-            gap_ms = LANGUAGE_GAP_MS if routing and previous_language != language else STEP_GAP_MS
+            gap_ms = (language_gap_ms(previous_text, previous_language)
+                      if routing and previous_language != language else STEP_GAP_MS)
             gap = np.zeros(round(gap_ms * rate / 1000), dtype=audio.dtype)
             pieces.append(gap)
             cursor += len(gap)
@@ -351,7 +352,7 @@ def generate_candidate_audio(generate: Any, arguments: dict[str, Any], parts: li
         pieces.append(audio)
         cleanups.append(cleanup)
         cursor += len(audio)
-        previous_language = language
+        previous_language, previous_text = language, text
         peak = max(peak, *(float(result.peak_memory_usage) for result in results))
     cleanup = dict(cleanups[0])
     if parts or routing:

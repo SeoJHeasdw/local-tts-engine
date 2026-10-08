@@ -1495,5 +1495,9 @@
   {
     "from": "standalone",
     "to": "스탠드얼론"
+  },
+  {
+    "from": "coffee",
+    "to": "커피"
   }
 ]
