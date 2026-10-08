@@ -138,6 +138,7 @@
                 <label class="field full"><span>결과 이름</span><input id="job-name" name="name" autocomplete="off" spellcheck="false" required><small>자동으로 정해집니다. 구분이 필요할 때만 바꾸세요.</small></label>
                 <label class="field full"><span>만들 결과</span><select id="deliverable"><option value="video">완성 영상</option><option value="captions">음성과 자막</option><option value="audio">음성만</option></select></label>
                 <label class="check-row full"><input id="burn-captions" type="checkbox"><span><strong>영상에 자막 포함</strong><small>기본은 자막 파일(SRT·VTT)만 만듭니다. 켜면 자막을 구운 영상을 냅니다.</small></span></label>
+                <label class="field full" id="caption-style-field"><span>자막 모양</span><select id="caption-style"><option value="shadow">그림자 · 어두운 화면용</option><option value="box">회색 박스 · 밝은 화면용</option></select><small>흰색·밝은 화면에는 회색 박스를 고르세요. 박스는 자막 길이에 맞춰 늘고 줄어듭니다.</small></label>
               </div>
             </details>
 
@@ -442,6 +443,7 @@
                 <p id="review-recapture-timeline-name" role="status">현재 영상의 자막·전환 시각 사용</p>
                 <label class="field"><span>재촬영 화질</span><select id="review-recapture-quality"><option value="standard">1080p</option><option value="high" selected>1440p</option><option value="ultra">4K</option></select></label>
                 <label class="checkbox-field"><input id="review-recapture-captions" type="checkbox">자막을 화면에 넣기</label>
+                <label class="field"><span>자막 모양</span><select id="review-recapture-caption-style"><option value="shadow">그림자 · 어두운 화면용</option><option value="box">회색 박스 · 밝은 화면용</option></select></label>
                 <p id="review-recapture-note" role="status">페이지 타임라인이 있는 강의 영상을 선택하세요.</p>
                 <button type="button" class="primary-button full" id="review-recapture" disabled>현재 목소리로 화면 다시 찍기</button>
               </details>
@@ -536,6 +538,7 @@
                 <span class="demo-command-divider" aria-hidden="true"></span>
                 <select id="demo-quality" aria-label="완성본 화질"><option value="standard">1080p</option><option value="high" selected>1440p · 기본</option><option value="ultra">4K</option></select>
                 <label class="demo-burn" title="기본은 자막 파일만 만듭니다. 켜면 자막을 구운 완성본을 따로 냅니다."><input id="demo-burn" type="checkbox"><span>자막 굽기</span></label>
+                <select id="demo-caption-style" aria-label="굽는 자막 모양" title="밝은 화면에는 회색 박스를 고르세요."><option value="shadow">그림자 · 어두운 화면용</option><option value="box">회색 박스 · 밝은 화면용</option></select>
                 <button class="primary-small" id="demo-render-start" type="button">완성본 만들기 →</button>
               </div>
               <div class="demo-running hidden" id="demo-running">

@@ -3,12 +3,13 @@
 //
 //   node electron-app/main/workers/capture.mjs
 //     --timeline <file> --out-dir <dir> --site-dir <dir> --deck-root <dir>
-//     [--quality standard|high|ultra] [--burn-captions] [--no-cache] [--headful]
+//     [--quality standard|high|ultra] [--burn-captions [--caption-style shadow|box]] [--no-cache] [--headful]
 //     [--max-duration 30] [--url <address>] [--no-source-check]
 import fs from "node:fs";
 import path from "node:path";
 import { buildCaptionCues } from "../../shared/captions.mjs";
 import { videoQuality } from "../../shared/video-quality.mjs";
+import { requireCaptionStyle } from "../../shared/caption-styles.mjs";
 import { parseFlags, requireFlag } from "../capture/cli.mjs";
 import { checkDeckContract, reviewDeckTimeline } from "../capture/deck-source.mjs";
 import { captureVideo } from "../capture/record.mjs";
@@ -20,6 +21,7 @@ const siteDir = flags["site-dir"] ? path.resolve(String(flags["site-dir"])) : nu
 const url = typeof flags.url === "string" ? flags.url : null;
 const quality = flags.quality === undefined ? "standard" : String(flags.quality);
 const burnCaptions = flags["burn-captions"] === true;
+const captionStyle = flags["caption-style"] === undefined ? undefined : requireCaptionStyle(flags["caption-style"]);
 // 소스 판본 검사를 건너뛰려면 명시해야 한다. 조용히 빠지지 않는다.
 const checkSource = flags["no-source-check"] !== true;
 
@@ -55,6 +57,7 @@ const file = await captureVideo({
   url,
   headful: flags.headful === true,
   burnCaptions,
+  captionStyle,
   maxDurationMs: maxDurationSeconds === null ? null : Math.round(maxDurationSeconds * 1000),
   noCache: flags["no-cache"] === true,
   quality,

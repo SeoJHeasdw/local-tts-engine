@@ -17,6 +17,7 @@ import { captureVideoFileName, videoQuality } from "../../shared/video-quality.m
 import { CAPTURE_COLOR_FILTERS, captureCodecArgs, validateCaptureStream, writeCaptureReport } from "../capture/encoding.mjs";
 import { RAW_FILE, SCENES_FILE } from "../capture/record-app.mjs";
 import { writeReviewPage } from "./demo-review.mjs";
+import { DEFAULT_CAPTION_STYLE, captionStyleId } from "../../shared/caption-styles.mjs";
 import { renderCaptionFrames } from "./demo-captions.mjs";
 import { fileSha256 } from "../files.mjs";
 import { demoCandidatePath, demoCandidateUsable, inspectDemoCandidate } from "../demo-voice-integrity.mjs";
@@ -261,7 +262,7 @@ export async function loadDemoRenderInput({ outDir, options = {}, ffprobe = "ffp
 
 // 원본을 다시 촬영하지 않고 한 번 인코딩한다. 검증 실패 결과도 보고서에 남긴다.
 export async function renderAppDemo({
-  outDir, name, quality = "high", options = {}, burnCaptions = false,
+  outDir, name, quality = "high", options = {}, burnCaptions = false, captionStyle = DEFAULT_CAPTION_STYLE,
   ffmpeg = "ffmpeg", ffprobe = "ffprobe", onEvent = () => {},
 }) {
   const profile = videoQuality(quality);
@@ -284,7 +285,7 @@ export async function renderAppDemo({
   const frameDir = path.join(demoDir, `caption-frames-${crypto.randomUUID()}`);
   let done = false;
   try {
-    const captions = burned ? await renderCaptionFrames({ cues, profile, dir: frameDir, totalMs: plan.durationMs }) : null;
+    const captions = burned ? await renderCaptionFrames({ cues, profile, dir: frameDir, totalMs: plan.durationMs, captionStyle }) : null;
     if (captions) onEvent({ phase: "log", text: `자막 ${captions.count}줄을 그림으로 떴습니다` });
     await run(ffmpeg, demoRenderArgs({ plan, rawFile, narration: placed, profile, output: workFile, captions }));
     const probe = JSON.parse(await run(ffprobe, ["-v", "error", "-show_streams", "-show_format", "-of", "json", workFile]));
@@ -305,6 +306,7 @@ export async function renderAppDemo({
     writeCaptureReport(`${finalFile}.capture.json`, {
       schemaVersion: 1, profile, source: { scenario: scenes.scenario, raw: rawFile, frame: scenes.frame },
       encoder: "libx264", preset: "slow", frames: { written: Number(video?.nb_frames) || 0 }, burnCaptions: burned,
+      captionStyle: burned ? captionStyleId(captionStyle) : null,
       cameraSettings: Object.fromEntries(plan.scenes.map(scene => [scene.id, scene.camera])),
       durationMs, video, audio, file: finalFile, fileSha256: digest, plan: {
         totalFrames: plan.totalFrames, maxSpeed: plan.maxSpeed,

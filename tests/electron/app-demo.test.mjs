@@ -322,6 +322,19 @@ test('촬영·목소리·렌더는 CLI와 같은 작업자를 같은 인자로 �
   await settle();
   assert.deepEqual(runs.at(-1).args.slice(1), ['render', outDir, '--quality', 'high', '--no-open', '--burn-captions']);
   assert.equal(events.filter(event => event.type === 'demo-started').at(-1).burnCaptions, true);
+
+  // 밝은 화면용 모양은 굽을 때만, 기본 모양과 모르는 값은 인자를 더하지 않는다.
+  await service.startDemoRender({ outDir, quality: 'high', burnCaptions: true, captionStyle: 'box' });
+  await settle();
+  assert.deepEqual(runs.at(-1).args.slice(1),
+    ['render', outDir, '--quality', 'high', '--no-open', '--burn-captions', '--caption-style', 'box']);
+  assert.equal(events.filter(event => event.type === 'demo-started').at(-1).captionStyle, 'box');
+  await service.startDemoRender({ outDir, quality: 'high', burnCaptions: false, captionStyle: 'box' });
+  await settle();
+  assert.deepEqual(runs.at(-1).args.slice(1), ['render', outDir, '--quality', 'high', '--no-open']);
+  await service.startDemoRender({ outDir, quality: 'high', burnCaptions: true, captionStyle: 'neon' });
+  await settle();
+  assert.deepEqual(runs.at(-1).args.slice(1), ['render', outDir, '--quality', 'high', '--no-open', '--burn-captions']);
 });
 
 test('굽기를 중지하면 반쯤 쓴 임시 영상을 결과 폴더에 남기지 않는다', async t => {

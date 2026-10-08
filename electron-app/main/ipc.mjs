@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isInside, normalizeEditName, normalizeOptions, normalizeVoiceText, pendingUnits } from "../shared/index.mjs";
 import { renameMediaFile, repointReportFile, safeStat } from "./files.mjs";
 import { inspectVoiceReadiness } from "./voice-readiness.mjs";
+import { captionStyleId } from '../shared/caption-styles.mjs';
 import { videoQuality } from '../shared/video-quality.mjs';
 import { readRecaptureTimelineSelection } from './editing/recapture.mjs';
 import { TRAINING_IMPORT_EXTENSIONS } from './training-import.mjs';
@@ -401,6 +402,7 @@ export function createIpcService({
         requireRuntimeTool('ffprobe', 'FFprobe');
         options.videoQuality = videoQuality(rawOptions.videoQuality).id;
         options.burnCaptions = rawOptions.burnCaptions === true;
+        options.captionStyle = captionStyleId(rawOptions.captionStyle);
         if (rawOptions.correctedTimelineToken) {
           const selected = recaptureTimelines.get(String(rawOptions.correctedTimelineToken));
           if (!selected || selected.videoToken !== options.videoToken) {

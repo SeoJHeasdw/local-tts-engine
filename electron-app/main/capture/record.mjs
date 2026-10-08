@@ -8,6 +8,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
+import { DEFAULT_CAPTION_STYLE, captionStyleId } from "../../shared/caption-styles.mjs";
 import { captureFrameCount, captureVideoFileName, videoQuality } from "../../shared/video-quality.mjs";
 import { fileSha256 } from "../files.mjs";
 import { captureMuxArgs, validateCaptureStream, writeCaptureReport } from "./encoding.mjs";
@@ -51,6 +52,7 @@ export async function captureVideo({
   url = null,
   headful = false,
   burnCaptions = false,
+  captionStyle = DEFAULT_CAPTION_STYLE,
   maxDurationMs = null,
   noCache = false,
   quality = "standard",
@@ -182,6 +184,7 @@ export async function captureVideo({
 
     await prepareDeckPage(page, profile, {
       burnCaptions,
+      captionStyle,
       onCaptureFailure: error => recorder?.fail(error),
     });
 
@@ -301,6 +304,7 @@ export async function captureVideo({
       firstReplayRenderMs, firstSceneReadyAtMs,
       sourceResolutionLimits: sourceResolutionLimits.filter(state => state.assets.length),
       resourceUsage,
+      captionStyle: burnCaptions ? captionStyleId(captionStyle) : null,
       sourceContract: timeline.sourceContract || null, generatedAt: new Date().toISOString(),
     };
     writeCaptureReport(`${finalFile}.capture.json`, captureReport);

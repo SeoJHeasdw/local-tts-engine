@@ -134,7 +134,7 @@ export function createDemoPolishController({
     renderScene();
     if (change.render) {
       applySceneId = scene.id;
-      try { await api.startDemoRender({ outDir: project.outDir, quality: $("#demo-quality").value || "high", burnCaptions: $("#demo-burn").checked }); }
+      try { await api.startDemoRender({ outDir: project.outDir, quality: $("#demo-quality").value || "high", burnCaptions: $("#demo-burn").checked, captionStyle: $("#demo-caption-style").value }); }
       catch (error) { applySceneId = null; throw error; }
     } else showToast("구도를 저장했습니다. 완성본에는 아직 적용하지 않았습니다.");
   } });
@@ -351,7 +351,7 @@ export function createDemoPolishController({
     const off = !project || busy() || Boolean(blocked);
     $("#demo-voice-all").disabled = off || !needs.length;
     $("#demo-render-start").disabled = off || invalidSelected.length > 0 || staleSelected.length > 0;
-    for (const id of ["#demo-voice-all", "#demo-render-start", "#demo-candidates", "#demo-quality", "#demo-burn"]) $(id).inert = Boolean(blocked);
+    for (const id of ["#demo-voice-all", "#demo-render-start", "#demo-candidates", "#demo-quality", "#demo-burn", "#demo-caption-style"]) $(id).inert = Boolean(blocked);
     $("#demo-polish-pick").disabled = busy();
     // 도는 동안은 단추 자리에 진행이 선다. 끝나면 결과가 이 화면에 바로 들어온다.
     $("#demo-command-actions").classList.toggle("hidden", Boolean(running));
@@ -607,7 +607,7 @@ export function createDemoPolishController({
   }));
   $("#demo-render-start").addEventListener("click", () => guarded("완성본", async () => {
     await save();
-    await api.startDemoRender({ outDir: project.outDir, quality: $("#demo-quality").value, burnCaptions: $("#demo-burn").checked });
+    await api.startDemoRender({ outDir: project.outDir, quality: $("#demo-quality").value, burnCaptions: $("#demo-burn").checked, captionStyle: $("#demo-caption-style").value });
   }));
   $("#demo-preview-render").addEventListener("click", () => guarded("미리 굽기", async () => {
     await save();

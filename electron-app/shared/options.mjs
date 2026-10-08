@@ -1,4 +1,5 @@
 import path from "node:path";
+import { captionStyleId } from "./caption-styles.mjs";
 import { makeJobName, SLUG_PATTERN } from "./names.mjs";
 import { videoQuality } from "./video-quality.mjs";
 
@@ -59,6 +60,7 @@ export function normalizeOptions(raw = {}) {
     deliverable,
     videoQuality: videoQuality(raw.videoQuality).id,
     burnCaptions: raw.burnCaptions !== false,
+    captionStyle: captionStyleId(raw.captionStyle),
   };
 }
 

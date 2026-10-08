@@ -112,14 +112,16 @@ test('후보 만들기는 할 일이 남은 장면만, 굽기는 고른 화질�
   ready.scenes[1].voicedText = ready.scenes[1].text;
   polish.load(ready);
   $('#demo-quality').value = 'ultra';
+  $('#demo-caption-style').value = 'shadow';
   await $('#demo-render-start').fire('click');
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'ultra', burnCaptions: false }],
+  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'ultra', burnCaptions: false, captionStyle: 'shadow' }],
     '자막은 기본으로 굽지 않는다');
   $('#demo-burn').checked = true;
+  $('#demo-caption-style').value = 'box';
   await $('#demo-render-start').fire('click');
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'ultra', burnCaptions: true }]);
+  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'ultra', burnCaptions: true, captionStyle: 'box' }]);
 });
 
 test('확정과 고르기는 바로 script.json에 적는다', async () => {
@@ -136,6 +138,7 @@ test('확정과 고르기는 바로 script.json에 적는다', async () => {
 test('구도 편집에서 저장하고 영상에 적용하면 같은 화질로 렌더까지 이어진다', async () => {
   const { $, polish, calls } = controller();
   polish.load(project());
+  $('#demo-caption-style').value = 'shadow';
   assert.match($('#demo-scene-panel').innerHTML, /드래그로 확대/);
   await $('#demo-scene-panel').fire('click', { target: { closest: selector => selector === '#demo-camera-edit' ? {} : null } });
   assert.equal($('#demo-camera-dialog').open, true);
@@ -147,7 +150,7 @@ test('구도 편집에서 저장하고 영상에 적용하면 같은 화질로 �
   assert.equal(edit.camera, 'overview');
   assert.equal(edit.text, '고친 대본');
   assert.equal(edit.selected, 'narration/loop/candidate-01.wav');
-  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'high', burnCaptions: false }]);
+  assert.deepEqual(calls.at(-1), ['render', { outDir: '/out/rice-first-run', quality: 'high', burnCaptions: false, captionStyle: 'shadow' }]);
 });
 
 test('굽는 동안은 진행을 보이고, 끝나면 방금 구운 화질로 바꿔 보여 준다', () => {

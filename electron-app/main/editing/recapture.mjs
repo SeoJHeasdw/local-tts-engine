@@ -3,6 +3,7 @@ import path from 'node:path';
 import { ROOT, runtimePaths } from '../paths.mjs';
 import { fileSha256, renameMediaFile, repointReportFile, writeReport } from '../files.mjs';
 import { buildCaptionCues } from '../../shared/captions.mjs';
+import { DEFAULT_CAPTION_STYLE, captionStyleId } from '../../shared/caption-styles.mjs';
 import { captureVideoFileName, videoQuality } from '../../shared/video-quality.mjs';
 import { summarizeChecks, videoTimelineFileName } from '../../shared/index.mjs';
 import { captionText } from './review-media.mjs';
@@ -71,6 +72,7 @@ export function createRecaptureService({
       throw new Error('선택한 영상과 페이지 타임라인의 길이가 다릅니다. 같은 수정본의 타임라인을 확인해 주세요.');
     }
     const quality = videoQuality(options.videoQuality);
+    const captionStyle = captionStyleId(options.captionStyle);
     const studio = runtimePaths(options.paths);
     const node = requireRuntimeTool('node', 'Node.js');
     const project = path.join(outputDir, '.production-input');
@@ -175,7 +177,10 @@ export function createRecaptureService({
       const captureArgs = [worker('capture'), '--timeline', timelinePath, '--out-dir', outputDir,
         '--deck-root', path.join(project, 'deck'), '--site-dir', path.join(project, 'site'),
         '--audio-file', audioPath, '--captions', captionsPath, '--quality', quality.id, '--no-cache'];
-      if (options.burnCaptions) captureArgs.push('--burn-captions');
+      if (options.burnCaptions) {
+        captureArgs.push('--burn-captions');
+        if (captionStyle !== DEFAULT_CAPTION_STYLE) captureArgs.push('--caption-style', captionStyle);
+      }
       try { await runProcess('capture', node, captureArgs); }
       catch (error) {
         checkCancelled();
@@ -210,7 +215,8 @@ export function createRecaptureService({
           sourceTimeline: record.timelinePath, sourceAudioHash, outputAudioHash,
           audioCopied: true, timingPreserved: !corrected, correctedTimeline: corrected?.path ?? null,
           correctedTimelineSha256: corrected?.sha256 ?? null,
-          realignment: timingTimeline.realignment ?? null, burnCaptions: Boolean(options.burnCaptions) },
+          realignment: timingTimeline.realignment ?? null, burnCaptions: Boolean(options.burnCaptions),
+          captionStyle: options.burnCaptions ? captionStyle : null },
       });
       report.checks.push(
         { label: '기존 음성 샘플 보존', ok: sourceAudioHash === outputAudioHash },

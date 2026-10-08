@@ -4,6 +4,7 @@
 //   npm run demo -- record <시나리오.json> [--name <이름>] [--out-dir <폴더>]
 //   npm run demo -- voice  <결과 폴더> [--candidates 3] [--adapter-scale 0.6] [--scene <id>] [--voice <목소리 ID>]
 //   npm run demo -- render <결과 폴더> [--quality high|ultra|standard] [--max-speed 4] [--no-open]
+//                          [--burn-captions [--caption-style shadow|box]]
 //
 // render는 결과 폴더에 `review.html`(영상·구간·배율·확대·대본·검증을 한 쪽에 모은
 // 검수 화면)을 쓰고 열어 준다. `--no-open`이면 쓰기만 한다.
@@ -19,6 +20,7 @@ import { createSettingsService } from "../settings.mjs";
 import { assertVoiceAssetsReady, localVoiceEnvironment } from "../voice-readiness.mjs";
 import { resolveRuntimeTools } from "../runtime-config.mjs";
 import { settingsAdapterScale } from "../../shared/index.mjs";
+import { requireCaptionStyle } from "../../shared/caption-styles.mjs";
 import { parseFlags } from "../capture/cli.mjs";
 import { recordAppDemo } from "../capture/record-app.mjs";
 import { renderAppDemo } from "../editing/demo-render.mjs";
@@ -212,6 +214,7 @@ if (command === "record") {
     name: String(flags.name || path.basename(outDir)),
     quality: flags.quality === undefined ? "high" : String(flags.quality),
     burnCaptions: flags["burn-captions"] === true,
+    captionStyle: flags["caption-style"] === undefined ? undefined : requireCaptionStyle(flags["caption-style"]),
     options: maxSpeed === undefined ? {} : { maxSpeed },
     ffmpeg: tools.ffmpeg || "ffmpeg",
     ffprobe: tools.ffprobe || "ffprobe",

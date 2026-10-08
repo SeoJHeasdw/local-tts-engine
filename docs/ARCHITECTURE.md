@@ -262,6 +262,7 @@ demo render  edit-plan.json → ffmpeg 한 번 → 자막 → 검증·보고서
 | `main/editing/demo-camera-preview.mjs` | 렌더와 같은 입력·계획에서 원본 프레임 미리보기, 오래된 요청 취소·직렬 디코딩 |
 | `main/editing/demo-review.mjs` | 결과 폴더 → 검수 데이터(`collectReview`)와 CLI용 `review.html`. 앱은 같은 데이터를 다듬기에 그린다 |
 | `main/editing/demo-captions.mjs` | 자막 굽기(선택): 강의와 같은 자막 모양(`capture/caption-style.mjs`)을 투명 그림으로 뜨고 ffconcat 목록을 쓴다 |
+| `shared/caption-styles.mjs` · `main/capture/caption-style.mjs` | 자막 모양 이름·기본값(`shadow`, `box`)과 모양별 CSS. 모르는 값은 기본으로 돌리고, 명령줄 `--caption-style`은 모르는 값이면 멈춘다. 고른 모양은 `*.capture.json`의 `captionStyle`에 남는다 |
 | `main/workers/demo.mjs` | CLI 진입점: `record`·`voice`·`render` |
 | `main/app-demo.mjs` | 앱 화면의 세 단계. 같은 작업자를 별도 프로세스로 부르고 `script.json`을 읽고 쓴다 |
 | `renderer/controllers/app-demo.mjs` | 새로 만들기의 앱 데모: 시나리오 고르기·촬영, 끝나면 다듬기로 넘기는 결과 카드 |

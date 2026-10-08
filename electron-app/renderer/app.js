@@ -244,6 +244,8 @@ function updateProductionBrief() {
     audio: ["음성만", "영상은 만들지 않음"],
   };
   $("#advanced-output-summary").textContent = `${labels[deliverable][0]}${deliverable === "video" && $("#burn-captions")?.checked ? " · 자막 포함" : ""}`;
+  // 자막을 굽는 영상일 때만 모양을 고른다.
+  $("#caption-style-field").classList.toggle("hidden", deliverable !== "video" || !$("#burn-captions")?.checked);
   $("#video-quality-field").classList.toggle("hidden", deliverable !== "video");
   $("#video-quality").disabled = deliverable !== "video";
   const quality = videoQuality($("#video-quality").value || DEFAULT_VIDEO_QUALITY);
@@ -622,6 +624,7 @@ function optionPayload() {
     chapterMode: productionMode === "chapter" ? chapterMode : "single",
     deliverable: $("#deliverable").value,
     burnCaptions: $("#burn-captions").checked,
+    captionStyle: $("#caption-style").value,
     videoQuality: $("#video-quality").value || DEFAULT_VIDEO_QUALITY,
   };
 }

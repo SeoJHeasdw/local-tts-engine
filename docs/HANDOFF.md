@@ -64,22 +64,21 @@
   다시 고칠 때: 덱은 `bob/level3-demo/deck/motion.html` → `demo/motion-capture.mjs <원래 결과> <새 결과>`, Bob 화면은
   `demo/direct-camera.py`, 굽기는 `npm run demo -- render <폴더> --quality standard --burn-captions`, 잇기는
   `bob-level3-final/parts-v4.txt`로 `ffmpeg -f concat -safe 0 -c copy`. 첫 판·v2·v3도 같은 폴더에 있다.
-- **watsonx.data Stand & Deliver 영상(팀장님 목소리) — 데모 대신 설명 장면 2개 추가 중:** 작업 폴더는
-  `/Users/jaehoseo/Desktop/vswrk/ibm/watsonx-data-demo/`(`STORYBOARD.md`가 대본·구성·확인 목록). 데모를 뺀 7장면(S1~S5·S8·S9)은
-  밝은 에디토리얼 덱 + 밝은 스튜디오 3D(Blender, 라벨은 3D 점을 따라다님)로 만들고 있고, Bob 영상과 겹치지 않는 디자인이 조건이다.
-  음성은 `demo voice --voice 2026-10-02/kkh-ko-r16-092309-b6bcaa-s20`(앱 선택값은 그대로)으로 장면당 후보 3개를 만들었고
-  **자동 검사로 고른 것이라 사람이 들어 고르는 일이 남았다**: `output/reviews/2026-10-07/watsonx-voice/listen.html`.
-  자동 검사의 '받아쓰기 불일치'는 받아쓰기가 영어 용어를 한글로 적은 탓이 대부분이다(아래 발음 오차율 문제와 같다).
-  후보를 바꾸면 그 장면의 길이가 달라져 `deck/3d`의 해당 장면을 다시 렌더한다(`demo/events.mjs` → `deck/3d/render-all.sh`).
-  팀장님이 실습(라이브 데모)은 필요 없다고 했다(2026-10-07). 빠진 평가 항목 4개(federated query·web interface·engine
-  lifecycle·engine별 fit)는 화면 촬영 없이 3D 설명 장면 `s6-fed`·`s7-engines`로 채워 4분 30초~5분으로 맞춘다
-  (데모 제외 v2는 3분 37초, 두 장면은 약 70초). 대본은 `output/edits/2026-10-07/watsonx-data-deck-mid/demo/script.json`에
-  확정했다. 사전의 `Red Hat` → 레드햇은 반영했다. 음성(mid의 s6·s7, open의 `s1-open`(문구를 "…시나리오를 중심으로 살펴보겠습니다"로
-  고침), close의 `s8-deploy`)은 2026-10-07 밤에 합성과 자동 선택(`demo/pick-new.py`, 결과 `demo/last-picks.txt`)을 걸어 뒀다.
-  자동 검사로 고른 것이라 사람의 청취 승인은 아니다. 이어서 할 일: ① `demo/last-picks.txt`로 선택이 끝났는지 확인
-  ② `deck/3d/s6.py`·`s7.py` 작성, `deck/motion.html`(EV·LABELS·SCENES·마크업)과 `demo/events.mjs`·`render3d.mjs`·
-  `motion-capture.mjs`의 장면 표, `demo/build.sh`에 mid 구간(open → mid → close) 추가 ③ `demo/build.sh v3`.
-  디버깅 Chrome(`.chrome-profile`)에 개인 계정 로그인 세션이 있으니 쓰지 않으면 닫고 폴더를 지운다.
+- **watsonx.data Stand & Deliver 영상(팀장님 목소리) — v3 완성, 시청·청취 승인 대기:**
+  `output/edits/2026-10-07/watsonx-data-final/watsonx.data Stand & Deliver - v3.mp4`(4분 45초, 1080p 25fps, 자막 구움).
+  팀장님이 실습(라이브 데모)은 필요 없다고 해서(2026-10-07) 데모 대신 3D 설명 장면 `s6-fed`(관리 화면·federated query)·
+  `s7-engines`(Presto·Spark와 create·pause·resume·scale·remove)로 12개 평가 항목을 채웠다. 구성은 open(S1~S5) → mid(S6·S7) →
+  close(S8·S9)이고, 밝은 에디토리얼 덱 + 밝은 스튜디오 3D(Blender)라 Bob 영상과 겹치지 않는다. 자막은 밝은 바탕용 회색 박스
+  (`--caption-style box`)로 굽는다. 음성은 `demo voice --voice 2026-10-02/kkh-ko-r16-092309-b6bcaa-s20`으로 장면당 후보 3개를 만들어
+  **자동 검사로 골랐다(`demo/last-picks.txt`) — 사람의 청취 승인이 아니다.** s6·s7의 선택 후보는 자동 검사 '실패', s1-open·s8-deploy는
+  '경고'다(받아쓰기가 영어 용어를 한글로 적은 탓이 대부분, 아래 발음 오차율 문제와 같다). 소개 멘트의 이름·직함은 팀장님 답을 받으면 S1
+  첫 문장만 바꾼다. 작업 폴더는 `/Users/jaehoseo/Desktop/vswrk/ibm/watsonx-data-demo/`(`STORYBOARD.md`가 대본·구성).
+  다시 만들 때: 대본·목소리를 바꾸고 `demo/build.sh [라벨]` 한 번(3D는 이벤트가 0.5초 넘게 바뀐 장면만, 촬영은 바뀐 장면만).
+  장면을 더하려면 `deck/motion.html`(EV·LABELS·SCENES·마크업)과 `demo/events.mjs`·`render3d.mjs`·`motion-capture.mjs`의 장면 표,
+  `deck/3d/<장면>.py`를 같이 고친다. 디버깅 Chrome(`.chrome-profile`)에 개인 계정 로그인 세션이 있으니 쓰지 않으면 닫고 폴더를 지운다.
+- **자막 모양 선택(2026-10-08):** `--caption-style shadow|box`(앱은 "자막 굽기" 옆·제작 세부 설정·화면 재촬영의 "자막 모양").
+  기본 `shadow`는 예전과 같다. 흰·밝은 바탕 영상은 `box`(글자 길이에 맞는 불투명 회색 박스). 구조는
+  [ARCHITECTURE](ARCHITECTURE.md), 사용법은 [README](../README.md). 앱 화면의 새 선택 상자는 자동 검사만 통과했고 눈으로 열어 본 적은 없다.
 - **다음: 한국어 문장 속 영어 낱말 한 번 더:** 사용자가 제출 수준은 충분하지만 한글+영어 조합을 다음에 다시 보자고
   했다. 남은 약점은 받아쓰기가 영어 철자로 적으면 소리를 못 가린다는 것('봅'·'래브스'가 `Bob`·`Lab's`로 적혔다)과
   아래 발음 오차율 문제다. Bob 영상의 `javax`(제치셔틀·ZX)·`PoX`(팍스·PUCS)도 흔들렸다.
@@ -114,6 +113,7 @@
 | 영어 낱말 한글 받아쓰기 판정 측정 (552회 표본·Bob 8장면) | `output/reviews/2026-09-30/english-hangul/` |
 | 늘 틀리는 영어 낱말의 표기 실험·합성어 규칙 회귀 측정 | `output/reviews/2026-10-01/english-spelling-compounds/` |
 | Bob Level 3 제출 영상 첫 판·v2·v3·v4·v5 (제출본 v5) | `output/edits/2026-09-30/bob-level3-final/` — 장면별 원본은 같은 날짜의 `bob-level3-*`, v3 재선택 스크립트는 `bob-level3-v3/` |
+| watsonx.data Stand & Deliver 영상 v3 (회색 박스 자막, 4분 45초) | `output/edits/2026-10-07/watsonx-data-final/` — 구간별 원본은 `watsonx-data-deck-open·mid·close`, 촬영 결과는 `watsonx-data-motion-*` |
 
 후속 편집은 최신 수정본의 PCM·타임라인·자막에서 시작한다. 원래 manifest 음성으로 돌아가면
 이미 고친 부분을 덮는다. 예: CH02 L04의 193.295–203.055초는 사용자가 고른 `앤쓰로픽` 후보다.

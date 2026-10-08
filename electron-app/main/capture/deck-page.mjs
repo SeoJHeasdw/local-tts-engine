@@ -31,7 +31,7 @@ async function waitUntil(page, predicate, arg, { timeout, pacer = null } = {}) {
   }
 }
 
-export async function installCaptionOverlay(page, profile) {
+export async function installCaptionOverlay(page, profile, captionStyle) {
   await page.evaluate(({ css }) => {
     const style = document.createElement("style");
     style.textContent = css;
@@ -67,7 +67,7 @@ export async function installCaptionOverlay(page, profile) {
       };
       requestAnimationFrame(render);
     };
-  }, { css: captionOverlayCss(profile.width, profile.height) });
+  }, { css: captionOverlayCss(profile.width, profile.height, captionStyle) });
 }
 
 // This reports source limits, not a visual approval. CSS crops/object-fit can make
@@ -189,14 +189,14 @@ async function waitForRenderedEntry(page, entry, { first = false, requireFresh =
 
 // 촬영 화면을 조작할 수 있는 상태로 만든다. 자막 오버레이는 제작 UI와 별개라
 // 여기서 지우는 대상이 아니다.
-export async function prepareDeckPage(page, profile, { burnCaptions = false, onCaptureFailure = null } = {}) {
+export async function prepareDeckPage(page, profile, { burnCaptions = false, captionStyle, onCaptureFailure = null } = {}) {
   await page.waitForSelector(".stage", { state: "visible" });
   await monitorDeckRendering(page, onCaptureFailure);
   // H 키 상태만 믿으면 첫 장표로 번호 이동하는 동안 HUD가 잠깐 다시 찍힐
   // 수 있다. 녹화 페이지에서는 제작 UI가 존재할 이유가 없으므로 CSS로도
   // 강제 제외한다. goto는 번호 입력 중 뜨는 이동 오버레이다.
   await page.addStyleTag({ content: ".hud, .goto { display: none !important; }" });
-  if (burnCaptions) await installCaptionOverlay(page, profile);
+  if (burnCaptions) await installCaptionOverlay(page, profile, captionStyle);
   await page.evaluate(() => {
     window.__narrationNav = null;
     const channel = new BroadcastChannel("udemy-deck-sync");

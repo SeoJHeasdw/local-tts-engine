@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import nativeFs from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_CAPTION_STYLE } from "../shared/caption-styles.mjs";
 import { captureVideoFileName, videoFrameRate, videoQuality } from "../shared/video-quality.mjs";
 import { ACTIVE_JOB_PATH, ADAPTER, ROOT, dateFolder, runtimePaths } from "./paths.mjs";
 import { combineChapterReports, pendingUnits, mapWithConcurrency, presetFromManifest, providerForOptions, summarizeChecks, voiceQualityFindings } from "../shared/index.mjs";
@@ -299,7 +300,10 @@ export function createProductionService({
         "--quality", options.videoQuality ?? "standard",
       ];
       if (captureSiteDir) captureArgs.push("--site-dir", captureSiteDir);
-      if (options.burnCaptions) captureArgs.push("--burn-captions");
+      if (options.burnCaptions) {
+        captureArgs.push("--burn-captions");
+        if (options.captionStyle && options.captionStyle !== DEFAULT_CAPTION_STYLE) captureArgs.push("--caption-style", options.captionStyle);
+      }
       try {
         await runProcess("capture", requireRuntimeTool("node", "Node.js"), captureArgs);
       } catch (error) {

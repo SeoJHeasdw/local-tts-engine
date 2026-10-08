@@ -9,6 +9,7 @@
 // 기본은 굽지 않는다(자막 파일만, 설계 6절). 켤 때만 이 길을 지난다.
 import fs from "node:fs";
 import path from "node:path";
+import { DEFAULT_CAPTION_STYLE } from "../../shared/caption-styles.mjs";
 import { captionOverlayCss } from "../capture/caption-style.mjs";
 
 /**
@@ -56,7 +57,7 @@ async function launchChromium() {
  * 자막 줄마다 투명 PNG를 떠서 ffconcat 목록을 쓴다. 만든 폴더는 부른 쪽이 굽고 나서 지운다.
  * `launch`는 검사가 브라우저 대신 쓸 수 있게 열어 둔다.
  */
-export async function renderCaptionFrames({ cues, profile, dir, totalMs, launch = launchChromium }) {
+export async function renderCaptionFrames({ cues, profile, dir, totalMs, captionStyle = DEFAULT_CAPTION_STYLE, launch = launchChromium }) {
   fs.mkdirSync(dir, { recursive: true });
   const band = captionBand(profile);
   const browser = await launch();
@@ -65,7 +66,7 @@ export async function renderCaptionFrames({ cues, profile, dir, totalMs, launch 
     // 강의 오버레이는 나타날 때 0.1초 흐려졌다 선다. 그림 한 장에는 그 사이가 없다.
     await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>
       html, body { margin: 0; background: transparent; }
-      ${captionOverlayCss(profile.width, profile.height)}
+      ${captionOverlayCss(profile.width, profile.height, captionStyle)}
       #narration-caption-overlay { transition: none; }
     </style></head><body><div id="narration-caption-stage">
       <div id="narration-caption-overlay" data-visible="true"></div>

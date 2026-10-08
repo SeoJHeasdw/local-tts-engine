@@ -5,3 +5,4 @@ export * from "./quality.mjs";
 export * from "./timeline.mjs";
 export * from "./media-plans.mjs";
 export * from "./jobs.mjs";
+export * from "./caption-styles.mjs";

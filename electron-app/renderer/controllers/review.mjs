@@ -857,6 +857,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     recaptureTimeline = null;
     $('#review-recapture-quality').value = video.recaptureQuality || 'high';
     $('#review-recapture-captions').checked = Boolean(video.burnCaptions);
+    $('#review-recapture-caption-style').value = video.captionStyle || 'shadow';
     $$('audio,video').forEach(media => media.pause());
     mediaState.voiceVideo = video; reviewTarget = target || video.reviewTarget || null; reviewSelection = null; reviewStopAt = null;
     reviewWarningSaving = false;
@@ -1184,6 +1185,7 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
     $('#review-recapture').disabled = !available || reviewBusy || recaptureTimelinePicking || pendingFixes.size > 0;
     $('#review-recapture-quality').disabled = reviewBusy;
     $('#review-recapture-captions').disabled = reviewBusy;
+    $('#review-recapture-caption-style').disabled = reviewBusy;
     $('#review-recapture-timeline').disabled = !available || reviewBusy || recaptureTimelinePicking || pendingFixes.size > 0;
     $('#review-recapture-timeline-clear').disabled = !recaptureTimeline || reviewBusy || recaptureTimelinePicking;
     $('#review-recapture-timeline-name').textContent = recaptureTimeline?.name || '현재 영상의 자막·전환 시각 사용';
@@ -1217,7 +1219,8 @@ export function createReviewController({ $, api, showToast, setEditBusy, $$, for
       videoToken: mediaState.voiceVideo.token,
       correctedTimelineToken: recaptureTimeline?.token,
       videoQuality: $('#review-recapture-quality').value || 'high',
-      burnCaptions: $('#review-recapture-captions').checked };
+      burnCaptions: $('#review-recapture-captions').checked,
+      captionStyle: $('#review-recapture-caption-style').value };
     reviewResumeMs = Math.round(reviewPlayer.currentTime * 1000);
     reviewPlayer.pause();
     $('#review-saved').classList.add('hidden');

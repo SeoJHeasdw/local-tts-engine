@@ -6,6 +6,7 @@ import { ROOT, dateFolder, runtimePaths } from "./paths.mjs";
 import { assertVoiceAssetsReady } from "./voice-readiness.mjs";
 import { demoCandidatePath, demoCandidateUsable, inspectDemoCandidate } from "./demo-voice-integrity.mjs";
 import { normalizeEditName } from "../shared/index.mjs";
+import { DEFAULT_CAPTION_STYLE, captionStyleId } from "../shared/caption-styles.mjs";
 import { normalizeScenario } from "../shared/demo-scenario.mjs";
 import { cameraSetting } from "../shared/demo-camera.mjs";
 import { createDemoCameraPreview } from "./editing/demo-camera-preview.mjs";
@@ -358,9 +359,12 @@ export function createAppDemoService({
     // 자막은 기본으로 파일만 만든다. 켜면 완성본에 구운 것을 따로(-captioned) 낸다.
     const burnCaptions = raw.burnCaptions === true;
     if (burnCaptions) args.push("--burn-captions");
-    const job = startJob("demo-render", { outDir, quality, burnCaptions });
+    // 기본 모양이면 인자를 더하지 않는다. 밝은 화면용 모양만 따로 적는다.
+    const captionStyle = captionStyleId(raw.captionStyle);
+    if (burnCaptions && captionStyle !== DEFAULT_CAPTION_STYLE) args.push("--caption-style", captionStyle);
+    const job = startJob("demo-render", { outDir, quality, burnCaptions, captionStyle });
     const snapshot = jobSnapshot();
-    emit({ type: "demo-started", step: "demo-render", job: snapshot, outDir, quality, burnCaptions });
+    emit({ type: "demo-started", step: "demo-render", job: snapshot, outDir, quality, burnCaptions, captionStyle });
     void runDemoWorker(job, args, async () => ({ project: await readDemoProject(outDir) }));
     return snapshot;
   }

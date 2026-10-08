@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { reportDescribesVideo, safeStat } from "./files.mjs";
 import { runtimePaths } from "./paths.mjs";
 import { assertCurrentCourseManifest } from "./course-run-state.mjs";
+import { captionStyleId } from '../shared/caption-styles.mjs';
 import { VIDEO_QUALITIES } from '../shared/video-quality.mjs';
 
 export function recipeFromManifest(manifest, report) {
@@ -128,6 +129,7 @@ export function createMediaService({
             value.review = report.review || null;
             value.reportPath = reportPath;
             value.burnCaptions = report.recapture?.burnCaptions ?? /-captioned(?:-|\.)/.test(report.capture?.file || '');
+            value.captionStyle = captionStyleId(report.recapture?.captionStyle ?? report.capture?.captionStyle);
             if (report.sourceDir) {
               const manifest = await fs.readFile(path.join(report.sourceDir, "manifest.json"), "utf8")
                 .then(JSON.parse).catch(() => null);
@@ -155,6 +157,7 @@ export function createMediaService({
       canRecapture: Boolean(value.timelinePath && value.pageRange),
       recaptureQuality: value.recaptureQuality,
       burnCaptions: Boolean(value.burnCaptions),
+      captionStyle: captionStyleId(value.captionStyle),
     }));
   }
 
