@@ -1487,5 +1487,13 @@
   {
     "from": "Red Hat",
     "to": "레드햇"
+  },
+  {
+    "from": "catalog",
+    "to": "카탈로그"
+  },
+  {
+    "from": "standalone",
+    "to": "스탠드얼론"
   }
 ]

@@ -72,6 +72,10 @@
   (`--caption-style box`)로 굽는다. 음성은 `demo voice --voice 2026-10-02/kkh-ko-r16-092309-b6bcaa-s20`으로 장면당 후보 3개를 만들어
   **자동 검사로 골랐다(`demo/last-picks.txt`) — 사람의 청취 승인이 아니다.** s6·s7의 선택 후보는 자동 검사 '실패', s1-open·s8-deploy는
   '경고'다(받아쓰기가 영어 용어를 한글로 적은 탓이 대부분, 아래 발음 오차율 문제와 같다). 소개 멘트의 이름·직함은 팀장님 답을 받으면 S1
+  v3 청취에서 `catalog`는 "캐틀로그", `standalone`은 "스탠들론", `engine`은 "엔징"으로 들렸다. 앞 둘은 사전에 넣었고(2026-10-08, 테스트 포함)
+  v3 음성에는 아직 옛 읽기가 남아 있다 — 고칠 때는 s6-fed·s7-engines(catalog)·s8-deploy(standalone)를 `demo voice --scene`으로 다시 만들어
+  고른 뒤 `demo/build.sh`. `engine`은 받아쓰기가 `엔진`으로 적어 자동으로 못 가려 사전에 넣지 않았고, 같은 장면의 `resume`(레주메로 받아쓰기)·
+  `storage`(스토레이지)도 후보다.
   첫 문장만 바꾼다. 작업 폴더는 `/Users/jaehoseo/Desktop/vswrk/ibm/watsonx-data-demo/`(`STORYBOARD.md`가 대본·구성).
   다시 만들 때: 대본·목소리를 바꾸고 `demo/build.sh [라벨]` 한 번(3D는 이벤트가 0.5초 넘게 바뀐 장면만, 촬영은 바뀐 장면만).
   장면을 더하려면 `deck/motion.html`(EV·LABELS·SCENES·마크업)과 `demo/events.mjs`·`render3d.mjs`·`motion-capture.mjs`의 장면 표,

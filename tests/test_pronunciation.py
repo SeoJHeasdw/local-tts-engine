@@ -611,3 +611,18 @@ def test_acronyms_english_prose_and_dictionary_spellings_keep_their_capitals() -
     # 사전의 결정이 먼저다.
     dictionary = [{"from": "MIGRATION", "to": "마이그레이션", "caseSensitive": True}]
     assert apply_pronunciation("MIGRATION 문서", dictionary) == "마이그레이션 문서"
+
+
+def test_watsonx_listening_terms_use_the_production_dictionary() -> None:
+    """청취에서 '캐틀로그'·'스탠들론'으로 들린 낱말은 사전의 한글 읽기로 합성된다."""
+    import json
+    from pathlib import Path
+
+    dictionary = json.loads(
+        (Path(__file__).parents[1] / "config/production-pronunciation.ko.json").read_text(encoding="utf-8")
+    )
+
+    assert apply_pronunciation("catalog를 고르고 Catalog는 남습니다.", dictionary) == "카탈로그를 고르고 카탈로그는 남습니다."
+    assert apply_pronunciation("Red Hat 기반 standalone을 씁니다.", dictionary) == "레드햇 기반 스탠드얼론을 씁니다."
+    # 낱말 일부나 하이픈 합성어는 건드리지 않는다.
+    assert "카탈로그" not in apply_pronunciation("catalogue", dictionary)
